@@ -1,0 +1,43 @@
+vec_size: [
+  [120, 120],
+  [180, 180],
+  [29, 29],
+  [58, 58],
+  [87, 87],
+  [80, 80],
+  [120, 120],
+  [40, 40],
+  [60, 60],
+  [29, 29],
+  [58, 58],
+  [40, 40],
+  [80, 80],
+  [76, 76],
+  [152, 152],
+  [20, 20],
+  [40, 40],
+  [168, 168],
+  [1024, 1024]
+]
+base_f: /Users/mac/data0/public_work/pinyin_ios/iPhone/Unity-iPhone/Images.xcassets/AppIcon.appiconset
+vec_f: [
+    "Icon-iPhone-120.png",
+    "Icon-iPhone-180.png",
+    "Icon-iPhone-Settings-29.png",
+    "Icon-iPhone-Settings-58.png",
+    "Icon-iPhone-Settings-87.png",
+    "Icon-iPhone-Spotlight-80.png",
+    "Icon-iPhone-Spotlight-120.png",
+    "Icon-iPhone-Notification-40.png",
+    "Icon-iPhone-Notification-60.png",
+    "Icon-iPad-Settings-29.png",
+    "Icon-iPad-Settings-58.png",
+    "Icon-iPad-Spotlight-40.png",
+    "Icon-iPad-Spotlight-80.png",
+    "Icon-iPad-76.png",
+    "Icon-iPad-152.png",
+    "Icon-iPad-Notification-20.png",
+    "Icon-iPad-Notification-40.png",
+    "Icon-iPad-167.png",
+    "Icon-Store-1024.png"
+  ]

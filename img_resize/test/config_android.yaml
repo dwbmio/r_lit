@@ -1,0 +1,72 @@
+vec_size: [
+  # mipmap-xxxhdpi
+  [432, 432],
+  [432, 432],
+  [192, 192],
+  [192, 192],
+
+  # mipmap-xxhdpi
+  [324, 324],
+  [324, 72],
+  [144, 144],
+  [144, 144],
+
+  # mipmap-xhdpi
+  [216, 216],
+  [216, 216],
+  [96, 96],
+  [96, 96],
+
+  # mipmap-mdpi
+  [108, 108],
+  [108, 108],
+  [48, 48],
+  [48, 48],
+  # mipmap-ldpi
+  [81, 81],
+  [81, 81],
+  [36, 36],
+  [36, 36],
+
+  # mipmap-hdpi
+  [162, 162],
+  [162, 162],
+  [72, 72],
+  [72, 72],
+
+
+
+]
+base_f: /Users/mac/data0/public_work/pinyin_android/launcher/src/main/res
+vec_f: [
+  # mipmap-xxxhdpi
+  "mipmap-xxxhdpi/ic_launcher_foreground.png", 
+  "mipmap-xxxhdpi/ic_launcher_background.png", 
+  "mipmap-xxxhdpi/app_icon_round.png", 
+  "mipmap-xxxhdpi/app_icon.png", 
+  # mipmap-xxhdpi
+  "mipmap-xxhdpi/ic_launcher_foreground.png", 
+  "mipmap-xxhdpi/ic_launcher_background.png", 
+  "mipmap-xxhdpi/app_icon_round.png", 
+  "mipmap-xxhdpi/app_icon.png", 
+  # mipmap-xhdpi
+  "mipmap-xhdpi/ic_launcher_foreground.png", 
+  "mipmap-xhdpi/ic_launcher_background.png", 
+  "mipmap-xhdpi/app_icon_round.png", 
+  "mipmap-xhdpi/app_icon.png", 
+  # mipmap-mdpi
+  "mipmap-mdpi/ic_launcher_foreground.png", 
+  "mipmap-mdpi/ic_launcher_background.png", 
+  "mipmap-mdpi/app_icon_round.png", 
+  "mipmap-mdpi/app_icon.png", 
+  # mipmap-ldpi
+  "mipmap-ldpi/ic_launcher_foreground.png", 
+  "mipmap-ldpi/ic_launcher_background.png", 
+  "mipmap-ldpi/app_icon_round.png", 
+  "mipmap-ldpi/app_icon.png", 
+  # mipmap-hdpi
+  "mipmap-hdpi/ic_launcher_foreground.png", 
+  "mipmap-hdpi/ic_launcher_background.png", 
+  "mipmap-hdpi/app_icon_round.png", 
+  "mipmap-hdpi/app_icon.png", 
+  ]

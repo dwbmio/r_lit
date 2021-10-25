@@ -1,0 +1,12 @@
+#idea
+.idea/
+.vscode 
+
+
+#.*
+.*
+!.gitignore
+
+#rust build 
+build/
+target/
