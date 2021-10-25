@@ -1,6 +1,7 @@
 ### Desc
 
-<mark>环境全部在mac环境下，所以未做多平台支持工具只保证在mac arm64环境下运行</mark>
+<mark>环境全部在mac环境下，所以未做多平台支持</mark>
+<mark>工具只保证在mac arm64环境下运行</mark>
 
 ### Usage
 
