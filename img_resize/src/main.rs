@@ -5,12 +5,12 @@ mod re_tp;
 
 fn main() -> Result<(), ReError> {
     let cli = command!() // requires `cargo` feature
-        // .arg(
-        //     arg!(
-        //     -c --resize_config <RESIZE_CONFIG> "Set the resize config for resize the texture.")
-        //     .value_parser(value_parser!(PathBuf))
-        //     .conflicts_with_all(["max_pixel", "rw", "rh"]),
-        // )
+        .arg(
+            arg!(
+            -c --resize_config <RESIZE_CONFIG> "Set the resize config for resize the texture.")
+            .value_parser(value_parser!(PathBuf))
+            .conflicts_with_all(["max_pixel", "rw", "rh"]),
+        )
         .arg(
             arg!(
                 -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
@@ -73,10 +73,11 @@ fn main() -> Result<(), ReError> {
         tp_handle.height = *tp;
     };
 
-    // if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
-    //     tp_handle.exec_from_config(c.clone())?;
-    // }
+    if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
+        tp_handle.exec_from_config(c.clone())?;
+    } else {
+        tp_handle.exec()?;
+    }
 
-    tp_handle.exec()?;
     Ok(())
 }
