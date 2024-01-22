@@ -13,3 +13,7 @@ thiserror = "^1"
 rand = "0.8.5"
 walkdir = "2"
 infer = "0.15.0"
+
+
+serde = "1.0"
+serde_yaml = "0.9"

@@ -1,6 +1,7 @@
 pub mod tp {
     use image::{GenericImageView, ImageError, ImageFormat};
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
+    use serde::Deserializer;
     use std::{ffi::OsString, fs, path::PathBuf};
     use thiserror::Error;
     use walkdir::WalkDir;
@@ -15,6 +16,9 @@ pub mod tp {
 
         #[error("{0}")]
         WalkDirError(#[from] walkdir::Error),
+
+        #[error("{0}")]
+        ParseError(#[from] serde_yaml::Error),
     }
     pub struct TpResize {
         pub(crate) max_pixel: u32,
@@ -120,6 +124,20 @@ pub mod tp {
                 true => self.single_tp(&self.tp, self.out.to_owned()),
                 false => self.walk(&self.tp, self.out.to_owned()),
             }
+        }
+
+        pub fn exec_from_config(&self, c: PathBuf) -> Result<(), ReError> {
+            let cf = fs::read_to_string(c).unwrap_or_else(|_| {
+                panic!("Load config failed!Create the config first");
+            });
+
+            let conf: serde_yaml::Value = serde_yaml::from_str(&cf)?;
+            let c = &conf[0].to_owned();
+
+            // let o_s = conf["vec_size"].as_vec().unwrap();
+            // let o_f = conf["vec_f"].as_vec().unwrap();
+
+            Ok(())
         }
     }
 }

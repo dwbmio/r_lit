@@ -1,18 +1,16 @@
 use clap::{arg, command, value_parser, ArgGroup};
-use core::panic;
 use re_tp::tp::{ReError, TpResize};
-use std::path::{Path, PathBuf};
+use std::{fs, path::PathBuf};
 mod re_tp;
-
-fn handle(pb: &str) {
-    let tar = Path::new(pb);
-    if tar.exists() {
-        panic!("path is not exists!")
-    }
-}
 
 fn main() -> Result<(), ReError> {
     let cli = command!() // requires `cargo` feature
+        .arg(
+            arg!(
+            -c --resize_config <RESIZE_CONFIG> "Set the resize config for resize the texture.")
+            .value_parser(value_parser!(PathBuf))
+            .conflicts_with_all(["max_pixel", "rw", "rh"]),
+        )
         .arg(
             arg!(
                 -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
@@ -75,6 +73,10 @@ fn main() -> Result<(), ReError> {
     if let Some(tp) = cli.get_one::<u32>("rh") {
         tp_handle.height = *tp;
     };
+
+    if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
+        tp_handle.exec_from_config(c.clone())?;
+    }
 
     tp_handle.exec()?;
     Ok(())
