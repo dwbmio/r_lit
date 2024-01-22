@@ -1,6 +1,6 @@
 use clap::{arg, command, value_parser, ArgGroup};
 use re_tp::tp::{ReError, TpResize};
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 mod re_tp;
 
 fn main() -> Result<(), ReError> {
@@ -11,14 +11,13 @@ fn main() -> Result<(), ReError> {
             .value_parser(value_parser!(PathBuf))
             .conflicts_with_all(["max_pixel", "rw", "rh"]),
         )
-        .arg(
-            arg!(
-                -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
-
-            )
-            // We don't have syntax yet for optional options, so manually calling `required`
-            .value_parser(value_parser!(u32)),
-        )
+        // .arg(
+        //     arg!(
+        //         -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
+        //     )
+        //     // We don't have syntax yet for optional options, so manually calling `required`
+        //     .value_parser(value_parser!(u32)),
+        // )
         .arg(
             arg!(
                 --rw <RESIZE_WIDTH> "Set the MAX-WIDTH to filter the textue."
@@ -74,9 +73,9 @@ fn main() -> Result<(), ReError> {
         tp_handle.height = *tp;
     };
 
-    if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
-        tp_handle.exec_from_config(c.clone())?;
-    }
+    // if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
+    //     tp_handle.exec_from_config(c.clone())?;
+    // }
 
     tp_handle.exec()?;
     Ok(())
