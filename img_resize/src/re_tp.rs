@@ -1,11 +1,7 @@
 pub mod tp {
     use image::{GenericImageView, ImageError, ImageFormat};
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
-    use std::{
-        ffi::OsString,
-        fs,
-        path::{Path, PathBuf},
-    };
+    use std::{ffi::OsString, fs, path::PathBuf};
     use thiserror::Error;
     use walkdir::WalkDir;
 
