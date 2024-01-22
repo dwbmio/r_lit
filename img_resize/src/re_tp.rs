@@ -49,11 +49,15 @@ pub mod tp {
             let im = image::open(tp).unwrap();
             fs::create_dir_all(out_i)?;
             println!(
-                "resize texture from {:?}, pixel={:?} fmt={:?} => size={:?}",
+                "resize texture from {:?}, pixel={:?} fmt={:?} => {:?}",
                 &tp,
                 im.dimensions(),
                 im.color(),
-                size
+                if is_thumb {
+                    format!("max size={:?}", size.0)
+                } else {
+                    format!("size={:?}", size)
+                }
             );
             let ran_fname = OsString::from(Self::rand_filename().to_owned());
             let f_name = tp.file_name().unwrap_or(&(ran_fname));
@@ -68,7 +72,7 @@ pub mod tp {
             Ok(())
         }
 
-        fn sinle_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
+        fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
             let is_thumb = self.max_pixel > 0;
             Self::re_tp(
                 path,
@@ -92,8 +96,12 @@ pub mod tp {
             for entry in walker.filter_entry(|e| !Self::is_hidden(e)) {
                 let entry = entry?;
                 if entry.path().is_file() {
-                    println!("walk to re_tp file :{:?}", entry.path().display());
-                    self.sinle_tp(&entry.path().to_path_buf(), out.clone())?
+                    let kind = infer::get_from_path(entry.path())?;
+                    if let Some(k) = kind {
+                        if k.extension() == "png" || k.extension() == "jpg" {
+                            self.single_tp(&entry.path().to_path_buf(), out.clone())?
+                        }
+                    }
                 }
             }
             Ok(())
@@ -113,7 +121,7 @@ pub mod tp {
             }
             println!("exec ...");
             match self.tp.is_file() {
-                true => self.sinle_tp(&self.tp, self.out.to_owned()),
+                true => self.single_tp(&self.tp, self.out.to_owned()),
                 false => self.walk(&self.tp, self.out.to_owned()),
             }
         }

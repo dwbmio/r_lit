@@ -12,3 +12,4 @@ clap = { version = "^4", features=["cargo"]}
 thiserror = "^1"
 rand = "0.8.5"
 walkdir = "2"
+infer = "0.15.0"
