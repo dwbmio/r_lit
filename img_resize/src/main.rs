@@ -5,19 +5,19 @@ mod re_tp;
 
 fn main() -> Result<(), ReError> {
     let cli = command!() // requires `cargo` feature
-        .arg(
-            arg!(
-            -c --resize_config <RESIZE_CONFIG> "Set the resize config for resize the texture.")
-            .value_parser(value_parser!(PathBuf))
-            .conflicts_with_all(["max_pixel", "rw", "rh"]),
-        )
         // .arg(
         //     arg!(
-        //         -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
-        //     )
-        //     // We don't have syntax yet for optional options, so manually calling `required`
-        //     .value_parser(value_parser!(u32)),
+        //     -c --resize_config <RESIZE_CONFIG> "Set the resize config for resize the texture.")
+        //     .value_parser(value_parser!(PathBuf))
+        //     .conflicts_with_all(["max_pixel", "rw", "rh"]),
         // )
+        .arg(
+            arg!(
+                -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
+            )
+            // We don't have syntax yet for optional options, so manually calling `required`
+            .value_parser(value_parser!(u32)),
+        )
         .arg(
             arg!(
                 --rw <RESIZE_WIDTH> "Set the MAX-WIDTH to filter the textue."
