@@ -53,7 +53,7 @@ pub mod tp {
             let im = image::open(tp).unwrap();
             //thumb ignore when max > w && max > h
             if is_thumb {
-                if size.0 > im.width() && size.1 > im.height() {
+                if size.0 >= im.width() && size.1 >= im.height() {
                     drop(im);
                     return Ok(());
                 }
