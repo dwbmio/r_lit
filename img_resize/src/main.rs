@@ -1,6 +1,7 @@
 use clap::{arg, command, value_parser, ArgGroup};
-use re_tp::tp::{ReError, TpResize};
+use re_tp::tp::{ActionType, ReError, TpResize};
 use std::path::PathBuf;
+mod img_exec;
 mod re_tp;
 
 fn main() -> Result<(), ReError> {
@@ -13,17 +14,18 @@ fn main() -> Result<(), ReError> {
         )
         .arg(
             arg!(
+                -j --force_jpg <FORCE_JPG> "Convert the texture format to jpg force."
+            )
+            // We don't have syntax yet for optional options, so manually calling `required`
+            .value_parser(value_parser!(bool))
+            .conflicts_with_all(["max_pixel", "rw", "rh"]),
+        )
+        .arg(
+            arg!(
                 -m --max_pixel <MAX_WIDTH> "Set the MAX-WIDTH to filter the textue."
             )
             // We don't have syntax yet for optional options, so manually calling `required`
             .value_parser(value_parser!(u32)),
-        )
-        .arg(
-            arg!(
-                -j --force_jpg <FORCE_JPG> "Convert the texture format to jpg force."
-            )
-            // We don't have syntax yet for optional options, so manually calling `required`
-            .value_parser(value_parser!(bool)),
         )
         .arg(
             arg!(
@@ -64,9 +66,11 @@ fn main() -> Result<(), ReError> {
         tp: PathBuf::new(),
         force_jpg: false,
         out: None,
+        action: ActionType::None,
     };
     if let Some(mw) = cli.get_one::<u32>("max_pixel") {
         tp_handle.max_pixel = *mw;
+        tp_handle.action = ActionType::Resize
     };
 
     if let Some(tp) = cli.get_one::<PathBuf>("path") {
@@ -75,20 +79,23 @@ fn main() -> Result<(), ReError> {
 
     if let Some(tp) = cli.get_one::<bool>("force_jpg") {
         tp_handle.force_jpg = *tp;
+        tp_handle.action = ActionType::Convert
     };
 
     if let Some(mw) = cli.get_one::<u32>("rw") {
         tp_handle.width = *mw;
+        tp_handle.action = ActionType::Resize
     };
 
     if let Some(tp) = cli.get_one::<u32>("rh") {
         tp_handle.height = *tp;
+        tp_handle.action = ActionType::Resize
     };
 
     if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
         tp_handle.exec_from_config(c.clone())?;
     } else {
-        tp_handle.exec()?;
+        tp_handle.exec_resize()?;
     }
 
     Ok(())

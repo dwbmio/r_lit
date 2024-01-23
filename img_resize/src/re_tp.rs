@@ -1,13 +1,8 @@
 pub mod tp {
-    use clap::builder::OsStr;
-    use image::{GenericImageView, ImageError, ImageFormat, ImageOutputFormat};
+    use crate::img_exec;
+    use image::{ImageError, ImageFormat};
     use infer::MatcherType;
-    use rand::{distributions::Alphanumeric, thread_rng, Rng};
-    use std::{
-        ffi::OsString,
-        fs,
-        path::{Path, PathBuf},
-    };
+    use std::{fs, path::PathBuf};
     use thiserror::Error;
     use walkdir::WalkDir;
     use yaml_rust::YamlLoader;
@@ -33,76 +28,16 @@ pub mod tp {
         pub(crate) force_jpg: bool,
         pub(crate) tp: PathBuf,
         pub(crate) out: Option<PathBuf>,
+        pub(crate) action: ActionType,
+    }
+
+    pub enum ActionType {
+        Resize,
+        Convert,
+        None,
     }
 
     impl TpResize {
-        fn rand_filename() -> String {
-            let rand_string: String = thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(12)
-                .map(char::from)
-                .collect();
-
-            rand_string
-        }
-
-        fn re_tp(
-            tp: &PathBuf,
-            size: (u32, u32),
-            out: Option<PathBuf>,
-            is_thumb: bool,
-            is_force_jpg: bool,
-            mine_type: &str,
-        ) -> Result<(), ReError> {
-            let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
-            let im = image::open(tp).unwrap();
-            //thumb ignore when max > w && max > h
-
-            if is_thumb && !is_force_jpg {
-                if size.0 >= im.width() && size.1 >= im.height() {
-                    drop(im);
-                    return Ok(());
-                }
-            }
-
-            fs::create_dir_all(out_i)?;
-            println!(
-                "resize texture from {:?}, pixel={:?} fmt={:?} => {:?}",
-                &tp,
-                im.dimensions(),
-                im.color(),
-                if is_thumb {
-                    format!("max size={:?}", size.0)
-                } else {
-                    format!("size={:?}", size)
-                }
-            );
-            let ran_fname = OsString::from(Self::rand_filename().to_owned());
-            let f_name = tp.file_name().unwrap_or(&(ran_fname));
-
-            let im_r: image::DynamicImage = match is_thumb {
-                true => im.thumbnail(size.0, size.1),
-                false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
-            };
-
-            if is_force_jpg {
-                // convert to .jpg ext
-                println!("force jpg of {:?}", f_name.to_owned());
-                let f_path: &Path = Path::new(f_name);
-                let f_j_path =
-                    f_path.with_extension(OsStr::from(ImageFormat::Jpeg.extensions_str()[0]));
-                let fo = &mut std::fs::File::create(f_j_path).unwrap();
-                im_r.write_to(fo, ImageOutputFormat::Jpeg(100))?
-            } else {
-                let f_path: &Path = Path::new(f_name);
-                let fo = &mut std::fs::File::create(f_path).unwrap();
-                let out = ImageOutputFormat::from(ImageFormat::from_mime_type(mine_type).unwrap());
-                im_r.write_to(fo, out)?
-            }
-
-            Ok(())
-        }
-
         fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
             let is_thumb = self.max_pixel > 0;
 
@@ -112,21 +47,32 @@ pub mod tp {
                     // ignroe un-image file
                     return Ok(());
                 }
-                Self::re_tp(
-                    path,
-                    (
-                        if is_thumb { self.max_pixel } else { self.width },
-                        if is_thumb {
-                            self.max_pixel
-                        } else {
-                            self.height
-                        },
-                    ),
-                    out.clone(),
-                    is_thumb,
-                    self.force_jpg,
-                    k.mime_type(),
-                )?;
+
+                match self.action {
+                    ActionType::Resize => {
+                        img_exec::re_tp(
+                            path,
+                            (
+                                if is_thumb { self.max_pixel } else { self.width },
+                                if is_thumb {
+                                    self.max_pixel
+                                } else {
+                                    self.height
+                                },
+                            ),
+                            out.clone(),
+                            is_thumb,
+                            k.mime_type(),
+                        )?;
+                    }
+                    ActionType::Convert => {
+                        img_exec::convert_tp(path, ImageFormat::Jpeg, out.clone())?;
+                    }
+                    ActionType::None => {
+                        panic!("unknown action to handle tp!")
+                    }
+                }
+
                 return Ok(());
             }
             println!("[warn]unknown file type...ignore!{:?}", path.display());
@@ -153,7 +99,7 @@ pub mod tp {
                 .unwrap_or(false)
         }
 
-        pub fn exec(&self) -> Result<(), ReError> {
+        pub fn exec_resize(&self) -> Result<(), ReError> {
             if !self.tp.exists() {
                 panic!("path not exists!");
             }
