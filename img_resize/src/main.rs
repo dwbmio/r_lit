@@ -23,7 +23,7 @@ fn main() -> Result<(), ReError> {
                 -j --force_jpg <FORCE_JPG> "Convert the texture format to jpg force."
             )
             // We don't have syntax yet for optional options, so manually calling `required`
-            .value_parser(value_parser!(u32)),
+            .value_parser(value_parser!(bool)),
         )
         .arg(
             arg!(

@@ -1,8 +1,13 @@
 pub mod tp {
+    use clap::builder::OsStr;
     use image::{GenericImageView, ImageError, ImageFormat, ImageOutputFormat};
     use infer::MatcherType;
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
-    use std::{ffi::OsString, fs, path::PathBuf};
+    use std::{
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+    };
     use thiserror::Error;
     use walkdir::WalkDir;
     use yaml_rust::YamlLoader;
@@ -74,15 +79,22 @@ pub mod tp {
             let ran_fname = OsString::from(Self::rand_filename().to_owned());
             let f_name = tp.file_name().unwrap_or(&(ran_fname));
 
-            let fo = &mut std::fs::File::create(f_name).unwrap();
             let im_r = match is_thumb {
                 true => im.thumbnail(size.0, size.1),
                 false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
             };
 
             if is_force_jpg {
+                // convert to .jpg ext
+                println!("force jpg of {:?}", f_name.to_owned());
+                let f_path: &Path = Path::new(f_name);
+                let f_j_path =
+                    f_path.with_extension(OsStr::from(ImageFormat::Jpeg.extensions_str()[0]));
+                let fo = &mut std::fs::File::create(f_j_path).unwrap();
                 im_r.write_to(fo, ImageOutputFormat::Jpeg(100))?
             } else {
+                let f_path: &Path = Path::new(f_name);
+                let fo = &mut std::fs::File::create(f_path).unwrap();
                 let out = ImageOutputFormat::from(ImageFormat::from_mime_type(mine_type).unwrap());
                 im_r.write_to(fo, out)?
             }
