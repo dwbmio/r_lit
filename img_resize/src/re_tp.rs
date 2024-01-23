@@ -74,6 +74,12 @@ pub mod tp {
 
         fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
             let is_thumb = self.max_pixel > 0;
+
+            if is_thumb {
+                if self.max_pixel < self.width && self.max_pixel < self.height {
+                    return Ok(());
+                }
+            }
             Self::re_tp(
                 path,
                 (
