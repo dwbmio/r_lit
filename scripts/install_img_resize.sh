@@ -2,8 +2,8 @@
 set -u
 
 OS=$(uname)
-BIN_FILE=${$1}
-echo "install bin: $1...";
+BIN_FILE=img_resize
+echo "install bin: $BIN_FILE...";
 
 # ==========function 
 abort() {
