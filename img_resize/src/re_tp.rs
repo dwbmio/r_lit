@@ -57,7 +57,8 @@ pub mod tp {
             let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
             let im = image::open(tp).unwrap();
             //thumb ignore when max > w && max > h
-            if is_thumb {
+
+            if is_thumb && !is_force_jpg {
                 if size.0 >= im.width() && size.1 >= im.height() {
                     drop(im);
                     return Ok(());
@@ -79,7 +80,7 @@ pub mod tp {
             let ran_fname = OsString::from(Self::rand_filename().to_owned());
             let f_name = tp.file_name().unwrap_or(&(ran_fname));
 
-            let im_r = match is_thumb {
+            let im_r: image::DynamicImage = match is_thumb {
                 true => im.thumbnail(size.0, size.1),
                 false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
             };
