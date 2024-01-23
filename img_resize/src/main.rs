@@ -20,6 +20,13 @@ fn main() -> Result<(), ReError> {
         )
         .arg(
             arg!(
+                -j --force_jpg <FORCE_JPG> "Convert the texture format to jpg force."
+            )
+            // We don't have syntax yet for optional options, so manually calling `required`
+            .value_parser(value_parser!(u32)),
+        )
+        .arg(
+            arg!(
                 --rw <RESIZE_WIDTH> "Set the MAX-WIDTH to filter the textue."
             )
             // We don't have syntax yet for optional options, so manually calling `required`
@@ -55,6 +62,7 @@ fn main() -> Result<(), ReError> {
         height: 0,
         width: 0,
         tp: PathBuf::new(),
+        force_jpg: false,
         out: None,
     };
     if let Some(mw) = cli.get_one::<u32>("max_pixel") {
@@ -63,6 +71,10 @@ fn main() -> Result<(), ReError> {
 
     if let Some(tp) = cli.get_one::<PathBuf>("path") {
         tp_handle.tp = tp.to_path_buf();
+    };
+
+    if let Some(tp) = cli.get_one::<bool>("force_jpg") {
+        tp_handle.force_jpg = *tp;
     };
 
     if let Some(mw) = cli.get_one::<u32>("rw") {

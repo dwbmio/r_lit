@@ -1,5 +1,6 @@
 pub mod tp {
-    use image::{GenericImageView, ImageError, ImageFormat};
+    use image::{GenericImageView, ImageError, ImageFormat, ImageOutputFormat};
+    use infer::MatcherType;
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use std::{ffi::OsString, fs, path::PathBuf};
     use thiserror::Error;
@@ -24,6 +25,7 @@ pub mod tp {
         pub(crate) max_pixel: u32,
         pub(crate) width: u32,
         pub(crate) height: u32,
+        pub(crate) force_jpg: bool,
         pub(crate) tp: PathBuf,
         pub(crate) out: Option<PathBuf>,
     }
@@ -44,6 +46,8 @@ pub mod tp {
             size: (u32, u32),
             out: Option<PathBuf>,
             is_thumb: bool,
+            is_force_jpg: bool,
+            mine_type: &str,
         ) -> Result<(), ReError> {
             let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
             let im = image::open(tp).unwrap();
@@ -69,32 +73,50 @@ pub mod tp {
             );
             let ran_fname = OsString::from(Self::rand_filename().to_owned());
             let f_name = tp.file_name().unwrap_or(&(ran_fname));
-            let fo = &mut std::fs::File::create(f_name).unwrap();
 
+            let fo = &mut std::fs::File::create(f_name).unwrap();
             let im_r = match is_thumb {
                 true => im.thumbnail(size.0, size.1),
                 false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
             };
-            let _ = im_r.write_to(fo, ImageFormat::Png)?;
+
+            if is_force_jpg {
+                im_r.write_to(fo, ImageOutputFormat::Jpeg(100))?
+            } else {
+                let out = ImageOutputFormat::from(ImageFormat::from_mime_type(mine_type).unwrap());
+                im_r.write_to(fo, out)?
+            }
 
             Ok(())
         }
 
         fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
             let is_thumb = self.max_pixel > 0;
-            Self::re_tp(
-                path,
-                (
-                    if is_thumb { self.max_pixel } else { self.width },
-                    if is_thumb {
-                        self.max_pixel
-                    } else {
-                        self.height
-                    },
-                ),
-                out.clone(),
-                is_thumb,
-            )?;
+
+            let kind = infer::get_from_path(path)?;
+            if let Some(k) = kind {
+                if k.matcher_type() != MatcherType::Image {
+                    // ignroe un-image file
+                    return Ok(());
+                }
+                Self::re_tp(
+                    path,
+                    (
+                        if is_thumb { self.max_pixel } else { self.width },
+                        if is_thumb {
+                            self.max_pixel
+                        } else {
+                            self.height
+                        },
+                    ),
+                    out.clone(),
+                    is_thumb,
+                    self.force_jpg,
+                    k.mime_type(),
+                )?;
+                return Ok(());
+            }
+            println!("[warn]unknown file type...ignore!{:?}", path.display());
             Ok(())
         }
 
@@ -104,12 +126,7 @@ pub mod tp {
             for entry in walker.filter_entry(|e| !Self::is_hidden(e)) {
                 let entry = entry?;
                 if entry.path().is_file() {
-                    let kind = infer::get_from_path(entry.path())?;
-                    if let Some(k) = kind {
-                        if k.extension() == "png" || k.extension() == "jpg" {
-                            self.single_tp(&entry.path().to_path_buf(), out.clone())?
-                        }
-                    }
+                    self.single_tp(&entry.path().to_path_buf(), out.clone())?
                 }
             }
             Ok(())
