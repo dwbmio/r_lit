@@ -47,6 +47,14 @@ pub mod tp {
         ) -> Result<(), ReError> {
             let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
             let im = image::open(tp).unwrap();
+            //thumb ignore when max > w && max > h
+            if is_thumb {
+                if size.0 > im.width() && size.1 > im.height() {
+                    drop(im);
+                    return Ok(());
+                }
+            }
+
             fs::create_dir_all(out_i)?;
             println!(
                 "resize texture from {:?}, pixel={:?} fmt={:?} => {:?}",
@@ -74,13 +82,6 @@ pub mod tp {
 
         fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<(), ReError> {
             let is_thumb = self.max_pixel > 0;
-
-            //limit max ignore when max > w && max > h
-            if is_thumb {
-                if self.max_pixel > self.width && self.max_pixel > self.height {
-                    return Ok(());
-                }
-            }
             Self::re_tp(
                 path,
                 (
