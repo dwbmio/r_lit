@@ -46,7 +46,7 @@ pub fn re_tp(
     mine_type: &str,
 ) -> Result<(), ReError> {
     let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
-    let im = image::open(tp).unwrap();
+    let im = image::open(tp)?;
     //thumb ignore when max > w && max > h
     if is_thumb {
         if size.0 >= im.width() && size.1 >= im.height() {
@@ -70,7 +70,7 @@ pub fn re_tp(
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
     let im_r: image::DynamicImage = match is_thumb {
-        true => im.thumbnail(size.0, size.1),
+        true => im.resize(size.0, size.1, image::imageops::FilterType::Nearest),
         false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
     };
     let f_path: &Path = Path::new(f_name);
@@ -78,6 +78,7 @@ pub fn re_tp(
     let out = ImageOutputFormat::from(
         ImageFormat::from_mime_type(mine_type).expect("unknown output format!"),
     );
+    println!("output fmt={:?}", out);
     im_r.write_to(fo, out)?;
     Ok(())
 }
