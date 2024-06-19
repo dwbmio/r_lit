@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::re_tp::tp::ReError;
+use crate::re_tp::ReError;
 
 fn rand_filename() -> String {
     let rand_string: String = thread_rng()

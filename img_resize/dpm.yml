@@ -1,0 +1,17 @@
+#==================
+#dpm package config
+#==================
+#require
+name : img_resize
+version : 1.0.0
+desc : "simple desc"
+dependencies:
+  -
+
+
+#option
+runtime: bin-win32
+license: MIT
+runtime_max: 
+runtime_min: 
+custom_filetype:

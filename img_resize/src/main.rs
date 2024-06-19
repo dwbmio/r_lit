@@ -1,10 +1,13 @@
 use clap::{arg, command, value_parser, ArgGroup};
-use re_tp::tp::{ActionType, ReError, TpResize};
+use re_tp::{
+    tp::{ActionType, TpResize},
+    tp_helper,
+};
 use std::path::PathBuf;
 mod img_exec;
 mod re_tp;
 
-fn main() -> Result<(), ReError> {
+fn main() -> Result<(), re_tp::ReError> {
     let cli = command!() // requires `cargo` feature
         .arg(
             arg!(
@@ -59,7 +62,7 @@ fn main() -> Result<(), ReError> {
         )
         .get_matches();
 
-    let mut tp_handle = TpResize {
+    let mut tp_inc = TpResize {
         max_pixel: 0,
         height: 0,
         width: 0,
@@ -69,33 +72,33 @@ fn main() -> Result<(), ReError> {
         action: ActionType::None,
     };
     if let Some(mw) = cli.get_one::<u32>("max_pixel") {
-        tp_handle.max_pixel = *mw;
-        tp_handle.action = ActionType::Resize
+        tp_inc.max_pixel = *mw;
+        tp_inc.action = ActionType::Resize
     };
 
     if let Some(tp) = cli.get_one::<PathBuf>("path") {
-        tp_handle.tp = tp.to_path_buf();
+        tp_inc.tp = tp.to_path_buf();
     };
 
     if let Some(tp) = cli.get_one::<bool>("force_jpg") {
-        tp_handle.force_jpg = *tp;
-        tp_handle.action = ActionType::Convert
+        tp_inc.force_jpg = *tp;
+        tp_inc.action = ActionType::Convert
     };
 
     if let Some(mw) = cli.get_one::<u32>("rw") {
-        tp_handle.width = *mw;
-        tp_handle.action = ActionType::Resize
+        tp_inc.width = *mw;
+        tp_inc.action = ActionType::Resize
     };
 
     if let Some(tp) = cli.get_one::<u32>("rh") {
-        tp_handle.height = *tp;
-        tp_handle.action = ActionType::Resize
+        tp_inc.height = *tp;
+        tp_inc.action = ActionType::Resize
     };
 
     if let Some(c) = cli.get_one::<PathBuf>("resize_config") {
-        tp_handle.exec_from_config(c.clone())?;
+        tp_helper::exec_from_config(tp_inc.tp, c.clone())?;
     } else {
-        tp_handle.exec_resize()?;
+        tp_inc.exec_resize()?;
     }
 
     Ok(())
