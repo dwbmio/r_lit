@@ -1,0 +1,104 @@
+{
+    "meta_scene_list": [
+        {
+            "name": "single_scene",
+            "textures": [
+                "tests/perf_main/retain-bg.png",
+                "tests/perf_main/icon.png"
+            ],
+            "clear-tp-id": "0",
+            "nodes": [
+                {
+                    "id": 1,
+                    "name": "icon",
+                    "tp_id": "1",
+                    "attr": {
+                        "pos": [
+                            0,
+                            0,
+                            0
+                        ],
+                        "active": false, 
+                        "is-static": true
+                    }
+                },
+                {
+                    "id": 2,
+                    "name": "icon2",
+                    "tp_id": "1",
+                    "attr": {
+                        "pos": [
+                            0,
+                            200,
+                            0
+                        ],
+                        "active": true
+                    }
+                }
+            ],
+            "timeline": {
+                "1": [
+                    {
+                        "action": "move_to",
+                        "start_t": 1.0,
+                        "duration": 4.0,
+                        "pos_star": [
+                            200,
+                            200,
+                            0
+                        ],
+                        "pos_target": [
+                            400,
+                            400,
+                            0
+                        ]
+                    },
+                    {
+                        "action": "active",
+                        "start_t": 2.0,
+                        "duration": 3.0,
+                        "active": true
+                    },
+                    {
+                        "action": "active",
+                        "start_t": 5.0,
+                        "duration": 5.0,
+                        "active": false
+                    }
+                ],
+                "2": [
+                    {
+                        "action": "move_to",
+                        "start_t": 0,
+                        "duration": 2.0,
+                        "pos_star": [
+                            0,
+                            200,
+                            0
+                        ],
+                        "pos_target": [
+                            200,
+                            200,
+                            0
+                        ]
+                    },
+                    {
+                        "action": "move_to",
+                        "start_t": 2.0,
+                        "duration": 3.0,
+                        "pos_star": [
+                            200,
+                            200,
+                            0
+                        ],
+                        "pos_target": [
+                            200,
+                            400,
+                            0
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}

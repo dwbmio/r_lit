@@ -1,0 +1,23 @@
+[package]
+name = "movie-maker"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+thiserror = "2.0.3"
+serde = {version = "1.0.215",features = ["derive"]}
+serde_json = "1.0.133"
+log = "0.4.22"
+ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg.git" }
+image = "0.25.5"
+imageproc = "0.25.0"
+tokio = { version = "1.41.1", features = ["fs","io-util","rt"] }
+tween = "2.0.3"
+
+
+# 如果有多个 bin，新增以下 `[bin]` 表示额外的目标
+[[bin]]
+name = "perf_main"          # 性能测试
+path = "src/perf_main.rs"  # 二进制文件的源代码路径
+

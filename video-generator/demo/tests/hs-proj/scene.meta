@@ -1,0 +1,46 @@
+{
+    "meta_scene_list": [
+        {
+            "name": "single_scene",
+            "textures": [
+                "tests/hs-proj/retain-bg_ex.png",
+                "tests/hs-proj/backgroundscore_highest3.png",
+                "tests/hs-proj/backgroundstop.png",
+                "tests/hs-proj/gameplay_board_lightness_a.png", 
+                "tests/hs-proj/48.png"
+            ],
+            "clear-tp-id": "0",
+            "nodes": [
+                {
+                    "id": 1,
+                    "name": "highest_lt",
+                    "tp_id": "1",
+                    "attr": {
+                        "pos": [
+                            10,
+                            30,
+                            1
+                        ],
+                        "is-static": true,
+                        "active": true
+                    }
+                },
+                {
+                    "id": 2,
+                    "name": "setting_rt",
+                    "tp_id": "2",
+                    "attr": {
+                        "pos": [
+                            630,
+                            30,
+                            1
+                        ],
+                        "is-static": true,
+                        "active": true
+                    }
+                }
+            ],
+            "timeline": {}
+        }
+    ]
+}

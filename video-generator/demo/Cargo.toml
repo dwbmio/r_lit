@@ -1,0 +1,10 @@
+[package]
+name = "hs-mvp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+movie-maker = { path = "../movie-maker" }
+tokio = { version = "1.41.1", features = ["fs", "io-util", "rt"] }
+image = "0.25.5"
+imageproc = "0.25.0"
