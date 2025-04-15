@@ -66,11 +66,16 @@ public_dpm tar:
     t = tempfile.mktemp()
     os.mkdir(t)
     os.chdir(t)
-    print(t, "-->>t")
+    ret = os.system(dpm init {{tar}} -p name={{tar}} ver=0.0.0)
+    if ret != 0:
+        print("dpm init failed!")
+        sys.exit(1)
+    
     shutil.copyfile(mv_f, os.path.join(t, bin_f))
     shutil.copyfile(mv_config, os.path.join(t, "dpm.yml"))
-    ret = os.system("cd %s && dpm publish"%t)
-    if ret != 0: 
+    ret = os.system("cd %s && dpm publish" % t)
+    if ret != 0:
+        print("dpm publish failed!")
         sys.exit(1)
 
 install_loc tar method="release":
