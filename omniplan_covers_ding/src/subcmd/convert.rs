@@ -6,6 +6,7 @@ use crate::{
     error::ConvertError,
     subcmd::plan_docs::ding_require_doc::RequireOnceRecord,
 };
+use cli_common::chrono;
 use cli_common::clap::ArgMatches;
 use rust_xlsxwriter::workbook::Workbook;
 use std::fmt::Debug;
@@ -17,11 +18,30 @@ use strum::IntoEnumIterator;
 
 const EXCEL_CONTENT_START: u32 = 1;
 
+/// 根据时间字符串数组计算最后（最大）时间
+/// # 参数
+/// - `times`: 时间字符串数组，格式如 "2024-06-01 12:00:00"
+/// # 返回
+/// - Option<String>: 最后（最大）的时间字符串
+use chrono::NaiveDateTime;
+
+pub fn get_last_time_from_array(times: &[&str]) -> Option<String> {
+    times
+        .iter()
+        .filter_map(|s| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| (dt, *s))
+        })
+        .max_by_key(|(dt, _)| *dt)
+        .map(|(_, s)| s.to_string())
+}
+
 /// 读取原始gante数据从csv file
 fn read_gante_data<T: DocRecord + Debug>(
     csv_file: &PathBuf,
     task_parent: &str,
-    liter_belong: &str
+    liter_belong: &str,
 ) -> Result<Vec<T>, ConvertError> {
     let mut rdr = csv::Reader::from_path(csv_file)?;
     let mut vec_tasks: Vec<T> = vec![];
@@ -94,14 +114,15 @@ fn template_xlsx_writer<T: DocRecord>(
 pub async fn handle(matches: &ArgMatches, ctx: &AppContext) -> Result<(), ConvertError> {
     // read csv-file
     let f_opt = matches.get_one::<String>("csv-file");
-    // parent  
+    // parent
     let task_parent = matches
         .get_one::<String>("parent")
         .expect("required task-parent params!");
-    // liter 
-    let liter_parent = matches.get_one::<String>("liter")
-    .expect("required liter params!");
-    
+    // liter
+    let liter_parent = matches
+        .get_one::<String>("liter")
+        .expect("required liter params!");
+
     // doc-type
     let opt_type = matches
         .get_one::<String>("doc-type")
@@ -119,8 +140,11 @@ pub async fn handle(matches: &ArgMatches, ctx: &AppContext) -> Result<(), Conver
     };
 
     if let (Some(f), Some(o_f)) = (f_opt, o_f_opt) {
-        let vec_tasks =
-            read_gante_data::<RequireOnceRecord>(&Path::new(f).to_path_buf(), task_parent, liter_parent)?;
+        let vec_tasks = read_gante_data::<RequireOnceRecord>(
+            &Path::new(f).to_path_buf(),
+            task_parent,
+            liter_parent,
+        )?;
         println!("write to excel file :{:?}...", &o_f);
         template_xlsx_writer(opt_type_enum, vec_tasks, &o_f)?;
         Ok(())

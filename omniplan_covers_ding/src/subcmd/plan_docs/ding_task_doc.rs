@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+#![allow(unused)]
 // 标题	描述	状态	负责人	优先级	迭代	参与者	抄送	标签	计划开始时间	计划完成时间
 use std::{collections::HashMap, fmt::Display};
 use strum_macros::EnumIter;
@@ -55,7 +57,6 @@ impl Display for DingTaskDocRow {
     }
 }
 
-
 /// 任务数据结构
 #[derive(Debug)]
 pub struct TaskOnceRecord {
@@ -65,13 +66,17 @@ pub struct TaskOnceRecord {
     hours_cost: u32,
     dev_avatar: String,
     iter_parent: String,
-    liter_belong: String
+    liter_belong: String,
 }
 
 impl DocRecord for TaskOnceRecord {
+    fn deadline(&self) -> Option<String> {
+        return None;
+    }
+
     fn requirement_convert_to_hash(&self) -> std::collections::HashMap<u32, String> {
         let mut val_map: HashMap<u32, String> = HashMap::new();
-    
+
         return val_map;
     }
 
@@ -85,10 +90,7 @@ impl DocRecord for TaskOnceRecord {
             .get(2)
             .expect("planned_start_date get empty!")
             .to_owned();
-        let planned_end_data = rec
-            .get(3)
-            .expect("planned_end_date get empty!")
-            .to_owned();
+        let planned_end_data = rec.get(3).expect("planned_end_date get empty!").to_owned();
         let dev_avatar = rec.get(10).expect("dev_avatar get empty!").to_owned();
         let hours_cost = rec
             .get(4)
@@ -101,8 +103,7 @@ impl DocRecord for TaskOnceRecord {
             hours_cost: todo!(),
             dev_avatar: todo!(),
             iter_parent: todo!(),
-            liter_belong: todo!()
+            liter_belong: todo!(),
         }
     }
 }
-

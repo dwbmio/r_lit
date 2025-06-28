@@ -90,6 +90,15 @@ pub struct RequireOnceRecord {
 }
 
 impl DocRecord for RequireOnceRecord {
+    fn deadline(&self) -> Option<String> {
+        Some(
+            self.planned_end_data
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .replace("/", "-"),
+        )
+    }
     fn requirement_convert_to_hash(&self) -> HashMap<u32, String> {
         let mut val_map: HashMap<u32, String> = HashMap::new();
         // variable
