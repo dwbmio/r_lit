@@ -13,12 +13,16 @@ thiserror = "^1"
 rand = "0.8.5"
 walkdir = "2"
 infer = "0.15.0"
-
 yaml-rust = "0.4.5"
+log = "0.4.27"
+tinify-rs = { version = "1.4.2", features = ["async"] }
+tokio = "1.45.1"
+fern = "0.7.1"
+humantime = "2.2.0"
 
 
 [profile.release]
 opt-level = 'z'
-lto = true 
+lto = true
 codegen-units = 1
 panic = 'abort'

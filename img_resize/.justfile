@@ -6,8 +6,14 @@ set dotenv-load
 # ===Variables===
 PROJ_NAME := ""
 CARGO_PROJ_REL_DIR := "img_resize"
-PY_SHEBANG := if os() == "windows"{"python"} else {"/usr/bin/env python"}
-BINARY_INSTALL_PATH := if os() == "macos"{"/usr/local/bin"} else {"D://dtool"}
+PY_SHEBANG := if os() == "windows"{"python"} else {"/home/dwb/.pyenv/shims python"}
+BINARY_INSTALL_PATH := if os() == "windows" {
+    "D://dtool"
+} else if os() == "macos" {
+    "/usr/local/bin"
+} else {
+    "/home/dwb/data/dtools"
+}
 # ===Variables===
 # ===============
 
@@ -20,35 +26,32 @@ default:
 
 
 __cargo_build method tar:
-    #!{{PY_SHEBANG}}
-    import os
-    import sys
-
-    exec_cmd ="cargo build %s" % ('{{method}}' == "release" and "--release" or "")
-    print(exec_cmd)
-    os.system(exec_cmd)
+    #!/usr/bin/env sh
+    exec_cmd="cargo build $( [ "{{method}}" = "release" ] && echo "--release" )"
+    echo "$exec_cmd"
+    eval "$exec_cmd"
 
 
 
 __mv_loc method tar:
-    #!{{PY_SHEBANG}}
-    import os
-    import sys
-    import platform
-    import shutil
+    #!/usr/bin/sh
+    os=$(uname)
+    bin_f="$( [ "$os" = "windows" ] && echo "{{tar}}.exe" || echo "{{tar}}" )"
+    build_dir="$( [ "$os" = "windows" ] && echo "target\\{{method}}" || echo "target/{{method}}" )"
+    mv_f="$( [ "$os" = "windows" ] && echo "{{justfile_directory()}}\\target\\{{method}}\\${bin_f}" || echo "{{justfile_directory()}}/target/{{method}}/${bin_f}" )"
+    dest="$( [ "$os" = "windows" ] && echo "{{BINARY_INSTALL_PATH}}\\${bin_f}" || echo "{{BINARY_INSTALL_PATH}}/${bin_f}" )"
+    if [ ! -f "$mv_f" ]; then
+        echo "cargo build failed!"
+        exit 2
+    fi
+    cp "$mv_f" "$dest"
+    echo "suc!"
 
-    bin_f = sys.platform == "win32" and "{{tar}}.exe" or "{{tar}}"
-    mv_f = os.path.join(r'{{justfile_directory()}}', 'target', '{{method}}' == "release" and "release" or "debug", bin_f)
-    if not os.path.isfile(mv_f):
-        print("cargo build failed!")
-        sys.exit(2)
-    shutil.copyfile(mv_f, os.path.join(r'{{BINARY_INSTALL_PATH}}', bin_f))
-    print("suc!")
 
 # ===Private===
 # =============
 
-install_loc method="release" tar="hfrog-cli":
+install_loc method="release" tar="img_resize":
     just __cargo_build {{method}} {{tar}}
     just __mv_loc {{method}} {{tar}}
 
@@ -58,7 +61,7 @@ gen_doc:
 
 
 
-#发布binary页面到hfrog-cli
+#发布binary页面到hfrog
 __pub_release:
     hfrog -p {{justfile_directory()}}/out publish --alias-method dry
 
