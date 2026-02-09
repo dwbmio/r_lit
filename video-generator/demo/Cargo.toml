@@ -8,3 +8,9 @@ movie-maker = { path = "../movie-maker" }
 tokio = { version = "1.41.1", features = ["fs", "io-util", "rt"] }
 image = "0.25.5"
 imageproc = "0.25.0"
+
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"

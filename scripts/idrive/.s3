@@ -1,5 +1,0 @@
-S3_BUCKET=rlit-prod
-S3_ACCESS_KEY=wIr0s9VHHlhI0pF8O2FW
-S3_SECRET_KEY=EEFmk07fLlFXsn2p7HgXxOeXCeJVFS8Bvd2ZWJ5A
-S3_ENDPOINT=https://rlit-prod.w6y1.sg01.idrivee2-79.com
-S3_REGION=sgp

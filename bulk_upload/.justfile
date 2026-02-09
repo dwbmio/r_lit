@@ -5,7 +5,7 @@ set dotenv-load
 # ===============
 # ===Variables===
 PROJ_NAME := ""
-CARGO_PROJ_OUTPUT_BIN := "img_resize"
+CARGO_PROJ_OUTPUT_BIN := "bulk_upload"
 PY_SHEBANG := if os() == "windows"{"python"} else {"/usr/bin/env python"}
 BINARY_INSTALL_PATH := if os() == "macos"{"/usr/local/bin"} else {"D://dtool"}
 PLAT_FORMS := "aarch64-apple-darwin"
@@ -37,7 +37,6 @@ __install_bin method:
     #!{{PY_SHEBANG}}
     import os
     import sys
-    import platform
     import shutil
 
     bin_f = sys.platform == "win32" and "{{CARGO_PROJ_OUTPUT_BIN}}.exe" or "{{CARGO_PROJ_OUTPUT_BIN}}"
@@ -45,6 +44,7 @@ __install_bin method:
     print(mv_f)
     if not os.path.isfile(mv_f):
         print("cargo build failed!")
+        sys.exit(2)
     shutil.copyfile(mv_f, "{{BINARY_INSTALL_PATH}}/{{CARGO_PROJ_OUTPUT_BIN}}")
     os.system("sudo chmod +x {{BINARY_INSTALL_PATH}}/{{CARGO_PROJ_OUTPUT_BIN}}")
 

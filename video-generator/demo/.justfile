@@ -5,7 +5,7 @@ set dotenv-load
 # ===============
 # ===Variables===
 PROJ_NAME := ""
-CARGO_PROJ_OUTPUT_BIN := "img_resize"
+CARGO_PROJ_OUTPUT_BIN := "hs-mvp"
 PY_SHEBANG := if os() == "windows"{"python"} else {"/usr/bin/env python"}
 BINARY_INSTALL_PATH := if os() == "macos"{"/usr/local/bin"} else {"D://dtool"}
 PLAT_FORMS := "aarch64-apple-darwin"

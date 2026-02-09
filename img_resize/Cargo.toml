@@ -22,7 +22,7 @@ humantime = "2.2.0"
 
 
 [profile.release]
-opt-level = 'z'
 lto = true
-codegen-units = 1
-panic = 'abort'
+panic = "abort"
+strip = true
+opt-level = "z"

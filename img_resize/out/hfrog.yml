@@ -1,9 +1,0 @@
-pid: 0
-name: img_resize
-ver: "1"
-md5: "1                               "
-descript: "1"
-cont_size: 0
-runtime: binary-macor-aarch64
-is_artifactory_ready: false
-ci_info: {}

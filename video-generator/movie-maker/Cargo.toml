@@ -17,6 +17,12 @@ tween = "2.0.3"
 
 
 # 如果有多个 bin，新增以下 `[bin]` 表示额外的目标
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"
+
 [[bin]]
 name = "perf_main"          # 性能测试
 path = "src/perf_main.rs"  # 二进制文件的源代码路径
