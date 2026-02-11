@@ -5,7 +5,6 @@ use aws_config;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{config::Region, primitives::ByteStream, Client as S3Client};
 use futures::future::join_all;
-use serde::Deserialize;
 
 use crate::error::AppError;
 
@@ -16,19 +15,6 @@ struct S3Config {
     secret_key: String,
     endpoint: String,
     region: String,
-}
-
-/// JSON 文件中的书籍条目
-#[derive(Deserialize)]
-struct BookEntry {
-    #[serde(default)]
-    image: String,
-}
-
-/// JSON 文件根结构
-#[derive(Deserialize)]
-struct BookList {
-    books: Vec<BookEntry>,
 }
 
 /// 从 .s3 dotenv 文件中加载配置
@@ -67,9 +53,32 @@ fn load_s3_config(path: &Path) -> Result<S3Config, AppError> {
     })
 }
 
-/// 从 JSON 文件解析 URL 列表，分批并发下载后上传到 S3
+/// 递归遍历任意 JSON 结构，提取所有以 http:// 或 https:// 开头的字符串值
+fn extract_urls(value: &serde_json::Value, urls: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                urls.push(trimmed.to_string());
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                extract_urls(item, urls);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for (_key, val) in obj {
+                extract_urls(val, urls);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 接收 JSON 文本，提取所有 URL，分批并发下载后上传到 S3
 pub async fn exec(
-    json_path: &Path,
+    json_text: &str,
     s3_config_path: &Path,
     prefix: &str,
     concurrency: usize,
@@ -83,15 +92,14 @@ pub async fn exec(
         cfg.region
     );
 
-    // 2. 读取并解析 JSON 文件（支持 { "books": [{ "image": "url" }, ...] } 结构）
-    let content = tokio::fs::read_to_string(json_path).await?;
-    let book_list: BookList = serde_json::from_str(&content)?;
-    let urls: Vec<String> = book_list
-        .books
-        .into_iter()
-        .map(|b| b.image)
-        .filter(|url| !url.is_empty())
-        .collect();
+    // 2. 解析 JSON 文本，递归提取所有 URL
+    let parsed: serde_json::Value = serde_json::from_str(json_text)?;
+    let mut urls = Vec::new();
+    extract_urls(&parsed, &mut urls);
+
+    // 去重保序
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
 
     log::info!("解析到 {} 个 URL，并发数: {}", urls.len(), concurrency);
 

@@ -17,10 +17,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 从 JSON 文件解析 URL 列表，分批并发下载后上传到 S3
-    Jp {
-        /// JSON 文件路径，文件内容为 URL 字符串数组
-        json_path: PathBuf,
+    /// 接收 JSON 文本（直接参数或 stdin），提取所有 URL 并分批并发下载后上传到 S3
+    Jq {
+        /// JSON 文本内容。若省略则从 stdin 读取（适合管道传入）
+        json_text: Option<String>,
 
         /// .s3 配置文件的绝对路径（dotenv 格式，包含 S3_BUCKET/ACCESS_KEY/SECRET_KEY/ENDPOINT/REGION）
         #[arg(short, long)]
@@ -59,13 +59,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Jp {
-            json_path,
+        Commands::Jq {
+            json_text,
             s3,
             prefix,
             concurrency,
         } => {
-            subcmd::jp::exec(&json_path, &s3, &prefix, concurrency).await?;
+            let text = match json_text {
+                Some(t) => t,
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .expect("从 stdin 读取 JSON 文本失败");
+                    buf
+                }
+            };
+            subcmd::jq::exec(&text, &s3, &prefix, concurrency).await?;
         }
     }
 
