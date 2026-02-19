@@ -1,93 +1,127 @@
-# bulk_upload 项目结构与子命令
+# bulk_upload - 批量下载 URL 并上传到 S3
 
-> 📌 **基础规则:** 本项目遵循 [`_base_rust_cli.md`](../ci-all-in-one/_ai/backend/_base_rust_cli.md)
-
-## 编码规范
-
-### 错误处理
-
-1. **禁止使用 `unwrap()`** — 所有可能失败的操作必须通过 `?` 传播或显式 `match` / `if let` 处理。
-2. **所有非预期错误必须归档到 `error.rs` 的 `AppError` 枚举中**（基于 `thiserror`），新增错误场景时需同步扩展枚举变体。
-3. **`panic!()` 禁止直接使用。**
-4. **`expect()` 是唯一允许的 panic 方式**，且必须附带明确的预期错误描述，说明"为什么此处不应该失败"。
-5. 优先使用 `?` 操作符 + `AppError` 变体做错误传播，`expect()` 仅用于"逻辑上不可能失败"的场景。
+从 JSON 文件中提取所有 HTTP(S) URL，批量并发下载后上传到 S3 兼容对象存储（支持 MinIO、Cloudflare R2 等）。
 
 ---
 
-## 项目结构
-
-```
-bulk_upload/
-├── .justfile              # 构建/安装自动化
-├── .gitignore
-├── Cargo.toml             # 项目配置 (clap derive + tokio + aws-sdk-s3)
-├── Cargo.lock
-├── LLVM.md                # 本文件
-├── src/
-│   ├── main.rs            # 程序入口，clap derive macro 命令定义
-│   ├── error.rs           # AppError 错误枚举
-│   └── subcmd/
-│       ├── mod.rs          # 子命令注册
-│       └── jp.rs           # jp 子命令：JSON URL 批量下载 + S3 上传
-```
-
-## 子命令列表
-
-| 子命令 | 说明 | 参数 |
-|--------|------|------|
-| `jp` | 从 JSON 文件解析 URL 列表，分批并发下载后上传到 S3 | `json_path`（必需）JSON 文件路径<br>`-s, --s3` .s3 配置文件的绝对路径<br>`-p, --prefix` S3 目标前缀路径（默认空）<br>`-c, --concurrency` 每批并发数（默认 10） |
-
-### jp 子命令工作流程
-
-```
-加载 .s3 配置 → 读取 JSON 文件 → 解析 URL 数组 → 分批(concurrency) → 并发下载 → 并发上传 S3
-```
-
-**使用示例：**
+## 快速开始
 
 ```bash
-bulk_upload jp urls.json --s3 /path/to/.s3 --prefix assets/images/ -c 20
+# 从 JSON 文件提取 URL 并上传到 S3
+bulk_upload jq urls.json --s3 /path/to/.s3 --prefix assets/images/
+
+# 通过管道传入 JSON
+cat data.json | bulk_upload jq --s3 /path/to/.s3 --prefix assets/
+
+# 从 API 获取 JSON 并处理
+curl -s https://api.example.com/data | bulk_upload jq --s3 /path/to/.s3
 ```
 
-**.s3 配置文件格式**（dotenv 风格，与 hfrog-cli 等项目通用）：
+---
 
+## 命令参考
+
+### `jq` - 从 JSON 提取 URL 并上传
+
+从任意 JSON 结构中递归提取所有 HTTP(S) URL，批量并发下载后上传到 S3。
+
+```bash
+bulk_upload jq [JSON_TEXT] --s3 <CONFIG> [OPTIONS]
 ```
-S3_BUCKET=my-bucket
-S3_ACCESS_KEY=xxxxx
-S3_SECRET_KEY=xxxxx
-S3_ENDPOINT=http://minio.example.com:9000
-S3_REGION=us-east-1
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `JSON_TEXT` | 否 | JSON 文本内容，省略则从 stdin 读取 |
+| `--s3 <CONFIG>` | 是 | S3 配置文件路径（dotenv 格式） |
+| `--prefix <PREFIX>` | 否 | S3 上传目标前缀路径（默认空） |
+| `--concurrency <N>` | 否 | 每批并发下载/上传数量（默认 10） |
+
+**工作流程：**
+```
+加载 S3 配置 → 递归提取 URL → 去重 → 分批并发下载 → 并发上传到 S3
 ```
 
-**JSON 文件格式：**
+---
 
-支持两种格式：
+## 典型场景
 
-1. 带 `books` 数组的对象（如当当书籍列表），从 `books[].image` 提取 URL：
+### 场景1：处理本地 JSON 文件
+
+```bash
+bulk_upload jq urls.json --s3 ~/.s3config --prefix assets/images/ --concurrency 20
+```
+
+### 场景2：从 API 获取数据并处理
+
+```bash
+curl -s https://api.example.com/books | bulk_upload jq --s3 ~/.s3config --prefix covers/
+```
+
+### 场景3：处理嵌套 JSON 结构
+
+工具会自动递归遍历任意深度的 JSON 结构，提取所有 HTTP(S) URL：
 
 ```json
 {
-  "books": [
-    { "title": "...", "image": "https://example.com/cover1.jpg" },
-    { "title": "...", "image": "https://example.com/cover2.jpg" }
-  ]
+  "data": {
+    "items": [
+      {"image": "https://example.com/1.jpg"},
+      {"nested": {"url": "https://example.com/2.jpg"}}
+    ]
+  }
 }
 ```
 
-> 空 `image` 字段会被自动跳过。
+所有 URL 都会被提取并上传。
 
-**S3 key 生成规则：** `{prefix}/{filename}`，filename 从 URL 最后一段路径提取（去除 query 参数）。
+### 场景4：上传到 Cloudflare R2
 
-## 关键依赖
+```bash
+# .s3 配置文件示例
+S3_BUCKET=my-bucket
+S3_ACCESS_KEY=your-access-key
+S3_SECRET_KEY=your-secret-key
+S3_ENDPOINT=https://account-id.r2.cloudflarestorage.com
+S3_REGION=auto
 
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| `clap` | 4 (derive) | CLI 框架（derive macro 模式） |
-| `tokio` | 1 (rt-multi-thread) | 异步运行时 |
-| `thiserror` | 2 | 错误处理 |
-| `serde` / `serde_json` | 1 | JSON 解析 |
-| `reqwest` | 0.12 (stream) | HTTP 下载 |
-| `aws-sdk-s3` | 1 | S3 上传 |
-| `aws-config` | 1 | AWS 配置 |
-| `futures` | 0.3 | 并发 join_all |
-| `log` / `fern` | - | 日志 |
+bulk_upload jq data.json --s3 .s3 --prefix images/
+```
+
+---
+
+## 配置文件格式
+
+### S3 配置文件（dotenv 格式）
+
+创建 `.s3` 配置文件：
+
+```env
+S3_BUCKET=my-bucket
+S3_ACCESS_KEY=xxxxx
+S3_SECRET_KEY=xxxxx
+S3_ENDPOINT=https://s3.example.com
+S3_REGION=us-east-1  # 可选，默认 us-east-1
+```
+
+**支持的 S3 服务：**
+- AWS S3
+- MinIO
+- Cloudflare R2
+- 其他 S3 兼容存储
+
+---
+
+## S3 Key 生成规则
+
+上传文件的 S3 key 格式：`{prefix}/{filename}`
+
+- `filename` 从 URL 最后一段路径提取
+- 自动去除 query 参数
+
+**示例：**
+
+| URL | Prefix | S3 Key |
+|-----|--------|--------|
+| `https://example.com/image.jpg` | `assets/` | `assets/image.jpg` |
+| `https://example.com/photo.jpg?size=large` | `images/` | `images/photo.jpg` |
+| `https://example.com/path/to/file.png` | `` | `file.png` |

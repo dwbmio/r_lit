@@ -18,6 +18,9 @@ log = "0.4"
 fern = "0.7"
 humantime = "2"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 lto = true
 panic = "abort"
