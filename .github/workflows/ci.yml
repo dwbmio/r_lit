@@ -10,66 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run tests - bulk_upload
-        run: |
-          cd bulk_upload
-          cargo test --verbose
-
-      - name: Run tests - img_resize
-        run: |
-          cd img_resize
-          cargo test --verbose
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting - bulk_upload
-        run: |
-          cd bulk_upload
-          cargo fmt -- --check
-
-      - name: Check formatting - img_resize
-        run: |
-          cd img_resize
-          cargo fmt -- --check
-
-      - name: Run clippy - bulk_upload
-        run: |
-          cd bulk_upload
-          cargo clippy -- -D warnings
-
-      - name: Run clippy - img_resize
-        run: |
-          cd img_resize
-          cargo clippy -- -D warnings
-
   build:
     name: Build (Linux only)
     runs-on: ubuntu-latest

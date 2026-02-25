@@ -142,7 +142,7 @@ pub async fn exec(
 
     // 4. 分批处理
     let http_client = reqwest::Client::new();
-    let total_batches = (urls.len() + concurrency - 1) / concurrency;
+    let total_batches = urls.len().div_ceil(concurrency);
     let mut total_success = 0;
     let mut total_failed = 0;
 

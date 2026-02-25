@@ -21,6 +21,7 @@ pub enum AppError {
     DownloadFailed(String, String),
 
     #[error("{0}")]
+    #[allow(dead_code)]
     CustomError(String),
 }
 
