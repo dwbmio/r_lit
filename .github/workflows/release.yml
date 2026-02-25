@@ -2,251 +2,185 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [ main ]
+    paths:
+      - '**/Cargo.toml'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g., v0.1.0)'
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux-musl-native:
-    name: Build Linux musl (x86_64)
-    runs-on: ubuntu-latest
+  build-and-release:
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            use_cross: false
+          - os: ubuntu-latest
+            target: i686-unknown-linux-musl
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            use_cross: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            use_cross: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            use_cross: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            use_cross: false
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            use_cross: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed projects
+        id: changes
+        shell: bash
+        run: |
+          echo "Detecting changes..."
+          CHANGED_PROJECTS=""
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
+            CHANGED_PROJECTS="$CHANGED_PROJECTS bulk_upload"
+            BULK_VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "bulk_upload_version=$BULK_VERSION" >> $GITHUB_OUTPUT
+          fi
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^img_resize/Cargo.toml"; then
+            CHANGED_PROJECTS="$CHANGED_PROJECTS img_resize"
+            IMG_VERSION=$(grep '^version' img_resize/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "img_resize_version=$IMG_VERSION" >> $GITHUB_OUTPUT
+          fi
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^omniplan_covers_ding/Cargo.toml"; then
+            CHANGED_PROJECTS="$CHANGED_PROJECTS omniplan_covers_ding"
+            OMNI_VERSION=$(grep '^version' omniplan_covers_ding/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "omniplan_covers_ding_version=$OMNI_VERSION" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "changed_projects=$CHANGED_PROJECTS" >> $GITHUB_OUTPUT
+          echo "Changed projects: $CHANGED_PROJECTS"
 
       - name: Install Rust
+        if: steps.changes.outputs.changed_projects != ''
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
-      - name: Install musl tools
+      - name: Install musl tools (Linux)
+        if: steps.changes.outputs.changed_projects != '' && matrix.os == 'ubuntu-latest' && !matrix.use_cross
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev
 
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: x86_64-unknown-linux-musl
-          cache-all-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build bulk_upload
-        run: |
-          cd bulk_upload
-          cargo build --release --target x86_64-unknown-linux-musl
-        env:
-          RUSTFLAGS: '-C target-feature=+crt-static'
-
-      - name: Build img_resize
-        run: |
-          cd img_resize
-          cargo build --release --target x86_64-unknown-linux-musl
-        env:
-          RUSTFLAGS: '-C target-feature=+crt-static'
-
-      - name: Verify static linking
-        run: |
-          file bulk_upload/target/x86_64-unknown-linux-musl/release/bulk_upload
-          ldd bulk_upload/target/x86_64-unknown-linux-musl/release/bulk_upload || echo "Static binary"
-          file img_resize/target/x86_64-unknown-linux-musl/release/img_resize
-          ldd img_resize/target/x86_64-unknown-linux-musl/release/img_resize || echo "Static binary"
-
-      - name: Package binaries
-        run: |
-          mkdir -p release
-          cd bulk_upload/target/x86_64-unknown-linux-musl/release
-          tar czf ../../../../release/bulk_upload-x86_64-unknown-linux-musl.tar.gz bulk_upload
-          cd ../../../..
-          cd img_resize/target/x86_64-unknown-linux-musl/release
-          tar czf ../../../../release/img_resize-x86_64-unknown-linux-musl.tar.gz img_resize
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-musl-x86_64
-          path: release/*
-          retention-days: 1
-
-  build-linux-musl-cross:
-    name: Build Linux musl (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: i686-unknown-linux-musl
-            arch: i686
-          - target: aarch64-unknown-linux-musl
-            arch: aarch64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install cross
+        if: steps.changes.outputs.changed_projects != '' && matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Setup cache
+        if: steps.changes.outputs.changed_projects != ''
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
           cache-all-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build bulk_upload
+      - name: Build projects
+        if: steps.changes.outputs.changed_projects != ''
+        shell: bash
         run: |
-          cd bulk_upload
-          cross build --release --target ${{ matrix.target }}
-
-      - name: Build img_resize
-        run: |
-          cd img_resize
-          cross build --release --target ${{ matrix.target }}
+          for project in ${{ steps.changes.outputs.changed_projects }}; do
+            echo "Building $project for ${{ matrix.target }}..."
+            cd $project
+            
+            if [ "${{ matrix.use_cross }}" == "true" ]; then
+              cross build --release --target ${{ matrix.target }}
+            else
+              if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+                RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target ${{ matrix.target }}
+              else
+                cargo build --release --target ${{ matrix.target }}
+              fi
+            fi
+            
+            cd ..
+          done
 
       - name: Package binaries
-        run: |
-          mkdir -p release
-          cd bulk_upload/target/${{ matrix.target }}/release
-          tar czf ../../../../release/bulk_upload-${{ matrix.target }}.tar.gz bulk_upload
-          cd ../../../..
-          cd img_resize/target/${{ matrix.target }}/release
-          tar czf ../../../../release/img_resize-${{ matrix.target }}.tar.gz img_resize
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-musl-${{ matrix.arch }}
-          path: release/*
-          retention-days: 1
-
-  build-macos:
-    name: Build macOS (${{ matrix.target }})
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            arch: x86_64
-          - target: aarch64-apple-darwin
-            arch: aarch64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-          cache-all-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build bulk_upload
-        run: |
-          cd bulk_upload
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Build img_resize
-        run: |
-          cd img_resize
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Package binaries
-        run: |
-          mkdir -p release
-          cd bulk_upload/target/${{ matrix.target }}/release
-          tar czf ../../../../release/bulk_upload-${{ matrix.target }}.tar.gz bulk_upload
-          cd ../../../..
-          cd img_resize/target/${{ matrix.target }}/release
-          tar czf ../../../../release/img_resize-${{ matrix.target }}.tar.gz img_resize
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.arch }}
-          path: release/*
-          retention-days: 1
-
-  build-windows:
-    name: Build Windows (${{ matrix.target }})
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            arch: x86_64
-          - target: i686-pc-windows-msvc
-            arch: i686
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-          cache-all-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build bulk_upload
-        run: |
-          cd bulk_upload
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Build img_resize
-        run: |
-          cd img_resize
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Package binaries
+        if: steps.changes.outputs.changed_projects != ''
         shell: bash
         run: |
           mkdir -p release
-          cd bulk_upload/target/${{ matrix.target }}/release
-          7z a ../../../../release/bulk_upload-${{ matrix.target }}.zip bulk_upload.exe
-          cd ../../../..
-          cd img_resize/target/${{ matrix.target }}/release
-          7z a ../../../../release/img_resize-${{ matrix.target }}.zip img_resize.exe
+          
+          for project in ${{ steps.changes.outputs.changed_projects }}; do
+            cd $project/target/${{ matrix.target }}/release
+            
+            if [ "${{ matrix.os }}" == "windows-latest" ]; then
+              7z a ../../../../release/${project}-${{ matrix.target }}.zip ${project}.exe
+            else
+              tar czf ../../../../release/${project}-${{ matrix.target }}.tar.gz ${project}
+            fi
+            
+            cd ../../../..
+          done
 
       - name: Upload artifacts
+        if: steps.changes.outputs.changed_projects != ''
         uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.arch }}
+          name: ${{ matrix.target }}
           path: release/*
-          retention-days: 1
+          retention-days: 7
 
-  release:
+  create-release:
     name: Create Release
-    needs: [build-linux-musl-native, build-linux-musl-cross, build-macos, build-windows]
+    needs: build-and-release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    if: success()
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect versions
+        id: versions
+        run: |
+          RELEASE_NOTES=""
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
+            VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "bulk_upload_version=$VERSION" >> $GITHUB_OUTPUT
+            RELEASE_NOTES="$RELEASE_NOTES\n- bulk_upload v$VERSION"
+          fi
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^img_resize/Cargo.toml"; then
+            VERSION=$(grep '^version' img_resize/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "img_resize_version=$VERSION" >> $GITHUB_OUTPUT
+            RELEASE_NOTES="$RELEASE_NOTES\n- img_resize v$VERSION"
+          fi
+          
+          if git diff HEAD^ HEAD --name-only | grep -q "^omniplan_covers_ding/Cargo.toml"; then
+            VERSION=$(grep '^version' omniplan_covers_ding/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "omniplan_covers_ding_version=$VERSION" >> $GITHUB_OUTPUT
+            RELEASE_NOTES="$RELEASE_NOTES\n- omniplan_covers_ding v$VERSION"
+          fi
+          
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -265,41 +199,23 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Get tag name
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Extract changelog
-        id: changelog
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          if [ -f CHANGELOG.md ]; then
-            sed -n "/## \[${TAG#v}\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.md
-          else
-            echo "Release $TAG" > release_notes.md
-            echo "" >> release_notes.md
-            echo "## Supported Platforms" >> release_notes.md
-            echo "- Linux x86_64 (musl, static)" >> release_notes.md
-            echo "- Linux i686 (musl, static)" >> release_notes.md
-            echo "- Linux aarch64 (musl, static, ARM64)" >> release_notes.md
-            echo "- macOS x86_64 (Intel)" >> release_notes.md
-            echo "- macOS aarch64 (Apple Silicon)" >> release_notes.md
-            echo "- Windows x86_64" >> release_notes.md
-            echo "- Windows i686 (32-bit)" >> release_notes.md
-          fi
-          cat release_notes.md
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Release ${{ steps.tag.outputs.tag }}
-          body_path: release_notes.md
+          tag_name: release-${{ github.sha }}
+          name: Release ${{ github.run_number }}
+          body: |
+            ## New Releases
+            ${{ steps.versions.outputs.release_notes }}
+            
+            ## Supported Platforms
+            - Linux x86_64 (musl, static)
+            - Linux i686 (musl, static)
+            - Linux aarch64 (musl, static, ARM64)
+            - macOS x86_64 (Intel)
+            - macOS aarch64 (Apple Silicon)
+            - Windows x86_64
+            - Windows i686 (32-bit)
           files: release/*
           draft: false
           prerelease: false

@@ -1,57 +1,59 @@
-# R_LIT 工具集
+# R_LIT Toolkit
 
-跨平台 CLI 工具集，用于图片处理和文件上传。
+Cross-platform CLI tools for image processing and file uploading.
 
 [![CI](https://github.com/dwbmio/r_lit/workflows/CI/badge.svg)](https://github.com/dwbmio/r_lit/actions)
 [![Release](https://github.com/dwbmio/r_lit/workflows/Release/badge.svg)](https://github.com/dwbmio/r_lit/actions)
 
-## 工具列表
+[中文文档](README_CN.md)
 
-- **bulk_upload** - 批量下载 URL 并上传到 S3 对象存储
-- **img_resize** - 图片尺寸调整和压缩工具
+## Tools
 
-## 快速安装
+- **bulk_upload** - Batch download URLs and upload to S3 object storage
+- **img_resize** - Image resizing and compression tool
 
-### 一键安装（推荐）
+## Quick Install
+
+### One-line Install (Recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dwbmio/r_lit/main/install.sh | sh
 ```
 
-### 使用 Cargo
+### Using Cargo
 
 ```bash
 cargo install bulk_upload
 cargo install img_resize
 ```
 
-### 下载预编译二进制
+### Download Pre-built Binaries
 
-访问 [Releases](https://github.com/dwbmio/r_lit/releases) 页面下载适合你平台的二进制文件。
+Visit the [Releases](https://github.com/dwbmio/r_lit/releases) page to download binaries for your platform.
 
-**支持的平台：**
-- Linux (x86_64, ARM64)
+**Supported Platforms:**
+- Linux (x86_64, i686, ARM64) - musl static builds
 - macOS (x86_64, ARM64)
-- Windows (x86_64)
+- Windows (x86_64, i686)
 
-## 使用说明
+## Usage
 
 ### bulk_upload
 
-从 JSON 中提取 URL 并批量上传到 S3：
+Extract URLs from JSON and batch upload to S3:
 
 ```bash
-# 基本用法
+# Basic usage
 cat data.json | bulk_upload jq -s ~/.s3config -p "images/"
 
-# JSON 输出模式
+# JSON output mode
 bulk_upload --json jq -s ~/.s3config < data.json
 
-# 查看帮助
+# Show help
 bulk_upload jq --help
 ```
 
-**配置文件格式** (`.s3`):
+**Config file format** (`.s3`):
 ```env
 S3_BUCKET=my-bucket
 S3_ACCESS_KEY=your-access-key
@@ -62,123 +64,107 @@ S3_REGION=us-east-1
 
 ### img_resize
 
-调整图片尺寸或压缩：
+Resize or compress images:
 
 ```bash
-# 等比缩放到最大 800px
+# Scale proportionally to max 800px
 img_resize r_resize -m 800 image.jpg
 
-# 精确调整到 1920x1080
+# Exact resize to 1920x1080
 img_resize r_resize --rw 1920 --rh 1080 image.jpg
 
-# 批量处理目录
+# Batch process directory
 img_resize r_resize -m 1024 images/
 
-# 使用 TinyPNG 压缩
+# Compress with TinyPNG
 img_resize tinyfy images/
 
-# JSON 输出模式
+# JSON output mode
 img_resize --json r_resize -m 800 image.jpg
 
-# 查看帮助
+# Show help
 img_resize --help
 ```
 
-## 功能特性
+## Features
 
 ### bulk_upload
-- ✅ 自动递归提取 JSON 中的所有 URL
-- ✅ URL 自动去重
-- ✅ 批量并发下载和上传
-- ✅ 支持 S3 兼容存储（MinIO, AWS S3, 阿里云 OSS）
-- ✅ JSON 输出模式便于程序解析
-- ✅ 详细的进度和错误报告
+- ✅ Automatically extract all URLs from JSON recursively
+- ✅ Automatic URL deduplication
+- ✅ Concurrent batch download and upload
+- ✅ S3-compatible storage support (MinIO, AWS S3, Aliyun OSS)
+- ✅ JSON output mode for programmatic parsing
+- ✅ Detailed progress and error reporting
 
 ### img_resize
-- ✅ 纯 Rust 实现，无需网络依赖
-- ✅ 支持 PNG 和 JPG 格式
-- ✅ 三种调整模式：配置文件、等比缩放、精确调整
-- ✅ 批量处理目录
-- ✅ TinyPNG API 集成
-- ✅ JSON 输出模式
-- ✅ 保持图片质量
+- ✅ Pure Rust implementation, no network dependencies
+- ✅ Support PNG and JPG formats
+- ✅ Three resize modes: config file, proportional, exact
+- ✅ Batch process directories
+- ✅ TinyPNG API integration
+- ✅ JSON output mode
+- ✅ Preserve image quality
 
-## AI 友好
+## AI-Friendly
 
-这些工具专为 AI 调用优化：
+These tools are optimized for AI invocation:
 
-- **清晰的 --help 输出**：详细的参数说明和使用示例
-- **JSON 输出模式**：结构化数据便于解析
-- **标准化错误处理**：明确的错误信息和退出码
-- **管道友好**：支持 stdin/stdout 数据流
+- **Clear --help output**: Detailed parameter descriptions and usage examples
+- **JSON output mode**: Structured data for easy parsing
+- **Standardized error handling**: Clear error messages and exit codes
+- **Pipeline-friendly**: Support stdin/stdout data streams
 
-查看 [TOOL_CATALOG.md](TOOL_CATALOG.md) 了解完整的工具文档。
+## Development
 
-## 开发
-
-### 构建
+### Build
 
 ```bash
-# 构建所有工具
+# Build all tools
 cargo build --release
 
-# 构建单个工具
+# Build individual tool
 cd bulk_upload && cargo build --release
 cd img_resize && cargo build --release
 ```
 
-### 测试
+### Test
 
 ```bash
-# 运行所有测试
+# Run all tests
 cargo test
 
-# 运行单个工具的测试
+# Run tests for individual tool
 cd bulk_upload && cargo test
 cd img_resize && cargo test
 ```
 
-### 发布新版本
+### Release New Version
+
+To release a new version, update the version in the tool's `Cargo.toml`:
 
 ```bash
-# 更新版本号
-# 编辑 bulk_upload/Cargo.toml 和 img_resize/Cargo.toml
+# Update version in Cargo.toml
+cd bulk_upload
+# Edit Cargo.toml: version = "0.3.0"
 
-# 更新 CHANGELOG.md
-
-# 提交并创建 tag
+# Commit and push
 git add .
-git commit -m "chore: bump version to 0.2.0"
-git tag -a v0.2.0 -m "Release v0.2.0"
+git commit -m "chore(bulk_upload): bump version to 0.3.0"
 git push origin main
-git push origin v0.2.0
 ```
 
-GitHub Actions 会自动构建并发布所有平台的二进制文件。
+GitHub Actions will automatically detect the version change and build binaries for all platforms.
 
-查看 [GITHUB_ACTIONS_SETUP.md](GITHUB_ACTIONS_SETUP.md) 了解详细配置。
+## System Requirements
 
-## 文档
+- **OS**: macOS, Linux, Windows
+- **Architecture**: x86_64, i686, ARM64
+- **Dependencies**: None (statically linked)
 
-- [工具目录](TOOL_CATALOG.md) - 完整的工具使用文档
-- [CLI 优化总结](CLI_OPTIMIZATION_SUMMARY.md) - CLI 优化说明
-- [GitHub Actions 配置](GITHUB_ACTIONS_SETUP.md) - CI/CD 配置指南
-- [更新日志](CHANGELOG.md) - 版本更新记录
+## License
 
-## 系统要求
+See LICENSE file in each project.
 
-- **操作系统**：macOS, Linux, Windows
-- **架构**：x86_64, ARM64
-- **依赖**：无运行时依赖（静态链接）
+## Contributing
 
-## 许可证
-
-查看各项目的 LICENSE 文件。
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
----
-
-**注意**：使用前请将 README 中的 `dwbmio` 替换为你的 GitHub 用户名。
+Issues and Pull Requests are welcome!
