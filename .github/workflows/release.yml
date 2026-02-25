@@ -14,14 +14,73 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux-musl:
+  build-linux-musl-native:
+    name: Build Linux musl (x86_64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-musl
+          cache-all-crates: true
+
+      - name: Build bulk_upload
+        run: |
+          cd bulk_upload
+          cargo build --release --target x86_64-unknown-linux-musl
+        env:
+          RUSTFLAGS: '-C target-feature=+crt-static'
+
+      - name: Build img_resize
+        run: |
+          cd img_resize
+          cargo build --release --target x86_64-unknown-linux-musl
+        env:
+          RUSTFLAGS: '-C target-feature=+crt-static'
+
+      - name: Verify static linking
+        run: |
+          file bulk_upload/target/x86_64-unknown-linux-musl/release/bulk_upload
+          ldd bulk_upload/target/x86_64-unknown-linux-musl/release/bulk_upload || echo "Static binary"
+          file img_resize/target/x86_64-unknown-linux-musl/release/img_resize
+          ldd img_resize/target/x86_64-unknown-linux-musl/release/img_resize || echo "Static binary"
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cd bulk_upload/target/x86_64-unknown-linux-musl/release
+          tar czf ../../../../release/bulk_upload-x86_64-unknown-linux-musl.tar.gz bulk_upload
+          cd ../../../..
+          cd img_resize/target/x86_64-unknown-linux-musl/release
+          tar czf ../../../../release/img_resize-x86_64-unknown-linux-musl.tar.gz img_resize
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-x86_64
+          path: release/*
+          retention-days: 1
+
+  build-linux-musl-cross:
     name: Build Linux musl (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            arch: x86_64
           - target: i686-unknown-linux-musl
             arch: i686
           - target: aarch64-unknown-linux-musl
@@ -33,19 +92,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Install musl tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-          if [ "${{ matrix.arch }}" = "i686" ]; then
-            sudo apt-get install -y gcc-multilib
-          fi
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-          fi
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -56,26 +105,12 @@ jobs:
       - name: Build bulk_upload
         run: |
           cd bulk_upload
-          cargo build --release --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: '-C target-feature=+crt-static'
+          cross build --release --target ${{ matrix.target }}
 
       - name: Build img_resize
         run: |
           cd img_resize
-          cargo build --release --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: '-C target-feature=+crt-static'
-
-      - name: Verify static linking
-        run: |
-          echo "Checking bulk_upload..."
-          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload
-          ldd bulk_upload/target/${{ matrix.target }}/release/bulk_upload || echo "Static binary (no dynamic dependencies)"
-
-          echo "Checking img_resize..."
-          file img_resize/target/${{ matrix.target }}/release/img_resize
-          ldd img_resize/target/${{ matrix.target }}/release/img_resize || echo "Static binary (no dynamic dependencies)"
+          cross build --release --target ${{ matrix.target }}
 
       - name: Package binaries
         run: |
@@ -129,16 +164,6 @@ jobs:
           cd img_resize
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Verify binaries
-        run: |
-          echo "Checking bulk_upload..."
-          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload
-          otool -L bulk_upload/target/${{ matrix.target }}/release/bulk_upload
-
-          echo "Checking img_resize..."
-          file img_resize/target/${{ matrix.target }}/release/img_resize
-          otool -L img_resize/target/${{ matrix.target }}/release/img_resize
-
       - name: Package binaries
         run: |
           mkdir -p release
@@ -172,8 +197,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
@@ -194,14 +217,6 @@ jobs:
           cd img_resize
           cross build --release --target ${{ matrix.target }}
 
-      - name: Verify binaries
-        run: |
-          echo "Checking bulk_upload..."
-          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload.exe
-
-          echo "Checking img_resize..."
-          file img_resize/target/${{ matrix.target }}/release/img_resize.exe
-
       - name: Package binaries
         run: |
           mkdir -p release
@@ -220,7 +235,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux-musl, build-macos, build-windows]
+    needs: [build-linux-musl-native, build-linux-musl-cross, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -286,28 +301,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-crates:
-    name: Publish to crates.io
-    needs: release
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish bulk_upload
-        run: |
-          cd bulk_upload
-          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
-        continue-on-error: true
-
-      - name: Publish img_resize
-        run: |
-          cd img_resize
-          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
-        continue-on-error: true
