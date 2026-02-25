@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `bulk_upload` is a Rust CLI tool for batch downloading files from URLs and uploading them to S3-compatible object storage (including MinIO). It extracts URLs from JSON input, downloads files concurrently in batches, and uploads them to S3.
 
+**Version**: 0.2.0
+
 ## Build and Development Commands
 
 ```bash
@@ -24,6 +26,32 @@ just install_loc release
 # Generate changelog (requires git-cliff)
 just gen_doc
 ```
+
+## Release Process
+
+This project uses GitHub Actions for automated cross-platform builds. To release a new version:
+
+1. Update the version in `Cargo.toml`:
+   ```toml
+   version = "0.3.0"
+   ```
+
+2. Commit and push:
+   ```bash
+   git add Cargo.toml
+   git commit -m "chore(bulk_upload): bump version to 0.3.0"
+   git push origin main
+   ```
+
+3. GitHub Actions will automatically:
+   - Detect the version change in `Cargo.toml`
+   - Build binaries for all platforms (Linux musl, macOS, Windows)
+   - Create a GitHub Release with all artifacts
+
+**Supported Platforms**:
+- Linux (x86_64, i686, aarch64) - musl static builds
+- macOS (x86_64, aarch64)
+- Windows (x86_64, i686)
 
 ## Architecture
 
