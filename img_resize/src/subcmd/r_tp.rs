@@ -1,7 +1,6 @@
 use crate::error::ReError;
-use crate::subcmd::SubExecutor;
-use clap::ArgMatches;
 use infer::MatcherType;
+use serde::Serialize;
 use walkdir::WalkDir;
 use yaml_rust::YamlLoader;
 
@@ -12,6 +11,19 @@ pub enum ActionType {
     #[default]
     None,
 }
+
+#[derive(Serialize)]
+struct ProcessResult {
+    file: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_size: Option<(u32, u32)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_size: Option<(u32, u32)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 use image::{GenericImageView, ImageFormat, ImageOutputFormat};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{
@@ -35,7 +47,6 @@ fn convert_tp(
     convert_type: ImageFormat,
     out: Option<PathBuf>,
 ) -> Result<(), ReError> {
-    // convert to .jpg ext
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
     let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
@@ -56,28 +67,32 @@ fn re_tp(
     out: Option<PathBuf>,
     is_thumb: bool,
     mine_type: &str,
-) -> Result<(), ReError> {
+    json_output: bool,
+) -> Result<(u32, u32, u32, u32), ReError> {
     let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
     let im = image::open(tp)?;
-    //thumb ignore when max > w && max > h
+    let orig_size = im.dimensions();
+
     if is_thumb {
         if size.0 >= im.width() && size.1 >= im.height() {
-            drop(im);
-            return Ok(());
+            return Ok((orig_size.0, orig_size.1, orig_size.0, orig_size.1));
         }
     }
-    log::info!(
-        "resize texture from {:?}, pixel={:?} fmt={:?} => {:?}",
-        &tp,
-        im.dimensions(),
-        im.color(),
-        if is_thumb {
-            format!("max size={:?}", size.0)
-        } else {
-            format!("size={:?}", size)
-        }
-    );
-    // thumb the tp
+
+    if !json_output {
+        log::info!(
+            "resize texture from {:?}, pixel={:?} fmt={:?} => {:?}",
+            &tp,
+            im.dimensions(),
+            im.color(),
+            if is_thumb {
+                format!("max size={:?}", size.0)
+            } else {
+                format!("size={:?}", size)
+            }
+        );
+    }
+
     fs::create_dir_all(out_i)?;
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
@@ -85,17 +100,21 @@ fn re_tp(
         true => im.resize(size.0, size.1, image::imageops::FilterType::Nearest),
         false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
     };
+    let new_size = im_r.dimensions();
     let f_path: &Path = Path::new(f_name);
     let fo = &mut std::fs::File::create(f_path)?;
     let out = ImageOutputFormat::from(
         ImageFormat::from_mime_type(mine_type).expect("unknown output format!"),
     );
-    log::info!("output fmt={:?}", out);
+
+    if !json_output {
+        log::info!("output fmt={:?}", out);
+    }
     im_r.write_to(fo, out)?;
-    Ok(())
+    Ok((orig_size.0, orig_size.1, new_size.0, new_size.1))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct RtpExecutor {
     max_pixel: u32,
     height: u32,
@@ -104,72 +123,145 @@ struct RtpExecutor {
     tp: PathBuf,
     out: Option<PathBuf>,
     action: ActionType,
+    json_output: bool,
 }
 
-impl SubExecutor for RtpExecutor {
-    async fn exec(&self, m: &clap::ArgMatches) -> Result<(), ReError> {
-        if let Some(c) = m.get_one::<PathBuf>("resize_config") {
-            exec_from_config(self.tp.clone(), c.clone())?;
-        } else {
-            self.exec_resize().await?;
-        }
-        Ok(())
-    }
-
-    async fn single_tp(
-        &self,
-        path: &PathBuf,
-        out: Option<PathBuf>,
-    ) -> Result<(), crate::error::ReError> {
+impl RtpExecutor {
+    async fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<ProcessResult, ReError> {
         let is_thumb = self.max_pixel > 0;
         let kind = infer::get_from_path(path)?;
+
         if let Some(k) = kind {
             if k.matcher_type() != MatcherType::Image {
-                // ignroe un-image file
-                return Ok(());
+                return Ok(ProcessResult {
+                    file: path.display().to_string(),
+                    status: "skipped".to_string(),
+                    original_size: None,
+                    new_size: None,
+                    error: Some("not an image file".to_string()),
+                });
             }
+
             match self.action {
                 ActionType::Resize => {
-                    re_tp(
+                    match re_tp(
                         path,
                         (
                             if is_thumb { self.max_pixel } else { self.width },
-                            if is_thumb {
-                                self.max_pixel
-                            } else {
-                                self.height
-                            },
+                            if is_thumb { self.max_pixel } else { self.height },
                         ),
                         out.clone(),
                         is_thumb,
                         k.mime_type(),
-                    )?;
+                        self.json_output,
+                    ) {
+                        Ok((ow, oh, nw, nh)) => Ok(ProcessResult {
+                            file: path.display().to_string(),
+                            status: "success".to_string(),
+                            original_size: Some((ow, oh)),
+                            new_size: Some((nw, nh)),
+                            error: None,
+                        }),
+                        Err(e) => Ok(ProcessResult {
+                            file: path.display().to_string(),
+                            status: "failed".to_string(),
+                            original_size: None,
+                            new_size: None,
+                            error: Some(e.to_string()),
+                        }),
+                    }
                 }
                 ActionType::Convert => {
-                    convert_tp(path, ImageFormat::Jpeg, out.clone())?;
+                    match convert_tp(path, ImageFormat::Jpeg, out.clone()) {
+                        Ok(_) => Ok(ProcessResult {
+                            file: path.display().to_string(),
+                            status: "converted".to_string(),
+                            original_size: None,
+                            new_size: None,
+                            error: None,
+                        }),
+                        Err(e) => Ok(ProcessResult {
+                            file: path.display().to_string(),
+                            status: "failed".to_string(),
+                            original_size: None,
+                            new_size: None,
+                            error: Some(e.to_string()),
+                        }),
+                    }
                 }
-                ActionType::None => {
-                    panic!("unknown action to handle tp!")
-                }
+                ActionType::None => Ok(ProcessResult {
+                    file: path.display().to_string(),
+                    status: "skipped".to_string(),
+                    original_size: None,
+                    new_size: None,
+                    error: Some("no action specified".to_string()),
+                }),
             }
-
-            return Ok(());
+        } else {
+            if !self.json_output {
+                log::warn!("[warn]unknown file type...ignore!{:?}", path.display());
+            }
+            Ok(ProcessResult {
+                file: path.display().to_string(),
+                status: "skipped".to_string(),
+                original_size: None,
+                new_size: None,
+                error: Some("unknown file type".to_string()),
+            })
         }
-        log::warn!("[warn]unknown file type...ignore!{:?}", path.display());
-        Ok(())
     }
-}
 
-impl RtpExecutor {
+    async fn walk(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<Vec<ProcessResult>, ReError> {
+        let walker = WalkDir::new(path).into_iter();
+        if !self.json_output {
+            log::debug!("start walk dir :{}...", path.display());
+        }
+
+        let mut results = Vec::new();
+        for entry in walker.filter_entry(|e| !Self::is_hidden(e)) {
+            if !self.json_output {
+                log::debug!("entry:{:?}", entry);
+            }
+            let entry = entry?;
+            if entry.path().is_file() {
+                let result = self.single_tp(&entry.path().to_path_buf(), out.clone()).await?;
+                results.push(result);
+            }
+        }
+        Ok(results)
+    }
+
+    fn is_hidden(entry: &walkdir::DirEntry) -> bool {
+        entry
+            .file_name()
+            .to_str()
+            .map(|s| s.starts_with('.'))
+            .unwrap_or(false)
+    }
+
     pub async fn exec_resize(&self) -> Result<(), ReError> {
         if !self.tp.exists() {
-            panic!("path not exists!");
+            return Err(ReError::CustomError("path not exists!".to_string()));
         }
-        log::info!("resize :{} => {:?}", self.tp.display(), self.out);
-        match self.tp.is_file() {
-            true => self.single_tp(&self.tp, self.out.to_owned()).await,
-            false => self.walk(&self.tp, self.out.to_owned()).await,
+
+        if !self.json_output {
+            log::info!("resize :{} => {:?}", self.tp.display(), self.out);
         }
+
+        let results = match self.tp.is_file() {
+            true => vec![self.single_tp(&self.tp, self.out.to_owned()).await?],
+            false => self.walk(&self.tp, self.out.to_owned()).await?,
+        };
+
+        if self.json_output {
+            let summary = serde_json::json!({
+                "total": results.len(),
+                "results": results
+            });
+            println!("{}", serde_json::to_string(&summary)?);
+        }
+
+        Ok(())
     }
 }
 
@@ -219,30 +311,40 @@ fn exec_from_config(img_tp: PathBuf, pp: PathBuf) -> Result<(), ReError> {
     Ok(())
 }
 
-pub async fn exec(m: &ArgMatches) -> Result<(), ReError> {
-    let mut tp_inc = RtpExecutor::default();
-    if let Some(mw) = m.get_one::<u32>("max_pixel") {
-        tp_inc.max_pixel = *mw;
-        tp_inc.action = ActionType::Resize;
+pub async fn exec(
+    path: &PathBuf,
+    resize_config: Option<&PathBuf>,
+    max_pixel: Option<u32>,
+    resize_width: Option<u32>,
+    resize_height: Option<u32>,
+    force_jpg: bool,
+    json_output: bool,
+) -> Result<(), ReError> {
+    if let Some(config) = resize_config {
+        exec_from_config(path.clone(), config.clone())?;
+        return Ok(());
     }
 
-    if let Some(tp) = m.get_one::<PathBuf>("path") {
-        tp_inc.tp = tp.to_path_buf();
-    }
+    let action = if force_jpg {
+        ActionType::Convert
+    } else if max_pixel.is_some() || (resize_width.is_some() && resize_height.is_some()) {
+        ActionType::Resize
+    } else {
+        return Err(ReError::CustomError(
+            "必须指定 --max_pixel 或 --rw/--rh 或 --force_jpg".to_string(),
+        ));
+    };
 
-    if let Some(tp) = m.get_one::<bool>("force_jpg") {
-        tp_inc.force_jpg = *tp;
-        tp_inc.action = ActionType::Convert;
-    }
+    let executor = RtpExecutor {
+        max_pixel: max_pixel.unwrap_or(0),
+        height: resize_height.unwrap_or(0),
+        width: resize_width.unwrap_or(0),
+        force_jpg,
+        tp: path.clone(),
+        out: None,
+        action,
+        json_output,
+    };
 
-    if let Some(mw) = m.get_one::<u32>("rw") {
-        tp_inc.width = *mw;
-        tp_inc.action = ActionType::Resize;
-    }
-
-    if let Some(tp) = m.get_one::<u32>("rh") {
-        tp_inc.height = *tp;
-        tp_inc.action = ActionType::Resize;
-    }
-    tp_inc.exec_resize().await
+    executor.exec_resize().await
 }

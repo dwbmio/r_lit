@@ -5,6 +5,7 @@ use aws_config;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{config::Region, primitives::ByteStream, Client as S3Client};
 use futures::future::join_all;
+use serde::Serialize;
 
 use crate::error::AppError;
 
@@ -76,12 +77,39 @@ fn extract_urls(value: &serde_json::Value, urls: &mut Vec<String>) {
     }
 }
 
+#[derive(Serialize)]
+struct BatchResult {
+    batch: usize,
+    total_batches: usize,
+    success: usize,
+    failed: usize,
+    files: Vec<FileResult>,
+}
+
+#[derive(Serialize)]
+struct FileResult {
+    source_url: String,
+    s3_key: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FinalSummary {
+    total_urls: usize,
+    total_success: usize,
+    total_failed: usize,
+    batches: usize,
+}
+
 /// 接收 JSON 文本，提取所有 URL，分批并发下载后上传到 S3
 pub async fn exec(
     json_text: &str,
     s3_config_path: &Path,
     prefix: &str,
     concurrency: usize,
+    json_output: bool,
 ) -> Result<(), AppError> {
     // 1. 加载 .s3 配置
     let cfg = load_s3_config(s3_config_path)?;
@@ -115,14 +143,18 @@ pub async fn exec(
     // 4. 分批处理
     let http_client = reqwest::Client::new();
     let total_batches = (urls.len() + concurrency - 1) / concurrency;
+    let mut total_success = 0;
+    let mut total_failed = 0;
 
     for (batch_idx, chunk) in urls.chunks(concurrency).enumerate() {
-        log::info!(
-            "处理批次 {}/{} ({} 个文件)",
-            batch_idx + 1,
-            total_batches,
-            chunk.len()
-        );
+        if !json_output {
+            log::info!(
+                "处理批次 {}/{} ({} 个文件)",
+                batch_idx + 1,
+                total_batches,
+                chunk.len()
+            );
+        }
 
         // 4a. 并发下载本批次所有文件
         let download_futures: Vec<_> = chunk
@@ -134,48 +166,108 @@ pub async fn exec(
 
         // 4b. 收集成功下载的文件，并发上传到 S3
         let mut upload_futures = Vec::new();
+        let mut url_key_pairs = Vec::new();
+        let mut file_results = Vec::new();
+
         for (i, result) in download_results.into_iter().enumerate() {
+            let url = &chunk[i];
             match result {
                 Ok(bytes) => {
-                    let url = &chunk[i];
                     let s3_key = build_s3_key(prefix, url);
                     let bucket_owned = cfg.bucket.clone();
                     let url_owned = url.clone();
-                    log::debug!("下载成功: {} -> s3://{}/{}", url, cfg.bucket, s3_key);
+                    if !json_output {
+                        log::debug!("下载成功: {} -> s3://{}/{}", url, cfg.bucket, s3_key);
+                    }
                     upload_futures.push(upload_to_s3(
                         &s3_client,
                         bucket_owned,
-                        s3_key,
+                        s3_key.clone(),
                         bytes,
-                        url_owned,
+                        url_owned.clone(),
                     ));
+                    url_key_pairs.push((url_owned, s3_key));
                 }
                 Err(e) => {
-                    log::error!("下载失败: {}", e);
+                    if !json_output {
+                        log::error!("下载失败: {}", e);
+                    }
+                    file_results.push(FileResult {
+                        source_url: url.clone(),
+                        s3_key: String::new(),
+                        status: "failed".to_string(),
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
 
         let upload_results = join_all(upload_futures).await;
-        let success_count = upload_results.iter().filter(|r| r.is_ok()).count();
-        let fail_count = upload_results.len() - success_count;
 
-        for result in &upload_results {
-            if let Err(e) = result {
-                log::error!("上传失败: {}", e);
+        let mut success_count = 0;
+        let mut fail_count = 0;
+
+        for (i, result) in upload_results.into_iter().enumerate() {
+            let (url, s3_key) = &url_key_pairs[i];
+            match result {
+                Ok(_) => {
+                    success_count += 1;
+                    file_results.push(FileResult {
+                        source_url: url.clone(),
+                        s3_key: s3_key.clone(),
+                        status: "success".to_string(),
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    fail_count += 1;
+                    if !json_output {
+                        log::error!("上传失败: {}", e);
+                    }
+                    file_results.push(FileResult {
+                        source_url: url.clone(),
+                        s3_key: s3_key.clone(),
+                        status: "failed".to_string(),
+                        error: Some(e.to_string()),
+                    });
+                }
             }
         }
 
-        log::info!(
-            "批次 {}/{} 完成: {} 成功, {} 失败",
-            batch_idx + 1,
-            total_batches,
-            success_count,
-            fail_count
-        );
+        total_success += success_count;
+        total_failed += fail_count;
+
+        if json_output {
+            let batch_result = BatchResult {
+                batch: batch_idx + 1,
+                total_batches,
+                success: success_count,
+                failed: fail_count,
+                files: file_results,
+            };
+            println!("{}", serde_json::to_string(&batch_result)?);
+        } else {
+            log::info!(
+                "批次 {}/{} 完成: {} 成功, {} 失败",
+                batch_idx + 1,
+                total_batches,
+                success_count,
+                fail_count
+            );
+        }
     }
 
-    log::info!("全部处理完成");
+    if json_output {
+        let summary = FinalSummary {
+            total_urls: urls.len(),
+            total_success,
+            total_failed,
+            batches: total_batches,
+        };
+        println!("{}", serde_json::to_string(&summary)?);
+    } else {
+        log::info!("全部处理完成: {} 成功, {} 失败", total_success, total_failed);
+    }
     Ok(())
 }
 

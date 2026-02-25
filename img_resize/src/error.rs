@@ -19,5 +19,8 @@ pub enum ReError {
     TinifyError(#[from] tinify::error::TinifyError),
 
     #[error("{0}")]
+    JsonError(#[from] serde_json::Error),
+
+    #[error("{0}")]
     CustomError(String),
 }

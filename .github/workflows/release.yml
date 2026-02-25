@@ -1,0 +1,313 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux-musl:
+    name: Build Linux musl (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - target: i686-unknown-linux-musl
+            arch: i686
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+          if [ "${{ matrix.arch }}" = "i686" ]; then
+            sudo apt-get install -y gcc-multilib
+          fi
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Build bulk_upload
+        run: |
+          cd bulk_upload
+          cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: '-C target-feature=+crt-static'
+
+      - name: Build img_resize
+        run: |
+          cd img_resize
+          cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: '-C target-feature=+crt-static'
+
+      - name: Verify static linking
+        run: |
+          echo "Checking bulk_upload..."
+          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload
+          ldd bulk_upload/target/${{ matrix.target }}/release/bulk_upload || echo "Static binary (no dynamic dependencies)"
+
+          echo "Checking img_resize..."
+          file img_resize/target/${{ matrix.target }}/release/img_resize
+          ldd img_resize/target/${{ matrix.target }}/release/img_resize || echo "Static binary (no dynamic dependencies)"
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cd bulk_upload/target/${{ matrix.target }}/release
+          tar czf ../../../../release/bulk_upload-${{ matrix.target }}.tar.gz bulk_upload
+          cd ../../../..
+          cd img_resize/target/${{ matrix.target }}/release
+          tar czf ../../../../release/img_resize-${{ matrix.target }}.tar.gz img_resize
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-${{ matrix.arch }}
+          path: release/*
+          retention-days: 1
+
+  build-macos:
+    name: Build macOS (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: aarch64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Build bulk_upload
+        run: |
+          cd bulk_upload
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Build img_resize
+        run: |
+          cd img_resize
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify binaries
+        run: |
+          echo "Checking bulk_upload..."
+          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload
+          otool -L bulk_upload/target/${{ matrix.target }}/release/bulk_upload
+
+          echo "Checking img_resize..."
+          file img_resize/target/${{ matrix.target }}/release/img_resize
+          otool -L img_resize/target/${{ matrix.target }}/release/img_resize
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cd bulk_upload/target/${{ matrix.target }}/release
+          tar czf ../../../../release/bulk_upload-${{ matrix.target }}.tar.gz bulk_upload
+          cd ../../../..
+          cd img_resize/target/${{ matrix.target }}/release
+          tar czf ../../../../release/img_resize-${{ matrix.target }}.tar.gz img_resize
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release/*
+          retention-days: 1
+
+  build-windows:
+    name: Build Windows (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-gnu
+            arch: x86_64
+          - target: i686-pc-windows-gnu
+            arch: i686
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Build bulk_upload
+        run: |
+          cd bulk_upload
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Build img_resize
+        run: |
+          cd img_resize
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Verify binaries
+        run: |
+          echo "Checking bulk_upload..."
+          file bulk_upload/target/${{ matrix.target }}/release/bulk_upload.exe
+
+          echo "Checking img_resize..."
+          file img_resize/target/${{ matrix.target }}/release/img_resize.exe
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cd bulk_upload/target/${{ matrix.target }}/release
+          zip ../../../../release/bulk_upload-${{ matrix.target }}.zip bulk_upload.exe
+          cd ../../../..
+          cd img_resize/target/${{ matrix.target }}/release
+          zip ../../../../release/img_resize-${{ matrix.target }}.zip img_resize.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: release/*
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: [build-linux-musl, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Get tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if [ -f CHANGELOG.md ]; then
+            sed -n "/## \[${TAG#v}\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.md
+          else
+            echo "Release $TAG" > release_notes.md
+            echo "" >> release_notes.md
+            echo "## Supported Platforms" >> release_notes.md
+            echo "- Linux x86_64 (musl, static)" >> release_notes.md
+            echo "- Linux i686 (musl, static)" >> release_notes.md
+            echo "- Linux aarch64 (musl, static, ARM64)" >> release_notes.md
+            echo "- macOS x86_64 (Intel)" >> release_notes.md
+            echo "- macOS aarch64 (Apple Silicon)" >> release_notes.md
+            echo "- Windows x86_64" >> release_notes.md
+            echo "- Windows i686 (32-bit)" >> release_notes.md
+          fi
+          cat release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          body_path: release_notes.md
+          files: release/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish bulk_upload
+        run: |
+          cd bulk_upload
+          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
+        continue-on-error: true
+
+      - name: Publish img_resize
+        run: |
+          cd img_resize
+          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
+        continue-on-error: true
