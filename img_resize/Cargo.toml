@@ -15,8 +15,8 @@ walkdir = "2"
 infer = "0.15.0"
 yaml-rust = "0.4.5"
 log = "0.4.27"
-tinify-rs = { version = "1.4.2", features = ["async"] }
-tokio = "1.45.1"
+# tinify-rs = { version = "1.4.2", features = ["async"] }  # Temporarily disabled for musl builds
+tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread"] }
 fern = "0.7.1"
 humantime = "2.2.0"
 serde = { version = "1", features = ["derive"] }

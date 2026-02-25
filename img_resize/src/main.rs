@@ -122,7 +122,7 @@ enum Commands {
         long_about = "使用 TinyPNG API 压缩图片。\n\n\
                       在保持视觉质量的同时显著减小文件大小。\n\
                       支持单文件或目录批量处理。\n\n\
-                      注意: 需要设置 TINIFY_API_KEY 环境变量"
+                      注意: 此功能暂时禁用，等待 rustls 支持"
     )]
     Tinyfy {
         /// 图片文件路径或目录路径（支持 PNG/JPG）
@@ -185,7 +185,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
         }
         Commands::Tinyfy { path, do_size_perf } => {
-            subcmd::tinify_tp::exec(&path, do_size_perf, cli.json).await
+            eprintln!("Error: tinyfy command is temporarily disabled");
+            eprintln!("Reason: OpenSSL dependency conflicts with musl static builds");
+            eprintln!("Use r_resize command instead for image processing");
+            std::process::exit(1);
         }
     };
 

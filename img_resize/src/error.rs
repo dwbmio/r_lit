@@ -15,8 +15,8 @@ pub enum ReError {
     #[error("{0}")]
     ParseError(#[from] yaml_rust::EmitError),
 
-    #[error("{0}")]
-    TinifyError(#[from] tinify::error::TinifyError),
+    // #[error("{0}")]
+    // TinifyError(#[from] tinify::error::TinifyError),
 
     #[error("{0}")]
     JsonError(#[from] serde_json::Error),
