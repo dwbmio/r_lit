@@ -266,7 +266,11 @@ pub async fn exec(
         };
         println!("{}", serde_json::to_string(&summary)?);
     } else {
-        log::info!("全部处理完成: {} 成功, {} 失败", total_success, total_failed);
+        log::info!(
+            "全部处理完成: {} 成功, {} 失败",
+            total_success,
+            total_failed
+        );
     }
     Ok(())
 }

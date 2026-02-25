@@ -127,7 +127,11 @@ struct RtpExecutor {
 }
 
 impl RtpExecutor {
-    async fn single_tp(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<ProcessResult, ReError> {
+    async fn single_tp(
+        &self,
+        path: &PathBuf,
+        out: Option<PathBuf>,
+    ) -> Result<ProcessResult, ReError> {
         let is_thumb = self.max_pixel > 0;
         let kind = infer::get_from_path(path)?;
 
@@ -148,7 +152,11 @@ impl RtpExecutor {
                         path,
                         (
                             if is_thumb { self.max_pixel } else { self.width },
-                            if is_thumb { self.max_pixel } else { self.height },
+                            if is_thumb {
+                                self.max_pixel
+                            } else {
+                                self.height
+                            },
                         ),
                         out.clone(),
                         is_thumb,
@@ -171,24 +179,22 @@ impl RtpExecutor {
                         }),
                     }
                 }
-                ActionType::Convert => {
-                    match convert_tp(path, ImageFormat::Jpeg, out.clone()) {
-                        Ok(_) => Ok(ProcessResult {
-                            file: path.display().to_string(),
-                            status: "converted".to_string(),
-                            original_size: None,
-                            new_size: None,
-                            error: None,
-                        }),
-                        Err(e) => Ok(ProcessResult {
-                            file: path.display().to_string(),
-                            status: "failed".to_string(),
-                            original_size: None,
-                            new_size: None,
-                            error: Some(e.to_string()),
-                        }),
-                    }
-                }
+                ActionType::Convert => match convert_tp(path, ImageFormat::Jpeg, out.clone()) {
+                    Ok(_) => Ok(ProcessResult {
+                        file: path.display().to_string(),
+                        status: "converted".to_string(),
+                        original_size: None,
+                        new_size: None,
+                        error: None,
+                    }),
+                    Err(e) => Ok(ProcessResult {
+                        file: path.display().to_string(),
+                        status: "failed".to_string(),
+                        original_size: None,
+                        new_size: None,
+                        error: Some(e.to_string()),
+                    }),
+                },
                 ActionType::None => Ok(ProcessResult {
                     file: path.display().to_string(),
                     status: "skipped".to_string(),
@@ -211,7 +217,11 @@ impl RtpExecutor {
         }
     }
 
-    async fn walk(&self, path: &PathBuf, out: Option<PathBuf>) -> Result<Vec<ProcessResult>, ReError> {
+    async fn walk(
+        &self,
+        path: &PathBuf,
+        out: Option<PathBuf>,
+    ) -> Result<Vec<ProcessResult>, ReError> {
         let walker = WalkDir::new(path).into_iter();
         if !self.json_output {
             log::debug!("start walk dir :{}...", path.display());
@@ -224,7 +234,9 @@ impl RtpExecutor {
             }
             let entry = entry?;
             if entry.path().is_file() {
-                let result = self.single_tp(&entry.path().to_path_buf(), out.clone()).await?;
+                let result = self
+                    .single_tp(&entry.path().to_path_buf(), out.clone())
+                    .await?;
                 results.push(result);
             }
         }
