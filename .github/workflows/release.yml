@@ -51,25 +51,31 @@ jobs:
         run: |
           echo "Detecting changes..."
           CHANGED_PROJECTS=""
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
             CHANGED_PROJECTS="$CHANGED_PROJECTS bulk_upload"
             BULK_VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "bulk_upload_version=$BULK_VERSION" >> $GITHUB_OUTPUT
           fi
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^img_resize/Cargo.toml"; then
             CHANGED_PROJECTS="$CHANGED_PROJECTS img_resize"
             IMG_VERSION=$(grep '^version' img_resize/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "img_resize_version=$IMG_VERSION" >> $GITHUB_OUTPUT
           fi
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^omniplan_covers_ding/Cargo.toml"; then
             CHANGED_PROJECTS="$CHANGED_PROJECTS omniplan_covers_ding"
             OMNI_VERSION=$(grep '^version' omniplan_covers_ding/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "omniplan_covers_ding_version=$OMNI_VERSION" >> $GITHUB_OUTPUT
           fi
-          
+
+          if git diff HEAD^ HEAD --name-only | grep -q "^group_vibe_workbench/Cargo.toml"; then
+            CHANGED_PROJECTS="$CHANGED_PROJECTS group_vibe_workbench"
+            GVW_VERSION=$(grep '^version' group_vibe_workbench/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "group_vibe_workbench_version=$GVW_VERSION" >> $GITHUB_OUTPUT
+          fi
+
           echo "changed_projects=$CHANGED_PROJECTS" >> $GITHUB_OUTPUT
           echo "Changed projects: $CHANGED_PROJECTS"
 
@@ -159,25 +165,31 @@ jobs:
         id: versions
         run: |
           RELEASE_NOTES=""
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
             VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "bulk_upload_version=$VERSION" >> $GITHUB_OUTPUT
             RELEASE_NOTES="$RELEASE_NOTES\n- bulk_upload v$VERSION"
           fi
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^img_resize/Cargo.toml"; then
             VERSION=$(grep '^version' img_resize/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "img_resize_version=$VERSION" >> $GITHUB_OUTPUT
             RELEASE_NOTES="$RELEASE_NOTES\n- img_resize v$VERSION"
           fi
-          
+
           if git diff HEAD^ HEAD --name-only | grep -q "^omniplan_covers_ding/Cargo.toml"; then
             VERSION=$(grep '^version' omniplan_covers_ding/Cargo.toml | head -1 | cut -d'"' -f2)
             echo "omniplan_covers_ding_version=$VERSION" >> $GITHUB_OUTPUT
             RELEASE_NOTES="$RELEASE_NOTES\n- omniplan_covers_ding v$VERSION"
           fi
-          
+
+          if git diff HEAD^ HEAD --name-only | grep -q "^group_vibe_workbench/Cargo.toml"; then
+            VERSION=$(grep '^version' group_vibe_workbench/Cargo.toml | head -1 | cut -d'"' -f2)
+            echo "group_vibe_workbench_version=$VERSION" >> $GITHUB_OUTPUT
+            RELEASE_NOTES="$RELEASE_NOTES\n- group_vibe_workbench v$VERSION"
+          fi
+
           echo "release_notes<<EOF" >> $GITHUB_OUTPUT
           echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -202,12 +214,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: release-${{ github.sha }}
-          name: Release ${{ github.run_number }}
+          tag_name: ${{ steps.versions.outputs.bulk_upload_version || steps.versions.outputs.img_resize_version || steps.versions.outputs.omniplan_covers_ding_version || steps.versions.outputs.group_vibe_workbench_version }}
+          name: Release ${{ steps.versions.outputs.bulk_upload_version || steps.versions.outputs.img_resize_version || steps.versions.outputs.omniplan_covers_ding_version || steps.versions.outputs.group_vibe_workbench_version }}
           body: |
             ## New Releases
             ${{ steps.versions.outputs.release_notes }}
-            
+
             ## Supported Platforms
             - Linux x86_64 (musl, static)
             - Linux i686 (musl, static)
