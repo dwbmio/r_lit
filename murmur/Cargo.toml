@@ -1,0 +1,64 @@
+[package]
+name = "murmur"
+version = "0.1.0"
+edition = "2021"
+authors = ["R_LIT Contributors"]
+description = "Distributed P2P collaboration library with automatic leader election and CRDT synchronization"
+license = "MIT OR Apache-2.0"
+keywords = ["p2p", "crdt", "distributed", "collaboration", "sync"]
+categories = ["network-programming", "database"]
+
+[features]
+default = ["redb-backend"]
+sqlite-backend = ["rusqlite"]
+redb-backend = ["redb"]
+rocksdb-backend = ["rocksdb"]
+
+[dependencies]
+# P2P networking
+iroh = "0.28"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# CRDT synchronization
+automerge = "0.5"
+
+# Storage backends (optional)
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+redb = { version = "2", optional = true }
+rocksdb = { version = "0.22", optional = true }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+tracing = "0.1"
+anyhow = "1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+tracing-subscriber = "0.3"
+chrono = "0.4"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "group_chat"
+path = "examples/group_chat.rs"
+
+[[example]]
+name = "shared_kv"
+path = "examples/shared_kv.rs"
+
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"
