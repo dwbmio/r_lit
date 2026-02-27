@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-R_LIT is a monorepo containing cross-platform CLI tools written in Rust for image processing and file management. The repository contains multiple independent tools that can be built and released separately.
+R_LIT is a monorepo containing cross-platform CLI tools and libraries written in Rust for image processing, file management, and distributed collaboration. The repository contains multiple independent tools that can be built and released separately.
 
 **Main Tools:**
 - **bulk_upload** (v0.2.1) - Batch download URLs from JSON and upload to S3-compatible storage
@@ -12,6 +12,9 @@ R_LIT is a monorepo containing cross-platform CLI tools written in Rust for imag
 - **group_vibe_workbench** (v0.1.0) - Desktop collaboration workbench with GPUI + Wry WebView
 - **omniplan_covers_ding** (v0.1.0) - Internal tool for OmniPlan cover processing
 - **video-generator** - Video generation tools (demo and movie-maker)
+
+**Libraries:**
+- **murmur** (v0.1.0) - Distributed P2P collaboration library with automatic leader election and CRDT synchronization
 
 ## Build and Development Commands
 
@@ -171,6 +174,30 @@ All tools use `fern` + `log` for structured logging:
 **Key dependencies:** `image`, `imageproc`, `walkdir` (batch processing)
 
 **Note:** TinyPNG integration temporarily disabled for musl builds (see commented dependency in Cargo.toml)
+
+### murmur
+
+**Architecture** ([murmur/src/lib.rs](murmur/src/lib.rs)):
+- **P2P Networking**: Built on `iroh` for NAT traversal and relay selection
+- **CRDT Sync**: Uses `automerge` for conflict-free state synchronization
+- **Local Storage**: SQLite with `Arc<Mutex<Connection>>` for thread-safe access
+- **Leader Election**: Bully algorithm with heartbeat mechanism (2s interval, 5s timeout)
+
+**Core components:**
+1. **Network** ([network.rs](murmur/src/network.rs)): iroh endpoint, message passing, peer management
+2. **Election** ([election.rs](murmur/src/election.rs)): Bully algorithm, role management, heartbeat
+3. **Sync** ([sync.rs](murmur/src/sync.rs)): Automerge document, CRDT operations
+4. **Storage** ([storage.rs](murmur/src/storage.rs)): SQLite KV store with sync log
+
+**Key dependencies:** `iroh`, `automerge`, `rusqlite`, `tokio`
+
+**Usage example:**
+```rust
+let swarm = Swarm::builder().storage_path("./data").build().await?;
+swarm.start().await?;
+swarm.put("key", b"value").await?;
+let value = swarm.get("key").await?;
+```
 
 ## CI/CD Workflows
 
