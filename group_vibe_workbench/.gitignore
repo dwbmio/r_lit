@@ -13,3 +13,10 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Markdown files (except essential ones)
+*.md
+!README.md
+!CLAUDE.md
+!docs/**/*.md
+!src/**/README.md

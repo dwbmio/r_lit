@@ -2,3 +2,9 @@
 .cursor/
 **/target/
 **/out/
+.secrets/
+*.md
+!README.md
+!README_CN.md
+!CLAUDE.md
+!docs/**/*.md

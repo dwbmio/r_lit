@@ -9,12 +9,12 @@ R_LIT is a monorepo containing cross-platform CLI tools and libraries written in
 **Main Tools:**
 - **bulk_upload** (v0.2.1) - Batch download URLs from JSON and upload to S3-compatible storage
 - **img_resize** (v0.2.0) - Image resizing and compression tool with pure Rust implementation
-- **group_vibe_workbench** (v0.1.0) - Desktop collaboration workbench with GPUI + Wry WebView
+- **group_vibe_workbench** (v0.1.0) - Desktop collaboration workbench with GPUI + Murmur P2P sync
 - **omniplan_covers_ding** (v0.1.0) - Internal tool for OmniPlan cover processing
 - **video-generator** - Video generation tools (demo and movie-maker)
 
 **Libraries:**
-- **murmur** (v0.1.0) - Distributed P2P collaboration library with automatic leader election and CRDT synchronization
+- **murmur** (v0.1.0) - Distributed P2P collaboration library with automatic leader election and CRDT synchronization (located in `crates/murmur`)
 
 ## Build and Development Commands
 
@@ -96,7 +96,7 @@ This repository uses GitHub Actions for automated cross-platform releases. Each 
 
 ### Monorepo Structure
 
-Each tool is a separate Cargo workspace with its own dependencies and release cycle. Tools are independent and do not share code (except `omniplan_covers_ding` which depends on an external `cli-common` crate).
+Each tool is a separate Cargo workspace with its own dependencies and release cycle. The `murmur` library is located in `crates/` and is used as a local path dependency by `group_vibe_workbench`.
 
 ```
 r_lit/
@@ -117,6 +117,25 @@ r_lit/
 │   └── Cargo.toml
 ├── group_vibe_workbench/ # Desktop collaboration workbench
 │   ├── src/
+│   │   ├── main.rs       # CLI definition
+│   │   ├── error.rs      # Error handling
+│   │   ├── shared_file.rs # Murmur integration for P2P file sync
+│   │   └── subcmd/
+│   │       └── launch.rs # GPUI window + collaborative editing
+│   └── Cargo.toml
+├── crates/
+│   └── murmur/           # P2P collaboration library
+│       ├── src/
+│       │   ├── lib.rs    # Swarm API
+│       │   ├── network.rs # iroh P2P networking
+│       │   ├── election.rs # Bully algorithm leader election
+│       │   ├── sync.rs   # Automerge CRDT synchronization
+│       │   └── storage.rs # Local persistence (redb/SQLite/RocksDB)
+│       └── Cargo.toml
+├── omniplan_covers_ding/ # Internal tool
+├── video-generator/      # Video tools
+└── .github/workflows/    # CI/CD automation
+```
 │   │   ├── main.rs       # CLI definition
 │   │   ├── error.rs      # Error handling
 │   │   └── subcmd/
@@ -177,27 +196,66 @@ All tools use `fern` + `log` for structured logging:
 
 ### murmur
 
-**Architecture** ([murmur/src/lib.rs](murmur/src/lib.rs)):
-- **P2P Networking**: Built on `iroh` for NAT traversal and relay selection
+**Location**: `crates/murmur/`
+
+**Architecture** ([crates/murmur/src/lib.rs](crates/murmur/src/lib.rs)):
+- **P2P Networking**: Built on `iroh-net` for NAT traversal and relay selection
+- **Local Discovery**: Uses iroh's native `LocalSwarmDiscovery` for zero-config peer discovery on local networks
 - **CRDT Sync**: Uses `automerge` for conflict-free state synchronization
-- **Local Storage**: SQLite with `Arc<Mutex<Connection>>` for thread-safe access
+- **Local Storage**: Multiple backend options (redb, SQLite, RocksDB) with feature flags
 - **Leader Election**: Bully algorithm with heartbeat mechanism (2s interval, 5s timeout)
 
 **Core components:**
-1. **Network** ([network.rs](murmur/src/network.rs)): iroh endpoint, message passing, peer management
-2. **Election** ([election.rs](murmur/src/election.rs)): Bully algorithm, role management, heartbeat
-3. **Sync** ([sync.rs](murmur/src/sync.rs)): Automerge document, CRDT operations
-4. **Storage** ([storage.rs](murmur/src/storage.rs)): SQLite KV store with sync log
+1. **Network** ([network.rs](crates/murmur/src/network.rs)): iroh endpoint, LocalSwarmDiscovery, ALPN configuration, peer management
+2. **Election** ([election.rs](crates/murmur/src/election.rs)): Bully algorithm, role management, heartbeat
+3. **Sync** ([sync.rs](crates/murmur/src/sync.rs)): Automerge document, CRDT operations
+4. **Storage** ([storage.rs](crates/murmur/src/storage.rs)): Pluggable storage backends with trait abstraction
 
-**Key dependencies:** `iroh`, `automerge`, `rusqlite`, `tokio`
+**Key dependencies:** `iroh-net` (with `discovery-local-network` feature), `automerge`, `redb` (default), `tokio`
 
-**Usage example:**
+**Discovery & Connection:**
 ```rust
-let swarm = Swarm::builder().storage_path("./data").build().await?;
+// Automatic local network discovery
+let swarm = Swarm::builder()
+    .group_id("my-group")
+    .build()
+    .await?;
+
 swarm.start().await?;
+
+// Wait for discovery (5-10 seconds)
+tokio::time::sleep(Duration::from_secs(5)).await;
+
+// Connect to discovered peers
+let count = swarm.discover_and_connect_local_peers().await?;
+println!("Connected to {} peers", count);
+```
+
+**Basic Usage:**
+```rust
 swarm.put("key", b"value").await?;
 let value = swarm.get("key").await?;
 ```
+
+**Documentation:** See [crates/murmur/docs/](crates/murmur/docs/) for detailed documentation:
+- [DISCOVERY.md](crates/murmur/docs/DISCOVERY.md) - Local network discovery, mDNS issues, ALPN configuration
+- [ARCHITECTURE.md](crates/murmur/docs/ARCHITECTURE.md) - System architecture and design decisions
+
+### group_vibe_workbench
+
+**Core workflow** ([group_vibe_workbench/src/subcmd/launch.rs](group_vibe_workbench/src/subcmd/launch.rs)):
+1. Initialize GPUI application and window
+2. Create SharedFile instance with Murmur integration
+3. Start P2P swarm for collaborative editing
+4. Render UI with menu bar and content area
+5. Sync file changes across all connected peers
+
+**Murmur integration** ([group_vibe_workbench/src/shared_file.rs](group_vibe_workbench/src/shared_file.rs)):
+- `SharedFile` manages a file synchronized via Murmur's CRDT
+- Automatic local persistence + distributed sync
+- Node information tracking (leader status, connected peers)
+
+**Key dependencies:** `gpui`, `gpui-component`, `murmur` (local path), `tokio`
 
 ## CI/CD Workflows
 

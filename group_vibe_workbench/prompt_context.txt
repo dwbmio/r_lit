@@ -1,0 +1,25 @@
+# Group Vibe Workbench - 使用示例
+
+这是一个共享的 Prompt 上下文文件，可以被多个用户同时编辑。
+
+## 当前任务
+
+正在开发 Group Vibe Workbench 的 P2P 协作功能。
+
+## 技术栈
+
+- GPUI: 原生 UI 框架
+- Murmur: P2P 协作库
+- Automerge: CRDT 同步
+- iroh: NAT 穿透
+
+## 下一步
+
+1. 集成文本编辑器到 UI
+2. 显示实时光标位置
+3. 添加用户在线状态
+4. 实现聊天功能
+
+---
+
+这个文件会自动同步到所有连接的节点。
