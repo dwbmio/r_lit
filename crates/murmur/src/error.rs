@@ -28,6 +28,14 @@ pub enum Error {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[cfg(feature = "file-ops")]
+    #[error("File too large: {size} bytes (max: {max} bytes)")]
+    FileTooLarge { size: usize, max: usize },
+
+    #[cfg(feature = "file-ops")]
+    #[error("Version conflict: expected {expected}, current {current}")]
+    VersionConflict { expected: u64, current: u64 },
+
     #[error("{0}")]
     Other(String),
 }

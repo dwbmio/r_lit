@@ -43,8 +43,14 @@ mod sync;
 mod network;
 mod vector_clock;
 
+#[cfg(feature = "file-ops")]
+pub mod file;
+
 pub use error::{Error, Result};
 pub use storage_trait::StorageBackend;
+
+#[cfg(feature = "file-ops")]
+pub use file::{FileOps, FileMetadata};
 
 use std::path::PathBuf;
 use tokio::sync::RwLock;

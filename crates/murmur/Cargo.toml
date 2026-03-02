@@ -13,6 +13,7 @@ default = ["redb-backend"]
 sqlite-backend = ["rusqlite"]
 redb-backend = ["redb"]
 rocksdb-backend = ["rocksdb"]
+file-ops = []  # Optional file operations layer
 
 [dependencies]
 # P2P networking (只用 iroh-net，不用整个 iroh)
@@ -73,8 +74,9 @@ name = "chat_room"
 path = "examples/chat_room.rs"
 
 [[example]]
-name = "local_discovery"
-path = "examples/local_discovery.rs"
+name = "file_sync"
+path = "examples/file_sync.rs"
+required-features = ["file-ops"]
 
 [profile.release]
 lto = true
