@@ -57,6 +57,17 @@ use tokio::sync::RwLock;
 use std::sync::Arc;
 use tracing::{info, error, debug, warn};
 
+/// Application-level events emitted by the Swarm.
+#[derive(Debug, Clone)]
+pub enum SwarmEvent {
+    /// A peer connected (incoming or outgoing).
+    PeerConnected { node_id: String },
+    /// A peer disconnected.
+    PeerDisconnected { node_id: String },
+    /// CRDT data was synced from a peer (SyncResponse merged or CrdtUpdate applied).
+    DataSynced,
+}
+
 /// Main entry point for the Murmur library.
 ///
 /// A `Swarm` represents a node in the distributed network.
@@ -71,6 +82,7 @@ struct SwarmInner {
     election: RwLock<election::Election>,
     sync: RwLock<sync::Sync>,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    event_tx: tokio::sync::broadcast::Sender<SwarmEvent>,
 }
 
 impl Swarm {
@@ -98,6 +110,9 @@ impl Swarm {
         // Spawn background tasks
         self.spawn_heartbeat_task();
         self.spawn_message_handler_task();
+        self.spawn_retransmit_task();
+        self.spawn_peer_event_forwarder().await;
+        self.spawn_auto_discovery_task();
 
         info!("Swarm started");
         Ok(())
@@ -126,7 +141,15 @@ impl Swarm {
             seq_num,
             vector_clock,
         };
-        network.broadcast(message).await?;
+
+        // Track pending ACK for each peer before broadcast
+        let peer_ids = network.peers().await;
+        network.broadcast(message.clone()).await?;
+        for peer_id_str in &peer_ids {
+            if let Ok(pid) = peer_id_str.parse::<network::NodeId>() {
+                network.track_pending(seq_num, pid, message.clone()).await;
+            }
+        }
         network.increment_vector_clock().await;
 
         Ok(())
@@ -169,7 +192,14 @@ impl Swarm {
             seq_num,
             vector_clock,
         };
-        network.broadcast(message).await?;
+
+        let peer_ids = network.peers().await;
+        network.broadcast(message.clone()).await?;
+        for peer_id_str in &peer_ids {
+            if let Ok(pid) = peer_id_str.parse::<network::NodeId>() {
+                network.track_pending(seq_num, pid, message.clone()).await;
+            }
+        }
         network.increment_vector_clock().await;
 
         Ok(())
@@ -193,22 +223,46 @@ impl Swarm {
         network.node_id_string()
     }
 
-    /// Get this node's address (for sharing with other peers).
-    pub async fn node_addr(&self) -> String {
+    /// Get this node's address as JSON string (for sharing with other peers).
+    ///
+    /// The returned string can be passed to [`Swarm::connect_peer`] on another node.
+    pub async fn node_addr(&self) -> Result<String> {
         let network = self.inner.network.read().await;
-        format!("{:?}", network.node_addr().await)
+        let addr = network.node_addr().await?;
+        serde_json::to_string(&addr)
+            .map_err(|e| Error::Serialization(format!("Failed to serialize NodeAddr: {}", e)))
     }
 
     /// Connect to another peer by their node address.
-    pub async fn connect_peer(&self, _peer_addr_str: &str) -> Result<()> {
-        // Parse the node address string
-        // Format: NodeAddr { node_id: <id>, relay_url: <url>, direct_addresses: [...] }
-        // For simplicity, we'll need a better parsing method or use a different format
+    ///
+    /// Accepts a JSON-serialized `NodeAddr`, e.g.:
+    /// ```json
+    /// {"node_id":"<base32-public-key>","relay_url":"https://...","direct_addresses":["ip:port"]}
+    /// ```
+    ///
+    /// You can obtain this string from [`Swarm::node_addr`] on the remote peer.
+    pub async fn connect_peer(&self, peer_addr_str: &str) -> Result<()> {
+        let node_addr: iroh_net::NodeAddr = serde_json::from_str(peer_addr_str)
+            .map_err(|e| Error::Network(format!("Failed to parse NodeAddr JSON: {}", e)))?;
 
-        // Temporary: just log the error
-        return Err(Error::Network(
-            "connect_peer not fully implemented - need proper NodeAddr parsing".to_string()
-        ));
+        let peer_id = node_addr.node_id;
+
+        let my_id = self.node_id().await;
+        if peer_id.to_string() == my_id {
+            debug!("Skipping connection to self");
+            return Ok(());
+        }
+
+        let network = self.inner.network.read().await;
+        network.connect(node_addr).await?;
+
+        // Request full sync from the newly connected peer
+        if let Err(e) = network.send(&peer_id.to_string(), network::Message::SyncRequest).await {
+            warn!("Failed to send SyncRequest after connect_peer: {}", e);
+        }
+
+        info!("Connected to peer via address: {}", peer_id);
+        Ok(())
     }
 
     /// Connect to a discovered peer by node ID
@@ -243,6 +297,10 @@ impl Swarm {
 
         network.connect(node_addr).await?;
 
+        if let Err(e) = network.send(node_id_str, network::Message::SyncRequest).await {
+            warn!("Failed to send SyncRequest after connect_peer_by_id: {}", e);
+        }
+
         info!("Connected to peer: {}", node_id_str);
         Ok(())
     }
@@ -253,18 +311,117 @@ impl Swarm {
         network.peers().await
     }
 
-    /// Discover and connect to peers found by iroh's LocalSwarmDiscovery
+    /// Discover and connect to peers found by iroh's LocalSwarmDiscovery.
     ///
-    /// This method queries iroh's discovery system for any peers it has found
-    /// on the local network and attempts to connect to them.
+    /// After connecting to new peers, automatically sends a SyncRequest
+    /// so CRDT state is exchanged.
     ///
     /// Returns the number of new connections established.
     pub async fn discover_and_connect_local_peers(&self) -> Result<usize> {
+        let peers_before: std::collections::HashSet<String> = {
+            let network = self.inner.network.read().await;
+            network.peers().await.into_iter().collect()
+        };
+
+        let count = {
+            let network = self.inner.network.read().await;
+            network.discover_and_connect_peers().await?
+        };
+
+        if count > 0 {
+            let peers_after = {
+                let network = self.inner.network.read().await;
+                network.peers().await
+            };
+
+            for peer_id in &peers_after {
+                if !peers_before.contains(peer_id) {
+                    debug!("Requesting full sync from new peer: {}", peer_id);
+                    let network = self.inner.network.read().await;
+                    if let Err(e) = network.send(peer_id, network::Message::SyncRequest).await {
+                        warn!("Failed to send SyncRequest to {}: {}", peer_id, e);
+                    }
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Announce this node's presence in the group.
+    ///
+    /// Writes metadata (group_id, nickname) to a well-known key so other
+    /// peers can discover who is in the group after syncing.
+    pub async fn announce(&self, nickname: &str) -> Result<()> {
+        let node_id = self.node_id().await;
+        let group_id = {
+            let network = self.inner.network.read().await;
+            network.group_id().to_string()
+        };
+
+        let meta = serde_json::json!({
+            "node_id": node_id,
+            "nickname": nickname,
+            "group_id": group_id,
+            "ts": chrono::Utc::now().timestamp(),
+        });
+
+        let key = format!("_meta:{}", node_id);
+        let value = serde_json::to_vec(&meta)
+            .map_err(|e| Error::Serialization(format!("Failed to serialize metadata: {}", e)))?;
+
+        self.put(&key, &value).await?;
+        info!("Announced presence: group={}, nickname={}", group_id, nickname);
+        Ok(())
+    }
+
+    /// List all announced peers (from CRDT metadata keys).
+    ///
+    /// Returns a vec of (node_id, nickname, group_id) tuples for all peers
+    /// that have called [`announce`].
+    pub async fn list_announced_peers(&self) -> Result<Vec<(String, String, String)>> {
+        let sync = self.inner.sync.read().await;
+        let keys = sync.keys();
+        drop(sync);
+
+        let mut peers = Vec::new();
+        for key in keys {
+            if let Some(node_id_suffix) = key.strip_prefix("_meta:") {
+                if let Some(value) = self.get(&key).await? {
+                    if let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&value) {
+                        let nickname = meta.get("nickname")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let group_id = meta.get("group_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        peers.push((node_id_suffix.to_string(), nickname, group_id));
+                    }
+                }
+            }
+        }
+
+        Ok(peers)
+    }
+
+    /// Get the group_id this swarm was created with.
+    pub async fn group_id(&self) -> String {
         let network = self.inner.network.read().await;
-        network.discover_and_connect_peers().await
+        network.group_id().to_string()
     }
 
     /// Shutdown the swarm gracefully.
+    /// Subscribe to swarm events (PeerConnected, PeerDisconnected, DataSynced).
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SwarmEvent> {
+        self.inner.event_tx.subscribe()
+    }
+
+    fn emit_event(&self, event: SwarmEvent) {
+        let _ = self.inner.event_tx.send(event);
+    }
+
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down swarm");
         let _ = self.inner.shutdown_tx.send(());
@@ -319,6 +476,91 @@ impl Swarm {
         });
     }
 
+    /// Forward network-layer PeerEvents into SwarmEvents.
+    async fn spawn_peer_event_forwarder(&self) {
+        let network = self.inner.network.read().await;
+        let mut peer_rx = network.subscribe_peer_events();
+        drop(network);
+
+        let event_tx = self.inner.event_tx.clone();
+        let mut shutdown_rx = self.inner.shutdown_tx.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => break,
+                    result = peer_rx.recv() => {
+                        match result {
+                            Ok(network::PeerEvent::Connected(id)) => {
+                                let _ = event_tx.send(SwarmEvent::PeerConnected { node_id: id });
+                            }
+                            Ok(network::PeerEvent::Disconnected(id)) => {
+                                let _ = event_tx.send(SwarmEvent::PeerDisconnected { node_id: id });
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Spawn background task for retransmitting unacknowledged messages.
+    fn spawn_retransmit_task(&self) {
+        let swarm = self.clone();
+        tokio::spawn(async move {
+            let mut shutdown_rx = swarm.inner.shutdown_tx.subscribe();
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        break;
+                    }
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                        let network = swarm.inner.network.read().await;
+                        let (resent, failed) = network.retransmit_timed_out().await;
+                        if resent > 0 {
+                            debug!("Retransmitted {} messages", resent);
+                        }
+                        if !failed.is_empty() {
+                            warn!("Dropped {} messages after max retransmit attempts", failed.len());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Periodically discover and connect to new local peers via mDNS.
+    fn spawn_auto_discovery_task(&self) {
+        let swarm = self.clone();
+        tokio::spawn(async move {
+            let mut shutdown_rx = swarm.inner.shutdown_tx.subscribe();
+            // Initial short delay to let mDNS register
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+            loop {
+                {
+                    let network = swarm.inner.network.read().await;
+                    match network.discover_and_connect_peers().await {
+                        Ok(n) if n > 0 => {
+                            info!("Auto-discovery: connected to {} new peer(s)", n);
+                        }
+                        Err(e) => {
+                            debug!("Auto-discovery error: {}", e);
+                        }
+                        _ => {}
+                    }
+                }
+
+                tokio::select! {
+                    _ = shutdown_rx.recv() => break,
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {}
+                }
+            }
+        });
+    }
+
     /// Handle an incoming message from a peer.
     async fn handle_message(&self, peer_id: network::NodeId, message: network::Message) -> Result<()> {
         match message {
@@ -347,11 +589,13 @@ impl Swarm {
                 if let Err(e) = network.send(&peer_id.to_string(), ack_msg).await {
                     warn!("Failed to send ACK: {}", e);
                 }
+                self.emit_event(SwarmEvent::DataSynced);
             }
 
             network::Message::Ack { seq_num } => {
                 debug!("Received ACK for seq={}", seq_num);
-                // TODO: Remove from pending retransmission queue
+                let network = self.inner.network.read().await;
+                network.ack_received(seq_num).await;
             }
 
             network::Message::SyncRequest => {
@@ -371,6 +615,8 @@ impl Swarm {
                 // Merge received state
                 let mut sync = self.inner.sync.write().await;
                 sync.load_document(&data)?;
+                drop(sync);
+                self.emit_event(SwarmEvent::DataSynced);
             }
 
             // Election messages
@@ -422,6 +668,7 @@ impl SwarmBuilder {
         let sync = sync::Sync::new();
 
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let (event_tx, _) = tokio::sync::broadcast::channel(64);
 
         Ok(Swarm {
             inner: Arc::new(SwarmInner {
@@ -430,6 +677,7 @@ impl SwarmBuilder {
                 election: RwLock::new(election),
                 sync: RwLock::new(sync),
                 shutdown_tx,
+                event_tx,
             }),
         })
     }

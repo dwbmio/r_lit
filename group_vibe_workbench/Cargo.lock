@@ -4740,11 +4740,12 @@ dependencies = [
 
 [[package]]
 name = "murmur"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "automerge",
  "bincode",
+ "chrono",
  "futures",
  "iroh-net",
  "redb",

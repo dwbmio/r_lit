@@ -4,8 +4,9 @@ use iroh_net::endpoint::{Endpoint, Connection, ServerConfig, TransportConfig};
 use iroh_net::key::PublicKey;
 use iroh_net::NodeAddr;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -38,6 +39,26 @@ pub enum Message {
     Ack { seq_num: u64 },
 }
 
+const MAX_RETRANSMIT_ATTEMPTS: u32 = 5;
+const RETRANSMIT_INTERVAL_MS: u64 = 3000;
+
+/// A message awaiting ACK from a peer.
+#[derive(Debug, Clone)]
+pub struct PendingMessage {
+    pub peer_id: NodeId,
+    pub message: Message,
+    pub seq_num: u64,
+    pub sent_at: Instant,
+    pub attempts: u32,
+}
+
+/// Peer-level events emitted by the network layer.
+#[derive(Debug, Clone)]
+pub enum PeerEvent {
+    Connected(String),
+    Disconnected(String),
+}
+
 /// P2P network layer using iroh.
 pub struct Network {
     endpoint: Endpoint,
@@ -53,6 +74,12 @@ pub struct Network {
     vector_clock: Arc<RwLock<VectorClock>>,
     /// Server config for accepting connections with correct ALPN
     server_config: Arc<ServerConfig>,
+    /// Messages awaiting ACK, keyed by seq_num
+    pending_acks: Arc<RwLock<HashMap<u64, PendingMessage>>>,
+    /// Peer connect/disconnect events
+    peer_event_tx: tokio::sync::broadcast::Sender<PeerEvent>,
+    /// Peers that disconnected immediately (stale mDNS), skip during discovery
+    stale_peers: Arc<RwLock<HashSet<NodeId>>>,
 }
 
 impl Network {
@@ -96,6 +123,7 @@ impl Network {
         info!("Network initialized with NodeId: {} (group: {})", node_id, group_id);
 
         let (message_tx, message_rx) = mpsc::unbounded_channel();
+        let (peer_event_tx, _) = tokio::sync::broadcast::channel(32);
 
         Ok(Self {
             endpoint,
@@ -107,6 +135,9 @@ impl Network {
             seq_num: Arc::new(RwLock::new(0)),
             vector_clock: Arc::new(RwLock::new(VectorClock::new())),
             server_config: Arc::new(server_config),
+            pending_acks: Arc::new(RwLock::new(HashMap::new())),
+            peer_event_tx,
+            stale_peers: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -151,9 +182,9 @@ impl Network {
     }
 
     /// Get the node address (for sharing with other peers).
-    pub async fn node_addr(&self) -> NodeAddr {
+    pub async fn node_addr(&self) -> Result<NodeAddr> {
         self.endpoint.node_addr().await
-            .expect("Failed to get node address")
+            .map_err(|e| Error::Network(format!("Failed to get node address: {}", e)))
     }
 
     /// Connect to a peer by NodeAddr.
@@ -286,24 +317,98 @@ impl Network {
             .collect()
     }
 
+    /// Track a sent message that requires an ACK.
+    pub async fn track_pending(&self, seq_num: u64, peer_id: NodeId, message: Message) {
+        let pending = PendingMessage {
+            peer_id,
+            message,
+            seq_num,
+            sent_at: Instant::now(),
+            attempts: 1,
+        };
+        let mut map = self.pending_acks.write().await;
+        map.insert(seq_num, pending);
+    }
+
+    /// Remove a message from the pending queue (ACK received).
+    /// Returns true if the message was found and removed.
+    pub async fn ack_received(&self, seq_num: u64) -> bool {
+        let mut map = self.pending_acks.write().await;
+        let removed = map.remove(&seq_num).is_some();
+        if removed {
+            debug!("ACK received for seq={}, removed from pending queue", seq_num);
+        }
+        removed
+    }
+
+    /// Retransmit messages that have timed out without ACK.
+    /// Returns the number of messages retransmitted and the seq_nums of messages that exceeded max attempts.
+    pub async fn retransmit_timed_out(&self) -> (usize, Vec<u64>) {
+        let now = Instant::now();
+        let timeout = std::time::Duration::from_millis(RETRANSMIT_INTERVAL_MS);
+
+        let mut to_resend: Vec<PendingMessage> = Vec::new();
+        let mut failed: Vec<u64> = Vec::new();
+
+        {
+            let mut map = self.pending_acks.write().await;
+            let mut remove_keys = Vec::new();
+
+            for (seq, pending) in map.iter_mut() {
+                if now.duration_since(pending.sent_at) >= timeout {
+                    if pending.attempts >= MAX_RETRANSMIT_ATTEMPTS {
+                        warn!("Message seq={} exceeded max retransmit attempts ({}), dropping", seq, MAX_RETRANSMIT_ATTEMPTS);
+                        failed.push(*seq);
+                        remove_keys.push(*seq);
+                    } else {
+                        pending.attempts += 1;
+                        pending.sent_at = now;
+                        to_resend.push(pending.clone());
+                    }
+                }
+            }
+
+            for key in &remove_keys {
+                map.remove(key);
+            }
+        }
+
+        let mut resent_count = 0;
+        for pending in &to_resend {
+            debug!(
+                "Retransmitting seq={} to {} (attempt {})",
+                pending.seq_num, pending.peer_id, pending.attempts
+            );
+            if let Err(e) = self.send(&pending.peer_id.to_string(), pending.message.clone()).await {
+                warn!("Retransmit failed for seq={}: {}", pending.seq_num, e);
+            } else {
+                resent_count += 1;
+            }
+        }
+
+        (resent_count, failed)
+    }
+
+    /// Get the count of messages currently pending ACK.
+    pub async fn pending_ack_count(&self) -> usize {
+        self.pending_acks.read().await.len()
+    }
+
     /// Discover and connect to all peers found by iroh's discovery
     ///
     /// This method queries the endpoint's remote info to find discovered peers
     /// and attempts to connect to any that aren't already connected.
     pub async fn discover_and_connect_peers(&self) -> Result<usize> {
-        // Get all remote peers that iroh has discovered
         let remote_infos = self.endpoint.remote_info_iter();
 
         let mut connected_count = 0;
         for remote_info in remote_infos {
             let node_id = remote_info.node_id;
 
-            // Skip if it's ourselves
             if node_id == self.node_id {
                 continue;
             }
 
-            // Skip if already connected
             {
                 let peers = self.peers.read().await;
                 if peers.contains_key(&node_id) {
@@ -311,11 +416,28 @@ impl Network {
                 }
             }
 
-            // Try to connect using the full NodeAddr from remote_info
+            {
+                let stale = self.stale_peers.read().await;
+                if stale.contains(&node_id) {
+                    continue;
+                }
+            }
+
             match self.connect(remote_info.into()).await {
                 Ok(()) => {
-                    info!("✅ Auto-connected to discovered peer: {}", node_id);
-                    connected_count += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let still_connected = {
+                        let peers = self.peers.read().await;
+                        peers.contains_key(&node_id)
+                    };
+                    if still_connected {
+                        info!("Connected to discovered peer: {}", node_id);
+                        connected_count += 1;
+                        let _ = self.peer_event_tx.send(PeerEvent::Connected(node_id.to_string()));
+                    } else {
+                        debug!("Peer {} disconnected immediately (stale mDNS), blacklisted", node_id);
+                        self.stale_peers.write().await.insert(node_id);
+                    }
                 }
                 Err(e) => {
                     debug!("Failed to connect to {}: {}", node_id, e);
@@ -326,10 +448,19 @@ impl Network {
         Ok(connected_count)
     }
 
+    /// Remove a peer from the stale blacklist (e.g. if it comes back online with same NodeId).
+    pub async fn clear_stale_peer(&self, node_id: &NodeId) {
+        self.stale_peers.write().await.remove(node_id);
+    }
+
     /// Receive the next message from any peer.
     pub async fn recv(&self) -> Option<(NodeId, Message)> {
         let mut rx = self.message_rx.write().await;
         rx.recv().await
+    }
+
+    pub fn subscribe_peer_events(&self) -> tokio::sync::broadcast::Receiver<PeerEvent> {
+        self.peer_event_tx.subscribe()
     }
 
     /// Start accepting incoming connections.
@@ -338,6 +469,9 @@ impl Network {
         let peers = self.peers.clone();
         let message_tx = self.message_tx.clone();
         let server_config = self.server_config.clone();
+        let peer_event_tx = self.peer_event_tx.clone();
+        let my_node_id = self.node_id;
+        let stale_peers = self.stale_peers.clone();
 
         tokio::spawn(async move {
             loop {
@@ -348,6 +482,9 @@ impl Network {
                             peers.clone(),
                             message_tx.clone(),
                             server_config.clone(),
+                            peer_event_tx.clone(),
+                            my_node_id,
+                            stale_peers.clone(),
                         ));
                     }
                     None => {
@@ -368,6 +505,9 @@ impl Network {
         peers: Arc<RwLock<HashMap<NodeId, Connection>>>,
         message_tx: mpsc::UnboundedSender<(NodeId, Message)>,
         server_config: Arc<ServerConfig>,
+        peer_event_tx: tokio::sync::broadcast::Sender<PeerEvent>,
+        my_node_id: NodeId,
+        stale_peers: Arc<RwLock<HashSet<NodeId>>>,
     ) {
         // Accept the connection with the server config that has "murmur" ALPN
         let connecting = match incoming.accept_with(server_config) {
@@ -396,12 +536,42 @@ impl Network {
             }
         };
 
+        if peer_id == my_node_id {
+            debug!("Rejecting self-connection via mDNS cache");
+            return;
+        }
+
         info!("Accepted incoming connection from {}", peer_id);
+
+        // Peer came back alive — remove from stale blacklist
+        stale_peers.write().await.remove(&peer_id);
 
         // Store the connection
         {
             let mut peers_lock = peers.write().await;
             peers_lock.insert(peer_id, conn.clone());
+        }
+        let _ = peer_event_tx.send(PeerEvent::Connected(peer_id.to_string()));
+
+        // Request full sync from the connecting peer so we get their CRDT state
+        {
+            let msg = bincode::serialize(&Message::SyncRequest)
+                .unwrap_or_default();
+            if !msg.is_empty() {
+                match conn.open_uni().await {
+                    Ok(mut send_stream) => {
+                        if let Err(e) = send_stream.write_all(&msg).await {
+                            warn!("Failed to send SyncRequest to {}: {}", peer_id, e);
+                        } else {
+                            let _ = send_stream.finish();
+                            info!("Sent SyncRequest to incoming peer {}", peer_id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to open stream to {}: {}", peer_id, e);
+                    }
+                }
+            }
         }
 
         // Handle messages from this peer
@@ -441,6 +611,7 @@ impl Network {
         let mut peers_lock = peers.write().await;
         peers_lock.remove(&peer_id);
         info!("Peer disconnected: {}", peer_id);
+        let _ = peer_event_tx.send(PeerEvent::Disconnected(peer_id.to_string()));
     }
 }
 
@@ -450,7 +621,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_network_creation() {
-        let network = Network::new().await.unwrap();
+        let network = Network::new("test-group".to_string()).await.unwrap();
         assert!(!network.node_id_string().is_empty());
+        assert_eq!(network.group_id(), "test-group");
+    }
+
+    #[tokio::test]
+    async fn test_pending_ack_tracking() {
+        let network = Network::new("test-ack".to_string()).await.unwrap();
+        let node_id = network.node_id();
+
+        let msg = Message::Ack { seq_num: 1 };
+        network.track_pending(1, node_id, msg).await;
+        assert_eq!(network.pending_ack_count().await, 1);
+
+        let removed = network.ack_received(1).await;
+        assert!(removed);
+        assert_eq!(network.pending_ack_count().await, 0);
+
+        let removed_again = network.ack_received(1).await;
+        assert!(!removed_again);
     }
 }

@@ -6,6 +6,8 @@ mod user_db;
 mod config;
 mod swarm_manager;
 mod instance_lock;
+mod model;
+mod controller;
 
 use clap::{Parser, Subcommand};
 use error::Result;
@@ -67,22 +69,19 @@ enum Commands {
 }
 
 fn init_logger() {
-    let log_level = if cfg!(debug_assertions) {
-        log::LevelFilter::Debug
-    } else {
-        log::LevelFilter::Info
-    };
-
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
-                "[{}][{}] {}",
+                "[{}][{}][{}] {}",
                 humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
                 record.level(),
+                record.target(),
                 message
             ))
         })
-        .level(log_level)
+        .level(log::LevelFilter::Warn)
+        .level_for("group_vibe_workbench", log::LevelFilter::Info)
+        .level_for("murmur", log::LevelFilter::Info)
         .chain(std::io::stdout())
         .apply()
         .expect("Failed to initialize logger");

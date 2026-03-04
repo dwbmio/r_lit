@@ -18,6 +18,7 @@ pub mod router;
 pub mod theme;
 pub mod pages;
 pub mod popviews;
+pub mod components;
 
 pub use page::Page;
 pub use view::View;

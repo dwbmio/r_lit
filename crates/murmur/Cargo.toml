@@ -1,6 +1,6 @@
 [package]
 name = "murmur"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["R_LIT Contributors"]
 description = "Distributed P2P collaboration library with automatic leader election and CRDT synchronization"
@@ -39,6 +39,7 @@ uuid = { version = "1", features = ["v4", "serde"], default-features = false }
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 anyhow = { version = "1", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # Service discovery - using iroh's built-in LocalSwarmDiscovery
 

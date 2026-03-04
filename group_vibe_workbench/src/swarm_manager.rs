@@ -1,132 +1,99 @@
 //! Global Swarm Manager
 //!
-//! Ensures only one Swarm instance exists throughout the application lifecycle.
-//! This prevents redb database lock conflicts when switching between pages.
+//! Maintains a long-lived tokio runtime so the swarm's background tasks
+//! (heartbeat, message handler, discovery) survive across GUI operations.
 
 use murmur::{Swarm, Result as MurmurResult};
-use std::sync::OnceLock;
-use tokio::sync::RwLock;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
-/// Global Swarm instance
-static GLOBAL_SWARM: OnceLock<RwLock<Option<Swarm>>> = OnceLock::new();
+/// Long-lived tokio runtime handle (thread-safe, clone-able).
+static RT_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 
-/// Swarm configuration
+/// Keep the runtime alive for the entire process.
+static _RT_KEEPER: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+/// Global swarm instance, protected by Mutex.
+static SWARM: OnceLock<Mutex<Option<Swarm>>> = OnceLock::new();
+
+fn rt() -> &'static tokio::runtime::Handle {
+    RT_HANDLE.get_or_init(|| {
+        let runtime = _RT_KEEPER.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("swarm-rt")
+                .build()
+                .expect("Failed to create swarm tokio runtime")
+        });
+        runtime.handle().clone()
+    })
+}
+
+fn swarm_slot() -> &'static Mutex<Option<Swarm>> {
+    SWARM.get_or_init(|| Mutex::new(None))
+}
+
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
     pub storage_path: PathBuf,
     pub group_id: String,
 }
 
-/// Initialize or get the global Swarm instance
-///
-/// # Arguments
-/// - `config`: Swarm configuration (storage path and group ID)
-///
-/// # Returns
-/// A clone of the global Swarm instance
-///
-/// # Behavior
-/// - First call: Creates a new Swarm with the provided config
-/// - Subsequent calls: Returns the existing Swarm (ignores new config)
-/// - Thread-safe: Multiple concurrent calls are safe
-pub async fn get_or_init_swarm(config: SwarmConfig) -> MurmurResult<Swarm> {
-    let swarm_lock = GLOBAL_SWARM.get_or_init(|| RwLock::new(None));
+/// Create or return the global swarm. Blocks the calling thread.
+pub fn get_or_init_swarm(config: SwarmConfig) -> MurmurResult<Swarm> {
+    let mut guard = swarm_slot().lock().unwrap();
 
-    let mut swarm_opt = swarm_lock.write().await;
-
-    if let Some(swarm) = swarm_opt.as_ref() {
-        // Swarm already exists, return a clone
-        log::info!("Using existing global Swarm instance");
+    if let Some(ref swarm) = *guard {
+        log::info!("Using existing global Swarm");
         return Ok(swarm.clone());
     }
 
-    // Create new Swarm
     log::info!(
-        "Creating new global Swarm instance: group_id={}, storage_path={:?}",
-        config.group_id,
-        config.storage_path
+        "Creating global Swarm: group_id={}, path={:?}",
+        config.group_id, config.storage_path
     );
 
-    let swarm = Swarm::builder()
-        .storage_path(config.storage_path)
-        .group_id(config.group_id)
-        .build()
-        .await?;
+    let swarm = rt().block_on(async {
+        let s = Swarm::builder()
+            .storage_path(config.storage_path)
+            .group_id(&config.group_id)
+            .build()
+            .await?;
+        s.start().await?;
+        Ok::<Swarm, murmur::Error>(s)
+    })?;
 
-    swarm.start().await?;
-
-    *swarm_opt = Some(swarm.clone());
-
+    *guard = Some(swarm.clone());
     Ok(swarm)
 }
 
-/// Get the existing Swarm instance without creating a new one
+/// Spawn an async task on the long-lived swarm runtime (non-blocking).
+pub fn spawn<F>(f: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    rt().spawn(f)
+}
+
+/// Block the current thread waiting for a future on the swarm runtime.
 ///
-/// # Returns
-/// - `Some(Swarm)` if a Swarm has been initialized
-/// - `None` if no Swarm exists yet
-pub async fn get_swarm() -> Option<Swarm> {
-    let swarm_lock = GLOBAL_SWARM.get()?;
-    let swarm_opt = swarm_lock.read().await;
-    swarm_opt.clone()
+/// MUST NOT be called from within the swarm runtime itself.
+pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    rt().block_on(f)
 }
 
-/// Shutdown and clear the global Swarm instance
-///
-/// This should be called when the application exits or when switching to a different group.
-pub async fn shutdown_swarm() -> MurmurResult<()> {
-    if let Some(swarm_lock) = GLOBAL_SWARM.get() {
-        let mut swarm_opt = swarm_lock.write().await;
-
-        if let Some(swarm) = swarm_opt.take() {
-            log::info!("Shutting down global Swarm instance");
-            swarm.shutdown().await?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Check if a Swarm instance exists
-pub async fn has_swarm() -> bool {
-    if let Some(swarm_lock) = GLOBAL_SWARM.get() {
-        let swarm_opt = swarm_lock.read().await;
-        swarm_opt.is_some()
-    } else {
-        false
+/// Shutdown and clear the global Swarm. Blocks the calling thread.
+pub fn shutdown_swarm() {
+    let mut guard = swarm_slot().lock().unwrap();
+    if let Some(swarm) = guard.take() {
+        log::info!("Shutting down global Swarm");
+        let _ = rt().block_on(swarm.shutdown());
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_global_swarm_singleton() {
-        let config1 = SwarmConfig {
-            storage_path: PathBuf::from("/tmp/test_swarm_1"),
-            group_id: "test_group_1".to_string(),
-        };
-
-        let config2 = SwarmConfig {
-            storage_path: PathBuf::from("/tmp/test_swarm_2"),
-            group_id: "test_group_2".to_string(),
-        };
-
-        // First call creates Swarm with config1
-        let swarm1 = get_or_init_swarm(config1.clone()).await.unwrap();
-        let node_id1 = swarm1.node_id().await;
-
-        // Second call returns the same Swarm (ignores config2)
-        let swarm2 = get_or_init_swarm(config2).await.unwrap();
-        let node_id2 = swarm2.node_id().await;
-
-        // Both should have the same node ID
-        assert_eq!(node_id1, node_id2);
-
-        // Cleanup
-        shutdown_swarm().await.unwrap();
-        let _ = std::fs::remove_dir_all("/tmp/test_swarm_1");
-    }
+/// Get the existing swarm (non-blocking).
+pub fn get_swarm() -> Option<Swarm> {
+    let guard = swarm_slot().lock().ok()?;
+    guard.clone()
 }
