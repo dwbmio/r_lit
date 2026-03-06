@@ -1,0 +1,36 @@
+# omniplan_covers_ding
+
+- purpose: Convert OmniPlan CSV exports to DingTalk-compatible Excel (task or requirement)
+- version: 0.1.0
+- language: Rust (edition 2024)
+- portability: NOT portable — depends on external path dep `cli-common`
+
+## Command Syntax
+
+```
+omniplan_covers_ding convert <csv-file> <doc-type> [-p <parent>] [-t <liter>] [-l <limit>]
+```
+
+## Arguments
+
+- `<csv-file>`: Input CSV file path (required)
+- `<doc-type>`: `task` or `require` (required)
+- `-p, --parent <value>`: Parent task value
+- `-t, --liter <value>`: Liter (iteration) assignment
+- `-l, --limit <value>`: Filter in k=v format
+
+## Dependencies
+
+- cli-common (external path: /Users/admin/data0/private_work/crate-r-svr-api/cli-common)
+- csv, rust_xlsxwriter, strum, tokio, thiserror
+
+## Build
+
+```bash
+cargo build --release
+```
+
+## Notes
+
+- Internal tool, not published
+- Requires external path dependency, not CI-tested

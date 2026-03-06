@@ -1,0 +1,28 @@
+# video-generator
+
+- purpose: Programmatic video generation tools built on FFmpeg
+- language: Rust
+
+## Sub-projects
+
+### movie-maker (v0.1.0)
+- purpose: Core library for code-driven video generation
+- dependencies: ffmpeg-next (git), image, imageproc, tween, tokio, serde, serde_json, thiserror
+- binaries: library + perf_main (benchmark)
+- input: Image frames, animation parameters
+- output: Encoded video files
+
+### demo / hs-mvp (v0.1.0)
+- purpose: Demo application using movie-maker for scene rendering
+- dependencies: movie-maker (path), image, imageproc, tokio
+
+## Build
+
+```bash
+cd movie-maker && cargo build --release
+cd demo && cargo build --release
+```
+
+## System Requirements
+
+- FFmpeg development libraries (libavcodec, libavformat, etc.)

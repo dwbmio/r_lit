@@ -1,0 +1,83 @@
+# murmur
+
+- 用途: 分布式 P2P 协作库，CRDT 同步 + 自动 Leader 选举
+- 版本: 0.2.0
+- 语言: Rust (edition 2021)
+- 类型: 库
+
+## API 入口
+
+```rust
+let swarm = Swarm::builder()
+    .group_id("my-group")
+    .storage_path("./data")
+    .build()
+    .await?;
+swarm.start().await?;
+```
+
+## 核心操作
+
+- `put(key, value)` → 存储键值对，同步到对等节点
+- `get(key)` → 获取值
+- `delete(key)` → 删除键
+- `connect_peer(addr)` → 手动连接节点
+- `subscribe()` → 接收 SwarmEvent 事件流
+- `announce(nickname)` / `list_announced_peers()` → 群组存在感知
+- `discover_and_connect_local_peers()` → 按需 mDNS 发现
+
+## Feature Flags
+
+```toml
+default = ["redb-backend"]
+sqlite-backend = ["rusqlite"]
+redb-backend = ["redb"]
+rocksdb-backend = ["rocksdb"]
+file-ops = []  # 带版本控制的文件同步 API
+```
+
+## 文件操作 (feature: file-ops)
+
+- `put_file(path)` → 上传，自动版本化
+- `get_file(key, path)` → 下载最新版
+- `get_file_version(key, version, path)` → 下载指定版本
+- `file_history(key)` → 版本历史 (作者/时间戳)
+
+## 架构
+
+- network.rs: iroh-net 端点, LocalSwarmDiscovery, ALPN, 节点管理
+- election.rs: Bully 算法, 心跳 2s, 超时 5s
+- sync.rs: Automerge CRDT 文档
+- storage.rs: StorageBackend trait, 可插拔后端
+
+## 后台任务 (start() 后)
+
+- 心跳 (2s)
+- 消息处理器
+- 重传 (1s)
+- 节点事件转发
+- 自动发现 (3s)
+
+## 依赖
+
+- iroh-net 0.28 (P2P + NAT 穿透)
+- automerge 0.5 (CRDT)
+- redb 2 / rusqlite 0.32 / rocksdb 0.22 (存储)
+- tokio, serde, uuid, thiserror
+
+## 构建
+
+```bash
+cd crates/murmur && cargo build
+cd crates/murmur && cargo test
+cd crates/murmur && cargo test --features file-ops
+```
+
+## 示例
+
+```bash
+cargo run --example basic
+cargo run --example group_chat
+cargo run --example file_sync --features file-ops
+cargo run --example benchmark --release
+```

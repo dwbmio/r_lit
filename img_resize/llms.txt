@@ -1,0 +1,59 @@
+# img_resize
+
+- purpose: Resize and compress images (PNG/JPG). Pure Rust, no network dependencies.
+- version: 0.2.0
+- language: Rust
+
+## Command Syntax
+
+```
+img_resize [--json] r_resize <PATH> [-m <SIZE>] [--rw <WIDTH> --rh <HEIGHT>] [-c <FILE>] [-j]
+```
+
+## Arguments
+
+- `<PATH>`: Image file or directory path (PNG/JPG)
+- `-m <SIZE>`: Max pixel value for proportional scaling (preserves aspect ratio)
+- `--rw <WIDTH>` + `--rh <HEIGHT>`: Exact resize dimensions (must use together)
+- `-c <FILE>`: YAML config file for batch multi-size output
+- `-j`: Force convert output to JPG
+- `--json`: Structured JSON output
+
+## Resize Modes (mutually exclusive)
+
+1. Proportional: `-m 800` — scale so max dimension <= 800px
+2. Exact: `--rw 1920 --rh 1080` — resize to exact dimensions
+3. Config file: `-c config.yaml` — generate multiple sizes per YAML spec
+
+## YAML Config Format
+
+```yaml
+vec_size:
+  - [1920, 1080]
+  - [800, 600]
+vec_f:
+  - "output/large.png"
+  - "output/small.png"
+base_f: "/output/base/path"
+```
+
+## Examples
+
+```bash
+img_resize r_resize -m 800 image.jpg
+img_resize r_resize --rw 1920 --rh 1080 image.jpg
+img_resize r_resize -m 1024 images/
+img_resize --json r_resize -m 800 image.jpg
+```
+
+## Notes
+
+- `tinyfy` subcommand is disabled (OpenSSL/musl incompatibility)
+- Supports batch directory processing
+- Exit code 1 on error, JSON error envelope when `--json` is set
+
+## Install
+
+```bash
+cargo build --release
+```

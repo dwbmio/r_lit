@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target/
+
+# Environment and local config
+.env
+config.yml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

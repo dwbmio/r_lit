@@ -1,0 +1,57 @@
+# group_vibe_workbench
+
+- purpose: Desktop P2P collaboration workbench with zero-config local network discovery
+- version: 0.1.0
+- language: Rust
+- ui_framework: GPUI 0.2 + gpui-component 0.5
+- p2p_library: murmur (iroh-net + Automerge CRDT)
+
+## Command Syntax
+
+```
+group_vibe_workbench launch [-n <NICKNAME>] [--width <W>] [--height <H>]
+group_vibe_workbench dev --count <N>
+```
+
+## Arguments
+
+- `launch`: Start the workbench GUI
+  - `-n, --nickname <NAME>`: User display name
+  - `--width <W>`: Window width in pixels
+  - `--height <H>`: Window height in pixels
+- `dev`: Multi-instance development mode
+  - `--count <N>`: Number of instances to spawn
+
+## Architecture
+
+- MVC pattern (GPUI requires main-thread rendering)
+- model.rs: Pure data structs (AppState, SwarmState)
+- controller.rs: Async logic, swarm operations
+- swarm_manager.rs: Global Swarm singleton with dedicated tokio Runtime
+- shared_file.rs: File sync via Murmur CRDT + file watching (notify)
+- gui/: Components, pages, Catppuccin Mocha theme
+
+## P2P Details
+
+- Discovery: mDNS (LocalSwarmDiscovery), auto-scan every 3s
+- Sync: Automerge CRDT, conflict-free
+- Election: Bully algorithm, heartbeat 2s, timeout 5s
+- Storage: redb (default)
+- Shared file key: `prompt_context`
+
+## Platform Dependencies
+
+- macOS: None (Metal via Xcode)
+- Linux: libxcb-shape0-dev, libxcb-xfixes0-dev, libxkbcommon-dev
+- Windows: None
+
+## Build
+
+```bash
+cd group_vibe_workbench && cargo build --release
+```
+
+## Notes
+
+- Not in CI (GPUI/Metal dependencies)
+- Single-instance lock enforced in release mode

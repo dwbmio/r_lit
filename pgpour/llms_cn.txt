@@ -1,0 +1,74 @@
+# pgpour
+
+- 用途: Postgres CDC → Kafka 实时数据管道，基于逻辑复制
+- 版本: 0.1.0
+- 语言: Rust (edition 2024, MSRV 1.88.0)
+- 基于: supabase/etl
+
+## 命令格式
+
+```
+pgpour [--config <YAML>] --pg-host <HOST> --pg-database <DB> --pg-username <USER> [选项]
+```
+
+## 核心参数
+
+- `--config <path>`: YAML 配置文件 (最低优先级，被环境变量/CLI 覆盖)
+- `--pg-host`: Postgres 主机 (env: PG_HOST)
+- `--pg-port`: 端口 (默认: 5432)
+- `--pg-database`: 数据库名 (env: PG_DATABASE)
+- `--pg-username`: 用户名，需 REPLICATION 权限 (env: PG_USERNAME)
+- `--pg-password`: 密码 (env: PG_PASSWORD)
+- `--publication`: Publication 名 (默认: cdc_publication)
+
+## SSH 隧道参数 (可选)
+
+- `--pg-ssh-host`: 跳板机地址，设置后启用隧道
+- `--pg-ssh-port`: SSH 端口 (默认: 22)
+- `--pg-ssh-username`: SSH 用户名
+- `--pg-ssh-password` 或 `--pg-ssh-private-key-path`: 二选一鉴权
+
+## Kafka 参数
+
+- `--kafka-brokers`: Broker 地址 (默认: localhost:9092)
+- `--kafka-topic-prefix`: Topic 前缀 (默认: cdc)
+- `--kafka-security-protocol`: plaintext|ssl|sasl_plaintext|sasl_ssl
+- `--kafka-sasl-mechanism`: plain|scram-sha-256|scram-sha-512
+- `--kafka-sasl-username`, `--kafka-sasl-password`: SASL 凭证
+- `--kafka-ssl-ca-location`: CA 证书路径
+- `--kafka-ssl-certificate-location`, `--kafka-ssl-key-location`: mTLS 客户端证书/私钥
+
+## 调优参数
+
+- `--batch-max-fill-ms`: 批次填充时长 ms (默认: 5000)
+- `--max-table-sync-workers`: 并行同步 worker 数 (默认: 4)
+
+## 配置优先级
+
+CLI 参数 > 环境变量 > YAML 配置文件 > 默认值
+
+## 消息格式
+
+```json
+{"op": "insert|update|delete|sync", "table": "schema.table", "before": null, "after": {...}}
+```
+
+- Topic: `{prefix}.{schema}.{table}`
+- Message key: 主键列值
+
+## 前置条件
+
+- PostgreSQL 14+，wal_level=logical
+- 连接用户需 REPLICATION 权限
+- 目标表需 CREATE PUBLICATION
+
+## 可选 Feature
+
+- `--features metric`: OpenTelemetry OTLP 指标导出
+
+## 构建
+
+```bash
+cargo build --release
+# 或: docker compose up -d
+```

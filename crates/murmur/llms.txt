@@ -1,0 +1,83 @@
+# murmur
+
+- purpose: Distributed P2P collaboration library with CRDT sync and automatic leader election
+- version: 0.2.0
+- language: Rust (edition 2021)
+- type: library
+
+## API Entry Point
+
+```rust
+let swarm = Swarm::builder()
+    .group_id("my-group")
+    .storage_path("./data")
+    .build()
+    .await?;
+swarm.start().await?;
+```
+
+## Core Operations
+
+- `put(key, value)` → store key-value pair, sync to peers
+- `get(key)` → retrieve value
+- `delete(key)` → remove key
+- `connect_peer(addr)` → manually connect to a peer
+- `subscribe()` → receive SwarmEvent stream
+- `announce(nickname)` / `list_announced_peers()` → group presence
+- `discover_and_connect_local_peers()` → on-demand mDNS discovery
+
+## Feature Flags
+
+```toml
+default = ["redb-backend"]
+sqlite-backend = ["rusqlite"]
+redb-backend = ["redb"]
+rocksdb-backend = ["rocksdb"]
+file-ops = []  # versioned file sync API
+```
+
+## File Operations (feature: file-ops)
+
+- `put_file(path)` → upload with auto-versioning
+- `get_file(key, path)` → download latest
+- `get_file_version(key, version, path)` → download specific version
+- `file_history(key)` → version history with author/timestamp
+
+## Architecture
+
+- network.rs: iroh-net endpoint, LocalSwarmDiscovery, ALPN, peer management
+- election.rs: Bully algorithm, heartbeat 2s, timeout 5s
+- sync.rs: Automerge CRDT document
+- storage.rs: StorageBackend trait, pluggable backends
+
+## Background Tasks (after start())
+
+- Heartbeat (2s interval)
+- Message handler
+- Retransmit (1s)
+- Peer event forwarder
+- Auto-discovery (3s)
+
+## Dependencies
+
+- iroh-net 0.28 (P2P + NAT traversal)
+- automerge 0.5 (CRDT)
+- redb 2 / rusqlite 0.32 / rocksdb 0.22 (storage)
+- tokio, serde, uuid, thiserror
+
+## Build
+
+```bash
+cd crates/murmur && cargo build
+cd crates/murmur && cargo test
+cd crates/murmur && cargo test --features file-ops
+```
+
+## Examples
+
+```bash
+cargo run --example basic
+cargo run --example group_chat
+cargo run --example file_sync --features file-ops
+cargo run --example benchmark --release
+```

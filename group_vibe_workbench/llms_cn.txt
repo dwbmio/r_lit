@@ -1,0 +1,57 @@
+# group_vibe_workbench
+
+- 用途: 桌面 P2P 协作工作台，局域网零配置发现与协同
+- 版本: 0.1.0
+- 语言: Rust
+- UI 框架: GPUI 0.2 + gpui-component 0.5
+- P2P 库: murmur (iroh-net + Automerge CRDT)
+
+## 命令格式
+
+```
+group_vibe_workbench launch [-n <NICKNAME>] [--width <W>] [--height <H>]
+group_vibe_workbench dev --count <N>
+```
+
+## 参数
+
+- `launch`: 启动工作台 GUI
+  - `-n, --nickname <NAME>`: 用户昵称
+  - `--width <W>`: 窗口宽度 (像素)
+  - `--height <H>`: 窗口高度 (像素)
+- `dev`: 多实例开发模式
+  - `--count <N>`: 启动实例数
+
+## 架构
+
+- MVC 模式 (GPUI 要求主线程渲染)
+- model.rs: 纯数据结构
+- controller.rs: 异步逻辑
+- swarm_manager.rs: 全局 Swarm 单例 + 独立 tokio Runtime
+- shared_file.rs: 通过 Murmur CRDT + notify 文件监听同步
+- gui/: 组件、页面、Catppuccin Mocha 主题
+
+## P2P 细节
+
+- 发现: mDNS (LocalSwarmDiscovery)，每 3 秒自动扫描
+- 同步: Automerge CRDT，无冲突
+- 选举: Bully 算法，心跳 2s，超时 5s
+- 存储: redb (默认)
+- 共享文件 key: `prompt_context`
+
+## 平台依赖
+
+- macOS: 无 (Metal 通过 Xcode)
+- Linux: libxcb-shape0-dev, libxcb-xfixes0-dev, libxkbcommon-dev
+- Windows: 无
+
+## 构建
+
+```bash
+cd group_vibe_workbench && cargo build --release
+```
+
+## 备注
+
+- 不在 CI 中 (GPUI/Metal 依赖)
+- Release 模式下启用单实例锁

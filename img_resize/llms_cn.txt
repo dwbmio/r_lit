@@ -1,0 +1,59 @@
+# img_resize
+
+- 用途: 图片缩放与压缩 (PNG/JPG)，纯 Rust 实现，无网络依赖
+- 版本: 0.2.0
+- 语言: Rust
+
+## 命令格式
+
+```
+img_resize [--json] r_resize <PATH> [-m <SIZE>] [--rw <WIDTH> --rh <HEIGHT>] [-c <FILE>] [-j]
+```
+
+## 参数
+
+- `<PATH>`: 图片文件或目录路径 (PNG/JPG)
+- `-m <SIZE>`: 最大像素值，等比缩放 (保持宽高比)
+- `--rw <WIDTH>` + `--rh <HEIGHT>`: 精确尺寸 (必须同时使用)
+- `-c <FILE>`: YAML 配置文件，批量生成多尺寸
+- `-j`: 强制转为 JPG 格式
+- `--json`: 结构化 JSON 输出
+
+## 缩放模式 (互斥)
+
+1. 等比缩放: `-m 800` — 最大边 <= 800px
+2. 精确调整: `--rw 1920 --rh 1080` — 指定宽高
+3. 配置文件: `-c config.yaml` — 按 YAML 规格生成多尺寸
+
+## YAML 配置格式
+
+```yaml
+vec_size:
+  - [1920, 1080]
+  - [800, 600]
+vec_f:
+  - "output/large.png"
+  - "output/small.png"
+base_f: "/output/base/path"
+```
+
+## 示例
+
+```bash
+img_resize r_resize -m 800 image.jpg
+img_resize r_resize --rw 1920 --rh 1080 image.jpg
+img_resize r_resize -m 1024 images/
+img_resize --json r_resize -m 800 image.jpg
+```
+
+## 备注
+
+- `tinyfy` 子命令已禁用 (OpenSSL/musl 不兼容)
+- 支持目录批量处理
+- 错误时退出码 1，使用 `--json` 时返回 JSON 错误信封
+
+## 安装
+
+```bash
+cargo build --release
+```

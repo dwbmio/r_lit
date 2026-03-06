@@ -1,0 +1,40 @@
+# pgpour configuration
+# Priority: CLI args > env vars > this file > defaults
+# Sensitive values (passwords) should stay in env vars instead of this file.
+
+postgres:
+  host: starlink-dev-uc-internal.hs99.vip
+  port: 5432
+  database: lgh_blockblast_client
+  username: solutionhub_dev
+  # password: (use PG_PASSWORD env var)
+  publication: cdc_publication
+  # SSH tunnel (connect PG through a bastion / jump server)
+  # ssh_host: bastion.example.com
+  # ssh_port: 22
+  # ssh_username: admin
+  # ssh_password: (use PG_SSH_PASSWORD env var)
+  # ssh_private_key_path: /etc/pgpour/id_rsa
+  # ssh_private_key_passphrase: (use PG_SSH_PRIVATE_KEY_PASSPHRASE env var)
+
+kafka:
+  brokers: 10.9.169.2:9092,10.9.131.68:9092,10.9.103.246:9092
+  topic_prefix: cdc
+  # Auth: plaintext (default) | ssl | sasl_plaintext | sasl_ssl
+  security_protocol: plaintext
+  # SASL (required when security_protocol contains "sasl")
+  # sasl_mechanism: plain          # plain | scram-sha-256 | scram-sha-512
+  # sasl_username: myuser
+  # sasl_password: (use KAFKA_SASL_PASSWORD env var)
+  # SSL / mTLS (required when security_protocol contains "ssl")
+  # ssl_ca_location: /etc/pgpour/ca.pem
+  # ssl_certificate_location: /etc/pgpour/client.pem
+  # ssl_key_location: /etc/pgpour/client.key
+
+pipeline:
+  batch_max_fill_ms: 5000
+  max_table_sync_workers: 4
+
+# Requires --features metric build
+# otel:
+#   endpoint: http://otel-collector:4317

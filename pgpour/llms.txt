@@ -1,0 +1,77 @@
+# pgpour
+
+- purpose: Postgres CDC to Kafka real-time data pipeline via logical replication
+- version: 0.1.0
+- language: Rust (edition 2024, MSRV 1.88.0)
+- based_on: supabase/etl
+
+## Command Syntax
+
+```
+pgpour [--config <YAML>] --pg-host <HOST> --pg-database <DB> --pg-username <USER> [options]
+```
+
+## Core Arguments
+
+- `--config <path>`: YAML config file (lowest priority, overridden by env/CLI)
+- `--pg-host`: Postgres host (env: PG_HOST)
+- `--pg-port`: Postgres port (default: 5432, env: PG_PORT)
+- `--pg-database`: Database name (env: PG_DATABASE)
+- `--pg-username`: Username with REPLICATION privilege (env: PG_USERNAME)
+- `--pg-password`: Password (env: PG_PASSWORD)
+- `--publication`: Publication name (default: cdc_publication, env: PG_PUBLICATION)
+
+## SSH Tunnel Arguments (optional)
+
+- `--pg-ssh-host`: Bastion host, enables tunnel when set (env: PG_SSH_HOST)
+- `--pg-ssh-port`: SSH port (default: 22)
+- `--pg-ssh-username`: SSH username
+- `--pg-ssh-password`: SSH password
+- `--pg-ssh-private-key-path`: SSH private key file
+- `--pg-ssh-private-key-passphrase`: Key passphrase
+
+## Kafka Arguments
+
+- `--kafka-brokers`: Bootstrap servers (default: localhost:9092, env: KAFKA_BROKERS)
+- `--kafka-topic-prefix`: Topic prefix (default: cdc, env: KAFKA_TOPIC_PREFIX)
+- `--kafka-security-protocol`: plaintext|ssl|sasl_plaintext|sasl_ssl (default: plaintext)
+- `--kafka-sasl-mechanism`: plain|scram-sha-256|scram-sha-512
+- `--kafka-sasl-username`, `--kafka-sasl-password`: SASL credentials
+- `--kafka-ssl-ca-location`: CA cert path
+- `--kafka-ssl-certificate-location`: Client cert (mTLS)
+- `--kafka-ssl-key-location`: Client key (mTLS)
+
+## Tuning Arguments
+
+- `--batch-max-fill-ms`: Batch fill duration ms (default: 5000)
+- `--max-table-sync-workers`: Parallel sync workers (default: 4)
+
+## Config Priority
+
+CLI args > environment variables > YAML config file > defaults
+
+## Message Format
+
+```json
+{"op": "insert|update|delete|sync", "table": "schema.table", "before": null, "after": {...}}
+```
+
+- Topic: `{prefix}.{schema}.{table}`
+- Message key: primary key column values
+
+## Prerequisites
+
+- PostgreSQL 14+ with wal_level=logical
+- User with REPLICATION privilege
+- CREATE PUBLICATION for target tables
+
+## Optional Features
+
+- `--features metric`: OpenTelemetry OTLP metrics export (requires --otlp-endpoint)
+
+## Build
+
+```bash
+cargo build --release
+# or: docker compose up -d
+```

@@ -1,0 +1,28 @@
+# video-generator
+
+- 用途: 基于 FFmpeg 的编程式视频生成工具
+- 语言: Rust
+
+## 子项目
+
+### movie-maker (v0.1.0)
+- 用途: 视频生成核心库
+- 依赖: ffmpeg-next (git), image, imageproc, tween, tokio, serde, serde_json, thiserror
+- 二进制: 库 + perf_main (性能基准)
+- 输入: 图像帧、动画参数
+- 输出: 编码后的视频文件
+
+### demo / hs-mvp (v0.1.0)
+- 用途: 使用 movie-maker 渲染场景的演示应用
+- 依赖: movie-maker (path), image, imageproc, tokio
+
+## 构建
+
+```bash
+cd movie-maker && cargo build --release
+cd demo && cargo build --release
+```
+
+## 系统要求
+
+- FFmpeg 开发库 (libavcodec, libavformat 等)
