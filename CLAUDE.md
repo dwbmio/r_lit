@@ -34,6 +34,19 @@ just build <tool> release
 just install_loc <tool> release
 ```
 
+## Documentation Standards
+
+遵循 `ci-all-in-one/_ai/rules/doc-organization.md` 双语文档规范。每个子工具/库目录必须包含：
+
+| 文件 | 语言 | 受众 | 说明 |
+|------|------|------|------|
+| `README.md` | English | 人类 | 完整项目说明、示例、使用场景 |
+| `README_CN.md` | 中文 | 人类 | 与英文版对应，自然中文表达 |
+| `llms.txt` | English | AI/LLM | 结构化 key-value，纯事实性信息 |
+| `llms_cn.txt` | 中文 | AI/LLM | 与英文版对应 |
+
+详细规范见: `/Users/admin/data0/private_work/ci-all-in-one/_ai/rules/doc-organization.md`
+
 ## Shared Patterns
 
 - **错误处理:** 各 crate 在 `error.rs` 中用 `thiserror` 定义错误枚举 + `Result<T>` 别名。禁止 `unwrap()`，用 `?`。
