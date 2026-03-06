@@ -2262,7 +2262,6 @@ dependencies = [
  "automerge",
  "bincode",
  "chrono",
- "futures",
  "iroh-net",
  "redb",
  "rocksdb",
@@ -2275,7 +2274,6 @@ dependencies = [
  "tokio-test",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

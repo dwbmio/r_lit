@@ -25,6 +25,15 @@ swarm.start().await?;
 - `subscribe()` → receive SwarmEvent stream
 - `announce(nickname)` / `list_announced_peers()` → group presence
 - `discover_and_connect_local_peers()` → on-demand mDNS discovery
+- `shutdown()` → graceful shutdown
+
+## Events (SwarmEvent)
+
+- `PeerConnected { node_id }` → peer joined
+- `PeerDisconnected { node_id }` → peer left
+- `DataSynced` → CRDT data merged from peer
+- `ConflictDetected { file_name, resolver_node, expected_version, current_version }` → file locked
+- `ConflictResolved { file_name, resolved_by, new_version }` → file unlocked
 
 ## Feature Flags
 
@@ -38,17 +47,32 @@ file-ops = []  # versioned file sync API
 
 ## File Operations (feature: file-ops)
 
-- `put_file(path)` → upload with auto-versioning
+- `put_file(path)` → upload with auto-versioning; locks file on conflict
 - `get_file(key, path)` → download latest
 - `get_file_version(key, version, path)` → download specific version
-- `file_history(key)` → version history with author/timestamp
+- `file_metadata(key)` → get FileMetadata without content
+- `file_history(key)` → version history with author/timestamp/operation
+- `list_files()` → list all files with metadata
+- `audit_trail(limit)` → all operations across all files
+- `delete_file(key)` → soft-delete a file
+
+## Conflict Resolution (feature: file-ops)
+
+- `is_file_locked(name)` → check if file is conflict-locked
+- `get_conflict_info(name)` → get ConflictInfo (resolver, versions, timestamp)
+- `resolve_conflict(name, resolution)` → KeepLocal / KeepRemote / MergeWith(bytes)
+
+Flow: concurrent write → CRDT detects conflict → file locked on all nodes →
+ConflictDetected event → resolver calls resolve_conflict → ConflictResolved event →
+file unlocked, sync resumes.
 
 ## Architecture
 
 - network.rs: iroh-net endpoint, LocalSwarmDiscovery, ALPN, peer management
 - election.rs: Bully algorithm, heartbeat 2s, timeout 5s
-- sync.rs: Automerge CRDT document
-- storage.rs: StorageBackend trait, pluggable backends
+- sync.rs: Automerge CRDT document, has_conflicts() multi-value check
+- storage.rs: pluggable backends (redb default)
+- file.rs: FileOps trait, versioned storage, audit trail, conflict locking
 
 ## Background Tasks (after start())
 
@@ -63,7 +87,7 @@ file-ops = []  # versioned file sync API
 - iroh-net 0.28 (P2P + NAT traversal)
 - automerge 0.5 (CRDT)
 - redb 2 / rusqlite 0.32 / rocksdb 0.22 (storage)
-- tokio, serde, uuid, thiserror
+- tokio, serde, serde_json, bincode, thiserror, chrono, tracing
 
 ## Build
 

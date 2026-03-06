@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Murmur 文件共享工作机制</title>
+        <style>
+            body {
+                font-family: -apple-system, "PingFang SC", sans-serif;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 2rem;
+                background: #fafafa;
+                color: #222;
+            }
+            h1 {
+                border-bottom: 2px solid #333;
+                padding-bottom: 0.5rem;
+            }
+            h2 {
+                margin-top: 2.5rem;
+                color: #1a73e8;
+            }
+            .mermaid {
+                background: #fff;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 1.5rem;
+                margin: 1rem 0;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 1rem 0;
+            }
+            th,
+            td {
+                border: 1px solid #ccc;
+                padding: 0.5rem 0.8rem;
+                text-align: left;
+            }
+            th {
+                background: #e8f0fe;
+            }
+            code {
+                background: #eee;
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 0.9em;
+            }
+        </style>
+        <script type="module">
+            import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: "default",
+                sequence: { mirrorActors: false, messageFontSize: 13 },
+            });
+        </script>
+    </head>
+    <body>
+        <h1>Murmur 多端文件共享工作机制</h1>
+
+        <h2>1. 完整时序：put_file → 广播 → 同步 → 冲突</h2>
+        <div class="mermaid">
+            sequenceDiagram participant A as Node A (作者) participant CRDT_A as
+            A: Automerge Doc participant Store_A as A: Local Storage (redb)
+            participant Net as P2P Network (iroh-net) participant Store_B as B:
+            Local Storage (redb) participant CRDT_B as B: Automerge Doc
+            participant B as Node B (接收方) participant C as Node C (接收方)
+            Note over A,C: 阶段1: Node A 调用 put_file("report.txt") A->>A:
+            读取磁盘文件内容 (≤10MB) A->>A: 检查 file:meta:report.txt
+            获取当前版本 A->>A: version=0→1 (Create) / N→N+1 (Update) rect
+            rgb(230, 245, 255) Note over A,Store_A: 产生 5 次 swarm.put()
+            调用，每次都走完整广播链路 A->>CRDT_A:
+            put("file:data:report.txt:v1", content) CRDT_A-->>A: CRDT change
+            bytes A->>Store_A: 本地持久化 A->>Net: broadcast CrdtUpdate{key,
+            changes, seq=1, vclock} A->>CRDT_A: put("file:data:report.txt",
+            content) A->>Net: broadcast CrdtUpdate{seq=2} A->>CRDT_A:
+            put("file:meta:report.txt", metadata_json) A->>Net: broadcast
+            CrdtUpdate{seq=3} A->>CRDT_A: put("file:history:report.txt",
+            [version_entry]) A->>Net: broadcast CrdtUpdate{seq=4} A->>CRDT_A:
+            put("audit:{ts}:{nodeA}", entry) A->>Net: broadcast
+            CrdtUpdate{seq=5} end Note over A,C: 阶段2: 广播与同步 (每条
+            CrdtUpdate 独立处理) par 并行发送给所有 peer Net->>B:
+            CrdtUpdate{key="file:data:report.txt", seq=1, vclock} Net->>C:
+            CrdtUpdate{key="file:data:report.txt", seq=1, vclock} end
+            B->>CRDT_B: merge_vector_clock(vclock) B->>CRDT_B:
+            apply_changes(change_bytes) B->>Store_B: put(key, value) 本地持久化
+            B->>Net: Ack{seq=1} B->>B: emit SwarmEvent::DataSynced Net->>A:
+            Ack{seq=1} 从 B A->>A: ack_received(1), 移除 pending 队列 Note over
+            A,C: (seq=2..5 同理) Note over A,C: 阶段3: Node B 也修改同一文件
+            B->>B: put_file("report.txt") → version 1→2 B->>CRDT_B:
+            put("file:meta:report.txt", {version:2, author:B}) B->>Net:
+            broadcast CrdtUpdate 给 A 和 C Net->>A: CrdtUpdate A->>CRDT_A:
+            apply_changes → Automerge CRDT 自动合并 A->>A: emit
+            SwarmEvent::DataSynced Note over A,C: 阶段4: 版本冲突检测 (乐观锁)
+            par Node A 和 Node C 同时修改 A->>A:
+            put_file_with_version("report.txt", expected=2) C->>C:
+            put_file_with_version("report.txt", expected=2) end Note right of A:
+            A 先到达: version 2→3 OK Note right of C: C 后读取: current=3 ≠
+            expected=2 → VersionConflict!
+        </div>
+
+        <h2>2. put_file 产生的 KV 键结构</h2>
+        <div class="mermaid">
+            flowchart TB F["put_file('report.txt')"] --> K1["<b
+                >file:data:report.txt:v1</b
+            ><br />版本化内容 (不可变快照)"] F --> K2["<b
+                >file:data:report.txt</b
+            ><br />最新内容 (覆盖写, 快速访问)"] F --> K3["<b
+                >file:meta:report.txt</b
+            ><br />FileMetadata JSON<br />name, size, version, author,
+            checksum"] F --> K4["<b>file:history:report.txt</b
+            ><br />Vec&lt;FileVersion&gt; JSON<br />全版本审计记录"] F -->
+            K5["<b>audit:{timestamp}:{nodeId}</b><br />全局审计条目"] style F
+            fill:#1a73e8,color:#fff,stroke:none style K1
+            fill:#e8f0fe,stroke:#1a73e8 style K2 fill:#e8f0fe,stroke:#1a73e8
+            style K3 fill:#fce8e6,stroke:#d93025 style K4
+            fill:#fef7e0,stroke:#f9ab00 style K5 fill:#e6f4ea,stroke:#1e8e3e
+        </div>
+
+        <h2>3. 单个 KV put 的广播路径</h2>
+        <div class="mermaid">
+            flowchart LR PUT["swarm.put(key, value)"] --> CRDT["Automerge
+            CRDT<br />生成 change bytes"] PUT --> LOCAL["本地 redb 存储"] PUT
+            --> BC["broadcast(CrdtUpdate)<br />to all peers"] BC --> P1["Peer
+            B"] BC --> P2["Peer C"] P1 --> APPLY1["apply_changes<br />→ CRDT
+            merge"] P1 --> STORE1["本地 redb 存储"] P1 --> ACK1["回复 Ack"] P1
+            --> EVT1["emit DataSynced"] ACK1 --> REMOVE["移除 pending 队列"]
+            style PUT fill:#1a73e8,color:#fff,stroke:none style BC
+            fill:#f9ab00,color:#fff,stroke:none style P1
+            fill:#e6f4ea,stroke:#1e8e3e style P2 fill:#e6f4ea,stroke:#1e8e3e
+        </div>
+
+        <h2>4. 事件订阅 与 重传机制</h2>
+        <div class="mermaid">
+            flowchart LR subgraph 事件订阅层 NET_EVT["Network::PeerEvent<br />Connected
+            / Disconnected"] SWARM_EVT["Swarm::SwarmEvent<br />PeerConnected<br />PeerDisconnected<br />DataSynced"]
+            SUB["subscriber.recv()"] NET_EVT -->|"spawn_peer_event_forwarder"|
+            SWARM_EVT SWARM_EVT -->|"broadcast channel"| SUB end subgraph
+            重传机制 SEND["发送 CrdtUpdate<br />+ track_pending(seq)"] TIMER["1s
+            定时检查 pending"] SEND --> TIMER TIMER -->|"未收到 ACK 且 < 5次"|
+            RESEND["重传"] TIMER -->|"超过 5 次"| DROP["丢弃 + warn"] ACK2["收到
+            Ack{seq}"] -->|"ack_received(seq)"| RM["移除 pending"] end style
+            NET_EVT fill:#e8f0fe,stroke:#1a73e8 style SWARM_EVT
+            fill:#1a73e8,color:#fff,stroke:none style SUB
+            fill:#e6f4ea,stroke:#1e8e3e
+        </div>
+
+        <h2>5. 核心要点</h2>
+        <table>
+            <tr>
+                <th>维度</th>
+                <th>机制</th>
+            </tr>
+            <tr>
+                <td><b>数据模型</b></td>
+                <td>
+                    一次 <code>put_file</code> 产生
+                    <b>5 个 KV put</b>，每个都独立走 CRDT → 广播 → ACK 链路
+                </td>
+            </tr>
+            <tr>
+                <td><b>同步方式</b></td>
+                <td>
+                    每个 <code>put()</code> 立即
+                    <code>broadcast(CrdtUpdate)</code> 给所有已连接 peer，非攒批
+                </td>
+            </tr>
+            <tr>
+                <td><b>冲突解决</b></td>
+                <td>
+                    底层 Automerge CRDT 自动 merge (last-writer-wins for
+                    scalar)；上层 <code>put_file_with_version</code> 提供乐观锁
+                </td>
+            </tr>
+            <tr>
+                <td><b>可靠传输</b></td>
+                <td>seq + ACK + 重传（3s 超时，最多 5 次），无 ACK 则丢弃</td>
+            </tr>
+            <tr>
+                <td><b>事件通知</b></td>
+                <td>
+                    <code>DataSynced</code> 在收到 CrdtUpdate / SyncResponse
+                    时发射；<code>PeerConnected</code> 在连接建立时发射
+                </td>
+            </tr>
+            <tr>
+                <td><b>局限</b></td>
+                <td>
+                    文件 ≤ 10MB；<code>list_files()</code> 和
+                    <code>audit_trail()</code> 未实现；文件内容内联在 CRDT
+                    消息中传输
+                </td>
+            </tr>
+        </table>
+    </body>
+</html>

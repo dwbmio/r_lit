@@ -4742,11 +4742,9 @@ dependencies = [
 name = "murmur"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "automerge",
  "bincode",
  "chrono",
- "futures",
  "iroh-net",
  "redb",
  "serde",
@@ -4754,7 +4752,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]

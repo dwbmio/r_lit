@@ -12,8 +12,10 @@ Think of it as Git meets CRDT meets P2P networking - but simpler.
 
 - **No servers needed** - Pure P2P, runs on your local network
 - **Zero configuration** - mDNS discovery means it just works™
-- **Conflict-free sync** - CRDT-based, no merge conflicts to resolve
+- **CRDT sync** - Automerge-based conflict-free replication
+- **Conflict detection & resolution** - Automatic locking + event-driven resolution workflow
 - **Built-in versioning** - Time travel through your data (optional)
+- **Audit trail** - Full per-file change history with author, timestamp and operation type
 - **Rust native** - Fast, safe, and memory-efficient
 
 Perfect for building collaborative apps, offline-first tools, or anything that needs to sync data without the cloud.
@@ -104,9 +106,38 @@ for entry in history {
 
 **What you get:**
 - Automatic versioning (every write creates a new version)
-- Audit trail (who changed what, when)
-- Conflict detection (optimistic locking)
+- Full audit trail (who changed what, when) via `audit_trail()`
+- Conflict detection with distributed file locking
+- Event-driven resolution: `ConflictDetected` / `ConflictResolved` via `subscribe()`
 - Size limits (10MB max by default)
+
+### Conflict Resolution Flow
+
+When two nodes write the same file concurrently:
+
+1. CRDT detects concurrent writes → file is **locked** on all nodes
+2. All nodes receive `SwarmEvent::ConflictDetected`
+3. The designated resolver calls `resolve_conflict()` (KeepLocal / KeepRemote / MergeWith)
+4. All nodes receive `SwarmEvent::ConflictResolved`, file unlocks, sync resumes
+
+```rust
+use murmur::{Swarm, SwarmEvent, ConflictResolution, FileOps};
+
+let mut events = swarm.subscribe();
+loop {
+    match events.recv().await? {
+        SwarmEvent::ConflictDetected { file_name, resolver_node, .. } => {
+            if resolver_node == swarm.node_id().await {
+                swarm.resolve_conflict(&file_name, ConflictResolution::KeepLocal).await?;
+            }
+        }
+        SwarmEvent::ConflictResolved { file_name, new_version, .. } => {
+            println!("{} resolved → v{}", file_name, new_version);
+        }
+        _ => {}
+    }
+}
+```
 
 ## Architecture
 
@@ -186,6 +217,9 @@ match swarm.put_file(path).await {
     }
     Err(Error::VersionConflict { expected, current }) => {
         eprintln!("Version conflict: expected {}, got {}", expected, current);
+    }
+    Err(Error::FileConflictLocked { file_name }) => {
+        eprintln!("File {} is locked due to unresolved conflict", file_name);
     }
     Err(e) => eprintln!("Error: {}", e),
 }

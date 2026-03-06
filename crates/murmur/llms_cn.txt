@@ -25,6 +25,15 @@ swarm.start().await?;
 - `subscribe()` → 接收 SwarmEvent 事件流
 - `announce(nickname)` / `list_announced_peers()` → 群组存在感知
 - `discover_and_connect_local_peers()` → 按需 mDNS 发现
+- `shutdown()` → 优雅关闭
+
+## 事件 (SwarmEvent)
+
+- `PeerConnected { node_id }` → 节点连入
+- `PeerDisconnected { node_id }` → 节点断开
+- `DataSynced` → CRDT 数据已从对端合并
+- `ConflictDetected { file_name, resolver_node, expected_version, current_version }` → 文件已锁定
+- `ConflictResolved { file_name, resolved_by, new_version }` → 文件已解锁
 
 ## Feature Flags
 
@@ -38,17 +47,32 @@ file-ops = []  # 带版本控制的文件同步 API
 
 ## 文件操作 (feature: file-ops)
 
-- `put_file(path)` → 上传，自动版本化
+- `put_file(path)` → 上传，自动版本化；冲突时锁定文件
 - `get_file(key, path)` → 下载最新版
 - `get_file_version(key, version, path)` → 下载指定版本
-- `file_history(key)` → 版本历史 (作者/时间戳)
+- `file_metadata(key)` → 获取 FileMetadata（不含内容）
+- `file_history(key)` → 版本历史（作者/时间戳/操作类型）
+- `list_files()` → 列出所有文件及元数据
+- `audit_trail(limit)` → 所有文件的操作审计记录
+- `delete_file(key)` → 软删除文件
+
+## 冲突解决 (feature: file-ops)
+
+- `is_file_locked(name)` → 检查文件是否因冲突被锁定
+- `get_conflict_info(name)` → 获取 ConflictInfo（解决者、版本、时间戳）
+- `resolve_conflict(name, resolution)` → KeepLocal / KeepRemote / MergeWith(bytes)
+
+流程：并发写入 → CRDT 检测到冲突 → 文件在所有节点锁定 →
+ConflictDetected 事件 → 解决者调用 resolve_conflict → ConflictResolved 事件 →
+文件解锁，同步恢复。
 
 ## 架构
 
 - network.rs: iroh-net 端点, LocalSwarmDiscovery, ALPN, 节点管理
 - election.rs: Bully 算法, 心跳 2s, 超时 5s
-- sync.rs: Automerge CRDT 文档
-- storage.rs: StorageBackend trait, 可插拔后端
+- sync.rs: Automerge CRDT 文档, has_conflicts() 多值检测
+- storage.rs: 可插拔后端 (默认 redb)
+- file.rs: FileOps trait, 版本化存储, 审计追踪, 冲突锁定
 
 ## 后台任务 (start() 后)
 
@@ -63,7 +87,7 @@ file-ops = []  # 带版本控制的文件同步 API
 - iroh-net 0.28 (P2P + NAT 穿透)
 - automerge 0.5 (CRDT)
 - redb 2 / rusqlite 0.32 / rocksdb 0.22 (存储)
-- tokio, serde, uuid, thiserror
+- tokio, serde, serde_json, bincode, thiserror, chrono, tracing
 
 ## 构建
 
