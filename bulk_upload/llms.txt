@@ -1,0 +1,106 @@
+# bulk_upload — High-Speed Batch File Upload/Download CLI for S3-Compatible Storage
+
+> Rust CLI tool. Extracts URLs from JSON, downloads in parallel, uploads to S3-compatible storage.
+> Single binary, zero dependencies, cross-platform.
+
+## Command Syntax
+
+```
+bulk_upload jq <JSON_TEXT_OR_STDIN> --s3 <CONFIG_PATH> [--prefix <S3_PREFIX>] [--concurrency <N>]
+```
+
+### Arguments
+- `<JSON_TEXT_OR_STDIN>`: JSON string or `-` for stdin. All HTTP/HTTPS URLs are extracted recursively from the JSON structure.
+- `--s3 <path>`: Path to S3 credential file (dotenv format, see Config Format below)
+- `--prefix <prefix>`: S3 key prefix for uploaded files (default: empty)
+- `--concurrency <N>`: Number of parallel download/upload workers (default: 5)
+- `--json`: Output results in JSON format for programmatic parsing
+
+### Examples
+
+```bash
+# Upload from inline JSON
+bulk_upload jq '{"urls":["https://example.com/a.png","https://example.com/b.png"]}' --s3 .s3 --prefix assets/
+
+# Upload from stdin
+cat urls.json | bulk_upload jq - --s3 .s3 --prefix textures/v2/ --concurrency 10
+
+# With JSON output
+bulk_upload --json jq '{"img":"https://example.com/photo.jpg"}' --s3 .s3
+```
+
+## Config Format
+
+S3 credential file (`.s3`) uses dotenv format:
+
+```env
+S3_BUCKET=my-bucket
+S3_ACCESS_KEY=your-access-key
+S3_SECRET_KEY=your-secret-key
+S3_ENDPOINT=https://your-account.r2.cloudflarestorage.com
+S3_REGION=auto
+```
+
+## Supported Storage Providers
+
+- AWS S3: `https://s3.amazonaws.com`
+- Cloudflare R2: `https://<account>.r2.cloudflarestorage.com`
+- Aliyun OSS: `https://<bucket>.<region>.aliyuncs.com`
+- iDrive E2: `https://<endpoint>.idrivee2.com`
+- MinIO: `http://<host>:9000`
+- Any S3-compatible endpoint with path-style addressing
+
+## Behavior
+
+1. Parses JSON input recursively to find all `http://` and `https://` strings
+2. Deduplicates URLs while preserving order
+3. Splits URLs into batches based on `--concurrency`
+4. Downloads each batch concurrently using async HTTP client
+5. Uploads successful downloads to S3 with `--prefix` prepended to filename
+6. Filename extracted from URL path (query params stripped)
+7. Reports success/failure count
+
+## Exit Codes
+
+- `0`: All files processed successfully
+- `1`: One or more files failed to download or upload
+- `2`: Configuration error (missing S3 config, invalid JSON, etc.)
+
+## Installation
+
+```bash
+# One-line install (Linux x86_64, macOS ARM64)
+curl -fsSL https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh | TOOL_NAME=bulk_upload bash
+
+# Build from source
+cargo build --release
+# Binary at: target/release/bulk_upload
+```
+
+## System Requirements
+
+- OS: Linux (x86_64), macOS (ARM64)
+- Binary size: 3-4MB (statically linked, stripped)
+- Memory: Proportional to concurrency level, typically <50MB
+- No runtime dependencies
+
+## Use Cases for AI Agents
+
+- Batch upload generated assets to cloud storage after processing
+- Migrate files between S3-compatible providers
+- Download and re-upload content from API responses
+- CI/CD artifact publishing
+
+## Performance Characteristics
+
+- Async I/O (Tokio runtime), saturates available bandwidth
+- Zero-copy streaming, minimal memory allocation
+- Handles thousands of files without memory growth
+- Configurable concurrency for resource-constrained environments
+
+## Links
+
+- Tool page: https://snappywatt.com/tools/bulk-upload
+- Install script: https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh
+- Repository: https://github.com/dwbmio/r_lit/tree/main/bulk_upload
+- For humans: see README.md in the same directory
