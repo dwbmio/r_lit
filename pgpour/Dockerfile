@@ -1,18 +1,24 @@
 # ---- Build stage (Alpine = native musl toolchain) ----
-FROM rust:1.88-alpine AS builder
+FROM rust:1.90-alpine AS builder
 
 RUN apk add --no-cache cmake make pkgconf musl-dev g++ git ca-certificates curl-dev zlib-dev zlib-static perl linux-headers
 
 WORKDIR /build
-COPY .cargo/ .cargo/
-COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
+
+# rust-lld (default since 1.86) doesn't search Alpine system lib paths;
+# add /usr/lib so it can find -lgcc_s and -lc for proc-macro shared objects.
+ENV RUSTFLAGS="-C link-arg=-L/usr/lib"
 
 # Pass CARGO_FEATURES="metric" to enable OTel metrics at build time.
 # Alpine native target is already *-unknown-linux-musl, no --target needed.
-# For cross-arch prod builds: docker build --platform linux/amd64
 ARG CARGO_FEATURES=""
-RUN cargo build --release --features "$CARGO_FEATURES"
+ARG CARGO_REGISTRY_MIRROR=""
+RUN if [ -n "$CARGO_REGISTRY_MIRROR" ]; then \
+      mkdir -p .cargo && printf '\n[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n' "$CARGO_REGISTRY_MIRROR" >> .cargo/config.toml; \
+    fi \
+    && cargo build --release --features "$CARGO_FEATURES"
 
 # ---- Runtime stage (scratch = zero overhead) ----
 FROM scratch
