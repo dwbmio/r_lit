@@ -18,4 +18,9 @@ pub trait StorageBackend: Send + Sync {
     fn keys(&self) -> Result<Vec<String>> {
         Ok(vec![])
     }
+
+    /// List keys matching a prefix.
+    fn keys_with_prefix(&self, _prefix: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
 }

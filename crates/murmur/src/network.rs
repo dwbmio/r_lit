@@ -37,6 +37,19 @@ pub enum Message {
     SyncResponse { data: Vec<u8> },
     /// Acknowledgment for reliable delivery
     Ack { seq_num: u64 },
+    /// Lock a file due to conflict (all nodes must pause writes to this file)
+    ConflictLock {
+        file_name: String,
+        resolver_node: String,
+        expected_version: u64,
+        current_version: u64,
+    },
+    /// Unlock a file after conflict resolution
+    ConflictUnlock {
+        file_name: String,
+        resolved_by: String,
+        new_version: u64,
+    },
 }
 
 const MAX_RETRANSMIT_ATTEMPTS: u32 = 5;
@@ -212,6 +225,8 @@ impl Network {
         let mut peers = self.peers.write().await;
         peers.insert(peer_id, conn.clone());
         drop(peers);
+
+        let _ = self.peer_event_tx.send(PeerEvent::Connected(peer_id.to_string()));
 
         // Spawn task to handle incoming messages from this peer
         self.spawn_peer_handler(peer_id, conn);

@@ -89,7 +89,7 @@ mod sqlite_impl {
 #[cfg(feature = "redb-backend")]
 mod redb_impl {
     use super::*;
-    use redb::{Database, TableDefinition};
+    use redb::{Database, ReadableTable, TableDefinition};
     use std::sync::Arc;
 
     const KV_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("kv_store");
@@ -123,6 +123,37 @@ mod redb_impl {
     }
 
     impl StorageBackend for RedbStorage {
+        fn keys(&self) -> Result<Vec<String>> {
+            let read_txn = self.db.begin_read()
+                .map_err(|e| Error::Other(format!("Failed to begin read: {}", e)))?;
+            let table = read_txn.open_table(KV_TABLE)
+                .map_err(|e| Error::Other(format!("Failed to open table: {}", e)))?;
+            let mut result = Vec::new();
+            for entry in table.iter()
+                .map_err(|e| Error::Other(format!("Failed to iterate: {}", e)))? {
+                let (k, _) = entry.map_err(|e| Error::Other(format!("Failed to read entry: {}", e)))?;
+                result.push(k.value().to_string());
+            }
+            Ok(result)
+        }
+
+        fn keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+            let read_txn = self.db.begin_read()
+                .map_err(|e| Error::Other(format!("Failed to begin read: {}", e)))?;
+            let table = read_txn.open_table(KV_TABLE)
+                .map_err(|e| Error::Other(format!("Failed to open table: {}", e)))?;
+            let mut result = Vec::new();
+            for entry in table.iter()
+                .map_err(|e| Error::Other(format!("Failed to iterate: {}", e)))? {
+                let (k, _) = entry.map_err(|e| Error::Other(format!("Failed to read entry: {}", e)))?;
+                let key = k.value().to_string();
+                if key.starts_with(prefix) {
+                    result.push(key);
+                }
+            }
+            Ok(result)
+        }
+
         fn put(&self, key: &str, value: &[u8]) -> Result<()> {
             let write_txn = self.db.begin_write()
                 .map_err(|e| Error::Other(format!("Failed to begin write: {}", e)))?;

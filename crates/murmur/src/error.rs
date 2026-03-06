@@ -36,6 +36,10 @@ pub enum Error {
     #[error("Version conflict: expected {expected}, current {current}")]
     VersionConflict { expected: u64, current: u64 },
 
+    #[cfg(feature = "file-ops")]
+    #[error("File is conflict-locked: {file_name} (must be resolved before further edits)")]
+    FileConflictLocked { file_name: String },
+
     #[error("{0}")]
     Other(String),
 }

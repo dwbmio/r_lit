@@ -104,6 +104,13 @@ impl Sync {
         keys.map(|k| k.to_string()).collect()
     }
 
+    /// Check whether a key has conflicting concurrent values in the CRDT.
+    pub fn has_conflicts(&self, key: &str) -> bool {
+        self.doc.get_all(automerge::ROOT, key)
+            .map(|values| values.len() > 1)
+            .unwrap_or(false)
+    }
+
     /// Merge with another document.
     pub fn merge(&mut self, other_doc_bytes: &[u8]) -> Result<()> {
         debug!("Merging with another document");
