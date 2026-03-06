@@ -2,7 +2,7 @@
 name = "pgpour"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.90.0"
 description = "pgpour — Postgres CDC → Kafka pipeline (powered by supabase/etl)"
 
 [features]
