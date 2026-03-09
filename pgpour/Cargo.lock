@@ -2416,6 +2416,7 @@ dependencies = [
  "chrono",
  "clap",
  "etl",
+ "futures",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

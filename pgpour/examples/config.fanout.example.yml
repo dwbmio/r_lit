@@ -1,0 +1,52 @@
+# pgpour fan-out configuration example
+#
+# One replication slot, CDC events routed to different topics within the same
+# Kafka cluster via per-target table filtering. Matching targets are produced to
+# concurrently — latency = max(targets) instead of sum(targets).
+#
+# The primary "kafka" section is always the "default" target.
+# Extra targets are added via "kafka_destinations" (YAML-only, no CLI/env support).
+
+postgres:
+  host: starlink-dev-uc-internal.hs99.vip
+  port: 5432
+  database: lgh_blockblast_client
+  username: solutionhub_dev
+  # password: (use PG_PASSWORD env var)
+  publication: cdc_publication
+
+# Primary target — only receives table1 events
+# Also configurable via CLI args / env vars (except 'tables', which is YAML-only)
+kafka:
+  brokers: 10.9.169.2:9092,10.9.131.68:9092,10.9.103.246:9092
+  topic_prefix: cdc
+  security_protocol: plaintext
+  tables:
+    - public.table1
+
+# Extra destinations (same cluster, different topic prefixes).
+# Brokers/auth omitted = inherit from primary 'kafka' above.
+# Typically only name, topic_prefix, and tables need to be specified.
+kafka_destinations:
+  # backup: receives ALL tables (no 'tables' filter)
+  - name: backup
+    topic_prefix: cdc-backup
+
+  # analytics: only receives table2 events
+  - name: analytics
+    topic_prefix: analytics
+    tables:
+      - public.table2
+
+  # Override brokers/auth only if targeting a different Kafka cluster:
+  # - name: remote-cluster
+  #   brokers: other-kafka:9092
+  #   topic_prefix: remote
+  #   security_protocol: sasl_ssl
+  #   sasl_mechanism: scram-sha-512
+  #   sasl_username: remote_user
+  #   sasl_password: secret
+
+pipeline:
+  batch_max_fill_ms: 5000
+  max_table_sync_workers: 4

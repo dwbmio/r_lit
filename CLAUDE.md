@@ -11,7 +11,7 @@ R_LIT 是一个 Rust 工具集合仓库。每个子目录是**独立的 Cargo cr
 | `bulk_upload/` | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | `img_resize/` | 图片缩放与压缩 |
 | `group_vibe_workbench/` | 桌面协作工作台 (GPUI + Murmur P2P) |
-| `pgpour/` | Postgres CDC → Kafka 数据管道 |
+| `pgpour/` | Postgres CDC → Kafka 数据管道（多 topic 扇出，按表路由） |
 | `omniplan_covers_ding/` | 内部工具 (有外部路径依赖，不可移植) |
 | `video-generator/` | 视频工具集 |
 | `crates/murmur/` | P2P 协作库 |

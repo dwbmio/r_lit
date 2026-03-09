@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // YAML config → env vars (lowest priority; before clap so env= attrs resolve)
-    let config_path = config::preload()?;
+    let preloaded = config::preload()?;
 
     if std::env::var("RUST_LOG").is_err() {
         unsafe { std::env::set_var("RUST_LOG", "info") };
@@ -154,7 +154,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    if let Some(ref p) = config_path {
+    if let Some((ref p, _)) = preloaded {
         info!(path = p, "config file loaded");
     }
 
@@ -215,12 +215,50 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ssl_key_location: args.kafka_ssl_key_location.clone(),
     };
 
-    let destination = KafkaDestination::new(
+    let mut destination = KafkaDestination::new(
         &args.kafka_brokers,
         args.kafka_topic_prefix.clone(),
         store.clone(),
         &kafka_auth,
     )?;
+
+    if let Some((_, ref file_cfg)) = preloaded {
+        // Apply table filter to primary target (YAML-only)
+        if file_cfg.kafka.tables.is_some() {
+            destination.set_primary_table_filter(file_cfg.kafka.tables.clone());
+            info!(tables = ?file_cfg.kafka.tables, "primary target table filter set");
+        }
+
+        for (i, extra) in file_cfg.kafka_destinations.iter().enumerate() {
+            let name = extra
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("destination-{}", i + 1));
+            let brokers = extra
+                .brokers
+                .as_deref()
+                .unwrap_or(&args.kafka_brokers);
+            let topic_prefix = extra
+                .topic_prefix
+                .clone()
+                .unwrap_or_else(|| args.kafka_topic_prefix.clone());
+            let auth = KafkaAuth {
+                security_protocol: extra
+                    .security_protocol
+                    .clone()
+                    .unwrap_or_else(|| args.kafka_security_protocol.clone()),
+                sasl_mechanism: extra.sasl_mechanism.clone().or(args.kafka_sasl_mechanism.clone()),
+                sasl_username: extra.sasl_username.clone().or(args.kafka_sasl_username.clone()),
+                sasl_password: extra.sasl_password.clone().or(args.kafka_sasl_password.clone()),
+                ssl_ca_location: extra.ssl_ca_location.clone().or(args.kafka_ssl_ca_location.clone()),
+                ssl_certificate_location: extra.ssl_certificate_location.clone().or(args.kafka_ssl_certificate_location.clone()),
+                ssl_key_location: extra.ssl_key_location.clone().or(args.kafka_ssl_key_location.clone()),
+            };
+            destination.add_target(&name, brokers, topic_prefix, &auth, extra.tables.clone())?;
+            info!(target = name, brokers, tables = ?extra.tables, "added extra Kafka destination");
+        }
+    }
+
     #[cfg(feature = "metric")]
     let destination = match cdc_metrics {
         Some(ref m) => destination.with_metrics(m.clone()),
@@ -249,7 +287,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         pg_host = args.pg_host,
         pg_database = args.pg_database,
         publication = args.publication,
-        kafka_brokers = args.kafka_brokers,
+        kafka_targets = ?destination.target_names(),
         "starting CDC pipeline"
     );
 

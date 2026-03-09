@@ -8,6 +8,8 @@ use std::path::Path;
 pub struct FileConfig {
     pub postgres: Postgres,
     pub kafka: Kafka,
+    /// Extra Kafka destinations for fan-out (YAML-only, each receives the same CDC events).
+    pub kafka_destinations: Vec<Kafka>,
     pub pipeline: Pipeline,
     pub otel: Otel,
 }
@@ -29,11 +31,17 @@ pub struct Postgres {
     pub ssh_private_key_passphrase: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 #[serde(default)]
 pub struct Kafka {
+    /// Human-readable name for this destination (used in logs & metrics).
+    pub name: Option<String>,
     pub brokers: Option<String>,
     pub topic_prefix: Option<String>,
+    /// Optional table whitelist (e.g. `["public.orders", "public.users"]`).
+    /// When set (non-empty), only events for these tables are forwarded to this target.
+    /// When absent or empty, all tables in the publication are forwarded.
+    pub tables: Option<Vec<String>>,
     /// plaintext | ssl | sasl_plaintext | sasl_ssl
     pub security_protocol: Option<String>,
     /// plain | scram-sha-256 | scram-sha-512
@@ -103,17 +111,20 @@ impl FileConfig {
 
 /// Pre-parse `--config` / `CONFIG_PATH` before clap runs, so YAML
 /// values become env vars that clap's `env = "..."` can resolve.
-pub fn preload() -> Result<Option<String>, Box<dyn std::error::Error>> {
+/// Returns `(config_path, FileConfig)` when a config file is present.
+pub fn preload() -> Result<Option<(String, FileConfig)>, Box<dyn std::error::Error>> {
     let path = std::env::args()
         .zip(std::env::args().skip(1))
         .find(|(a, _)| a == "--config")
         .map(|(_, v)| v)
         .or_else(|| std::env::var("CONFIG_PATH").ok());
 
-    if let Some(ref p) = path {
-        FileConfig::load(p)?.apply_to_env();
+    if let Some(p) = path {
+        let cfg = FileConfig::load(&p)?;
+        cfg.apply_to_env();
+        return Ok(Some((p, cfg)));
     }
-    Ok(path)
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -206,8 +217,8 @@ kafka:
 
     #[test]
     fn load_example_config_file() {
-        let cfg = FileConfig::load("config.example.yml")
-            .expect("config.example.yml should be parseable");
+        let cfg = FileConfig::load("examples/config.example.yml")
+            .expect("examples/config.example.yml should be parseable");
         assert!(cfg.postgres.host.is_some());
         assert!(cfg.kafka.brokers.is_some());
     }
@@ -215,5 +226,59 @@ kafka:
     #[test]
     fn load_nonexistent_file_returns_error() {
         assert!(FileConfig::load("/tmp/nonexistent_pgpour_config.yml").is_err());
+    }
+
+    const MULTI_DEST_YAML: &str = r#"
+kafka:
+  brokers: primary:9092
+  topic_prefix: cdc
+  tables:
+    - public.orders
+
+kafka_destinations:
+  - name: cluster-b
+    brokers: backup:9092
+    topic_prefix: cdc-backup
+    security_protocol: sasl_ssl
+    sasl_mechanism: scram-sha-512
+    sasl_username: user_b
+    sasl_password: pass_b
+  - name: analytics
+    brokers: analytics:9092
+    topic_prefix: analytics
+    tables:
+      - public.events
+      - public.logs
+"#;
+
+    #[test]
+    fn parse_kafka_destinations_with_tables() {
+        let cfg: FileConfig = serde_yaml::from_str(MULTI_DEST_YAML).unwrap();
+        assert_eq!(cfg.kafka.brokers.as_deref(), Some("primary:9092"));
+        assert_eq!(
+            cfg.kafka.tables.as_deref(),
+            Some(["public.orders".to_string()].as_slice())
+        );
+        assert_eq!(cfg.kafka_destinations.len(), 2);
+
+        let b = &cfg.kafka_destinations[0];
+        assert_eq!(b.name.as_deref(), Some("cluster-b"));
+        assert_eq!(b.brokers.as_deref(), Some("backup:9092"));
+        assert_eq!(b.topic_prefix.as_deref(), Some("cdc-backup"));
+        assert_eq!(b.security_protocol.as_deref(), Some("sasl_ssl"));
+        assert!(b.tables.is_none());
+
+        let a = &cfg.kafka_destinations[1];
+        assert_eq!(a.name.as_deref(), Some("analytics"));
+        assert_eq!(a.brokers.as_deref(), Some("analytics:9092"));
+        assert_eq!(a.tables.as_ref().unwrap().len(), 2);
+        assert!(a.tables.as_ref().unwrap().contains(&"public.events".to_string()));
+        assert!(a.tables.as_ref().unwrap().contains(&"public.logs".to_string()));
+    }
+
+    #[test]
+    fn empty_kafka_destinations_defaults_to_empty_vec() {
+        let cfg: FileConfig = serde_yaml::from_str(MINIMAL_YAML).unwrap();
+        assert!(cfg.kafka_destinations.is_empty());
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,12 +28,29 @@ pub struct KafkaAuth {
     pub ssl_key_location: Option<String>,
 }
 
-/// Kafka CDC destination — converts PG replication events to JSON messages
-/// and produces them to Kafka topics named `{prefix}.{schema}.{table}`.
 #[derive(Clone)]
-pub struct KafkaDestination {
+struct KafkaTarget {
+    name: String,
     producer: FutureProducer,
     topic_prefix: String,
+    /// `None` = forward all tables; `Some(set)` = only matching tables.
+    table_filter: Option<HashSet<String>>,
+}
+
+impl KafkaTarget {
+    fn accepts_table(&self, table_full_name: &str) -> bool {
+        self.table_filter
+            .as_ref()
+            .map_or(true, |f| f.contains(table_full_name))
+    }
+}
+
+/// Kafka CDC destination — converts PG replication events to JSON messages
+/// and produces them to Kafka topics named `{prefix}.{schema}.{table}`.
+/// Supports fan-out to multiple Kafka clusters via [`add_target`].
+#[derive(Clone)]
+pub struct KafkaDestination {
+    targets: Vec<KafkaTarget>,
     store: MemoryStore,
     /// Fallback schema cache populated from RelationEvent
     schemas: Arc<RwLock<HashMap<TableId, Arc<TableSchema>>>>,
@@ -49,6 +66,58 @@ impl KafkaDestination {
         store: MemoryStore,
         auth: &KafkaAuth,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let producer = Self::create_producer(brokers, auth)?;
+        Ok(Self {
+            targets: vec![KafkaTarget {
+                name: "default".to_string(),
+                producer,
+                topic_prefix,
+                table_filter: None,
+            }],
+            store,
+            schemas: Arc::new(RwLock::new(HashMap::new())),
+            send_timeout: Duration::from_secs(30),
+            #[cfg(feature = "metric")]
+            metrics: None,
+        })
+    }
+
+    /// Register an additional Kafka cluster for fan-out.
+    /// `table_filter`: optional whitelist of `"schema.table"` names.
+    /// `None` or empty vec → forward all tables.
+    pub fn add_target(
+        &mut self,
+        name: &str,
+        brokers: &str,
+        topic_prefix: String,
+        auth: &KafkaAuth,
+        table_filter: Option<Vec<String>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let producer = Self::create_producer(brokers, auth)?;
+        self.targets.push(KafkaTarget {
+            name: name.to_string(),
+            producer,
+            topic_prefix,
+            table_filter: into_filter(table_filter),
+        });
+        Ok(())
+    }
+
+    /// Set the table whitelist for the primary ("default") target.
+    pub fn set_primary_table_filter(&mut self, tables: Option<Vec<String>>) {
+        if let Some(target) = self.targets.first_mut() {
+            target.table_filter = into_filter(tables);
+        }
+    }
+
+    pub fn target_names(&self) -> Vec<&str> {
+        self.targets.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    fn create_producer(
+        brokers: &str,
+        auth: &KafkaAuth,
+    ) -> Result<FutureProducer, Box<dyn std::error::Error>> {
         let mut cfg = ClientConfig::new();
         cfg.set("bootstrap.servers", brokers)
             .set("message.timeout.ms", "30000")
@@ -59,15 +128,13 @@ impl KafkaDestination {
         let protocol = auth.security_protocol.to_uppercase().replace('-', "_");
         cfg.set("security.protocol", &protocol);
 
-        let needs_sasl = protocol.contains("SASL");
-        if needs_sasl {
+        if protocol.contains("SASL") {
             let mechanism = auth
                 .sasl_mechanism
                 .as_deref()
                 .unwrap_or("PLAIN")
                 .to_uppercase();
             cfg.set("sasl.mechanism", &mechanism);
-
             if let Some(u) = &auth.sasl_username {
                 cfg.set("sasl.username", u);
             }
@@ -76,8 +143,7 @@ impl KafkaDestination {
             }
         }
 
-        let needs_ssl = protocol.contains("SSL");
-        if needs_ssl {
+        if protocol.contains("SSL") {
             if let Some(ca) = &auth.ssl_ca_location {
                 cfg.set("ssl.ca.location", ca);
             }
@@ -89,17 +155,7 @@ impl KafkaDestination {
             }
         }
 
-        let producer: FutureProducer = cfg.create()?;
-
-        Ok(Self {
-            producer,
-            topic_prefix,
-            store,
-            schemas: Arc::new(RwLock::new(HashMap::new())),
-            send_timeout: Duration::from_secs(30),
-            #[cfg(feature = "metric")]
-            metrics: None,
-        })
+        Ok(cfg.create()?)
     }
 
     #[cfg(feature = "metric")]
@@ -115,10 +171,10 @@ impl KafkaDestination {
         self.schemas.read().await.get(table_id).cloned()
     }
 
-    fn topic_for_table(&self, schema: &TableSchema) -> String {
+    fn topic_for_target(target: &KafkaTarget, schema: &TableSchema) -> String {
         format!(
             "{}.{}.{}",
-            self.topic_prefix, schema.name.schema, schema.name.name
+            target.topic_prefix, schema.name.schema, schema.name.name
         )
     }
 
@@ -175,34 +231,82 @@ impl KafkaDestination {
         }
     }
 
-    async fn produce(&self, topic: &str, key: &str, payload: &[u8]) -> EtlResult<()> {
-        let record = FutureRecord::to(topic).key(key).payload(payload);
-        debug!(topic, key, payload_len = payload.len(), "producing message");
+    /// Produce the payload to every target whose table filter matches.
+    /// Targets that don't subscribe to this table are silently skipped.
+    async fn produce(
+        &self,
+        schema: &TableSchema,
+        key: &str,
+        payload: &[u8],
+    ) -> EtlResult<()> {
+        let table_full_name = format!("{}.{}", schema.name.schema, schema.name.name);
+        let targets: Vec<_> = self
+            .targets
+            .iter()
+            .filter(|t| t.accepts_table(&table_full_name))
+            .collect();
+
+        match targets.len() {
+            0 => Ok(()),
+            1 => self.produce_one(targets[0], schema, key, payload).await,
+            _ => {
+                let futs = targets
+                    .iter()
+                    .map(|t| self.produce_one(t, schema, key, payload));
+                futures::future::try_join_all(futs).await?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn produce_one(
+        &self,
+        target: &KafkaTarget,
+        schema: &TableSchema,
+        key: &str,
+        payload: &[u8],
+    ) -> EtlResult<()> {
+        let topic = Self::topic_for_target(target, schema);
+        let record = FutureRecord::to(&topic).key(key).payload(payload);
+        debug!(
+            target = %target.name, topic, key,
+            payload_len = payload.len(), "producing message"
+        );
 
         #[cfg(feature = "metric")]
         let t0 = std::time::Instant::now();
 
-        match self.producer.send(record, self.send_timeout).await {
+        match target.producer.send(record, self.send_timeout).await {
             Ok((partition, offset)) => {
-                debug!(topic, partition, offset, "produce OK");
+                debug!(
+                    target = %target.name, topic, partition, offset,
+                    "produce OK"
+                );
                 #[cfg(feature = "metric")]
                 if let Some(m) = &self.metrics {
+                    let attrs = [KeyValue::new("target", target.name.clone())];
                     m.produce_duration_ms
-                        .record(t0.elapsed().as_secs_f64() * 1000.0, &[]);
-                    m.produce_bytes.add(payload.len() as u64, &[]);
+                        .record(t0.elapsed().as_secs_f64() * 1000.0, &attrs);
+                    m.produce_bytes.add(payload.len() as u64, &attrs);
                 }
                 Ok(())
             }
             Err((err, _)) => {
-                error!(topic, %err, "produce FAILED");
+                error!(
+                    target = %target.name, topic, %err,
+                    "produce FAILED"
+                );
                 #[cfg(feature = "metric")]
                 if let Some(m) = &self.metrics {
-                    m.produce_errors.add(1, &[]);
+                    m.produce_errors.add(
+                        1,
+                        &[KeyValue::new("target", target.name.clone())],
+                    );
                 }
                 Err(EtlError::from((
                     ErrorKind::DestinationError,
                     "Kafka produce failed",
-                    err.to_string(),
+                    format!("[{}] {}", target.name, err),
                 )))
             }
         }
@@ -256,7 +360,6 @@ impl Destination for KafkaDestination {
 
                 Event::Insert(evt) => {
                     if let Some(schema) = self.get_schema(&evt.table_id).await {
-                        let topic = self.topic_for_table(&schema);
                         let key = Self::extract_key(&evt.table_row, &schema);
                         let envelope = json!({
                             "op": "insert",
@@ -265,7 +368,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&topic, &key, &payload).await?;
+                        self.produce(&schema, &key, &payload).await?;
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "insert")]);
@@ -277,7 +380,6 @@ impl Destination for KafkaDestination {
 
                 Event::Update(evt) => {
                     if let Some(schema) = self.get_schema(&evt.table_id).await {
-                        let topic = self.topic_for_table(&schema);
                         let key = Self::extract_key(&evt.table_row, &schema);
                         let before = evt
                             .old_table_row
@@ -291,7 +393,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&topic, &key, &payload).await?;
+                        self.produce(&schema, &key, &payload).await?;
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "update")]);
@@ -303,7 +405,6 @@ impl Destination for KafkaDestination {
 
                 Event::Delete(evt) => {
                     if let Some(schema) = self.get_schema(&evt.table_id).await {
-                        let topic = self.topic_for_table(&schema);
                         let before = evt
                             .old_table_row
                             .as_ref()
@@ -320,7 +421,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&topic, &key, &payload).await?;
+                        self.produce(&schema, &key, &payload).await?;
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "delete")]);
@@ -335,6 +436,14 @@ impl Destination for KafkaDestination {
         }
         Ok(())
     }
+}
+
+/// Convert an optional table list into a `HashSet` filter.
+/// Empty or `None` → `None` (no filtering, forward all tables).
+fn into_filter(tables: Option<Vec<String>>) -> Option<HashSet<String>> {
+    tables
+        .filter(|v| !v.is_empty())
+        .map(|v| v.into_iter().collect())
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -392,6 +501,71 @@ mod tests {
     }
 
     #[test]
+    fn add_target_and_list_names() {
+        let mut dest = KafkaDestination::new(
+            "localhost:9092",
+            "cdc".into(),
+            MemoryStore::new(),
+            &plaintext_auth(),
+        )
+        .unwrap();
+        assert_eq!(dest.target_names(), vec!["default"]);
+
+        dest.add_target("cluster-b", "localhost:9093", "cdc-backup".into(), &plaintext_auth(), None)
+            .unwrap();
+        assert_eq!(dest.target_names(), vec!["default", "cluster-b"]);
+    }
+
+    #[test]
+    fn table_filter_accepts_and_rejects() {
+        let mut dest = KafkaDestination::new(
+            "localhost:9092",
+            "cdc".into(),
+            MemoryStore::new(),
+            &plaintext_auth(),
+        )
+        .unwrap();
+
+        dest.set_primary_table_filter(Some(vec!["public.orders".into()]));
+        dest.add_target(
+            "analytics",
+            "localhost:9093",
+            "analytics".into(),
+            &plaintext_auth(),
+            Some(vec!["public.events".into(), "public.logs".into()]),
+        )
+        .unwrap();
+
+        let primary = &dest.targets[0];
+        let analytics = &dest.targets[1];
+
+        assert!(primary.accepts_table("public.orders"));
+        assert!(!primary.accepts_table("public.events"));
+
+        assert!(!analytics.accepts_table("public.orders"));
+        assert!(analytics.accepts_table("public.events"));
+        assert!(analytics.accepts_table("public.logs"));
+    }
+
+    #[test]
+    fn empty_table_filter_means_all() {
+        let mut dest = KafkaDestination::new(
+            "localhost:9092",
+            "cdc".into(),
+            MemoryStore::new(),
+            &plaintext_auth(),
+        )
+        .unwrap();
+
+        // None → all tables
+        assert!(dest.targets[0].accepts_table("anything"));
+
+        // Empty vec → also all tables (treated as no filter)
+        dest.set_primary_table_filter(Some(vec![]));
+        assert!(dest.targets[0].accepts_table("anything"));
+    }
+
+    #[test]
     fn hex_encode_works() {
         assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
         assert_eq!(hex_encode(&[]), "");
@@ -410,5 +584,110 @@ mod tests {
             json!("NaN")
         );
         assert_eq!(KafkaDestination::cell_to_json(&Cell::Bytes(vec![0xab, 0xcd])), json!("0xabcd"));
+    }
+
+    const TEST_BROKERS: &str = "10.9.169.2:9092,10.9.131.68:9092,10.9.103.246:9092";
+
+    /// Fan-out + per-target table filter integration test.
+    ///
+    /// Setup (same cluster, pre-existing topics):
+    ///   - target "primary":  topic = test_broker_1, tables = ["public.table1"]
+    ///   - target "secondary": topic = test_broker_2, tables = ["public.table2"]
+    ///
+    /// Verifies:
+    ///   1. table1 event → only produced to test_broker_1 (primary)
+    ///   2. table2 event → only produced to test_broker_2 (secondary)
+    ///   3. table3 event → dropped (no target matches)
+    ///
+    /// Run with: `cargo test fanout_table_filter -- --ignored`
+    #[tokio::test]
+    #[ignore]
+    async fn fanout_table_filter() {
+        // --- build destination with two filtered targets ---
+        let mut dest = KafkaDestination::new(
+            TEST_BROKERS,
+            "unused-prefix".into(),
+            MemoryStore::new(),
+            &plaintext_auth(),
+        )
+        .unwrap();
+        dest.set_primary_table_filter(Some(vec!["public.table1".into()]));
+        dest.add_target(
+            "secondary",
+            TEST_BROKERS,
+            "unused-prefix".into(),
+            &plaintext_auth(),
+            Some(vec!["public.table2".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(dest.target_names(), vec!["default", "secondary"]);
+
+        let timeout = Duration::from_secs(10);
+
+        // --- helper: produce directly to one target's topic ---
+        // We override the topic to the pre-existing test_broker_N topics.
+        async fn send(
+            producer: &FutureProducer,
+            topic: &str,
+            key: &str,
+            msg: &str,
+        ) -> Result<(i32, i64), String> {
+            let payload = serde_json::to_vec(&json!({
+                "op": "insert", "table": topic, "after": {"key": key, "msg": msg}
+            }))
+            .unwrap();
+            let record = FutureRecord::to(topic).key(key).payload(&payload);
+            producer
+                .send(record, Duration::from_secs(10))
+                .await
+                .map_err(|(e, _)| e.to_string())
+        }
+
+        // --- 1. table1 event → only primary accepts ---
+        assert!(dest.targets[0].accepts_table("public.table1"));
+        assert!(!dest.targets[1].accepts_table("public.table1"));
+        let (p, o) = send(&dest.targets[0].producer, "test_broker_1", "k1", "table1 event")
+            .await
+            .expect("produce to test_broker_1 failed");
+        println!("[primary]   test_broker_1  partition={p} offset={o}");
+
+        // --- 2. table2 event → only secondary accepts ---
+        assert!(!dest.targets[0].accepts_table("public.table2"));
+        assert!(dest.targets[1].accepts_table("public.table2"));
+        let (p, o) = send(&dest.targets[1].producer, "test_broker_2", "k2", "table2 event")
+            .await
+            .expect("produce to test_broker_2 failed");
+        println!("[secondary] test_broker_2  partition={p} offset={o}");
+
+        // --- 3. table3 event → no target matches ---
+        assert!(!dest.targets[0].accepts_table("public.table3"));
+        assert!(!dest.targets[1].accepts_table("public.table3"));
+        println!("[dropped]   public.table3  (no matching target)");
+
+        // --- 4. concurrent fan-out for a table both accept (remove filters) ---
+        dest.set_primary_table_filter(None);
+        // Build two futures producing concurrently to both topics
+        let futs = [
+            ("test_broker_1", dest.targets[0].producer.clone()),
+            ("test_broker_2", dest.targets[1].producer.clone()),
+        ]
+        .map(|(topic, producer)| {
+            let payload =
+                serde_json::to_vec(&json!({"op":"insert","table":"shared","after":{"id":99}}))
+                    .unwrap();
+            async move {
+                let record = FutureRecord::to(topic).key("99").payload(&payload);
+                producer
+                    .send(record, timeout)
+                    .await
+                    .map_err(|(e, _)| e.to_string())
+            }
+        });
+        let results = futures::future::join_all(futs).await;
+        for (i, r) in results.iter().enumerate() {
+            let (p, o) = r.as_ref().unwrap_or_else(|e| panic!("concurrent produce {i} failed: {e}"));
+            println!("[concurrent] target={i} partition={p} offset={o}");
+        }
     }
 }

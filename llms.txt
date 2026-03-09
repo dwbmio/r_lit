@@ -10,7 +10,7 @@
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
 - img_resize/ — Image resizing and compression
 - group_vibe_workbench/ — Desktop collaboration workbench (GPUI + P2P)
-- pgpour/ — Postgres CDC → Kafka data pipeline
+- pgpour/ — Postgres CDC → Kafka data pipeline (multi-topic fan-out, per-table routing)
 - omniplan_covers_ding/ — Internal tool (external path dependency, not portable)
 - video-generator/ — Video generation tools
 - crates/murmur/ — P2P collaboration library (iroh-net + Automerge CRDT)

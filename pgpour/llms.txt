@@ -2,7 +2,7 @@
 
 - purpose: Postgres CDC to Kafka real-time data pipeline via logical replication
 - version: 0.1.0
-- language: Rust (edition 2024, MSRV 1.88.0)
+- language: Rust (edition 2024, MSRV 1.90.0)
 - based_on: supabase/etl
 
 ## Command Syntax
@@ -40,6 +40,39 @@ pgpour [--config <YAML>] --pg-host <HOST> --pg-database <DB> --pg-username <USER
 - `--kafka-ssl-ca-location`: CA cert path
 - `--kafka-ssl-certificate-location`: Client cert (mTLS)
 - `--kafka-ssl-key-location`: Client key (mTLS)
+
+## Multi-Topic Fan-out with Per-Target Table Filtering (YAML-only)
+
+Add `kafka_destinations` array in the YAML config to route CDC events to different
+topic prefixes within the same Kafka cluster. A single replication slot is used;
+WAL is decoded once. Matching targets are produced to concurrently via
+`futures::try_join_all`.
+
+Each target supports an optional `tables` whitelist (`["schema.table", ...]`,
+e.g. `["public.orders", "public.users"]`).
+When set (non-empty), only events for those tables are forwarded to that target.
+When absent or empty, all tables are forwarded.
+Events matching no target are silently dropped; the pipeline continues normally.
+Extra destinations inherit brokers and auth from the primary `kafka` when omitted
+— typically only `name`, `topic_prefix`, and `tables` need to be specified.
+
+```yaml
+kafka:
+  brokers: 10.9.169.2:9092,10.9.131.68:9092
+  topic_prefix: cdc
+  tables:
+    - public.orders
+
+kafka_destinations:
+  - name: analytics
+    topic_prefix: analytics
+    tables:
+      - public.events
+```
+
+Each entry supports: name, brokers, topic_prefix, tables, security_protocol,
+sasl_*, ssl_*. The primary `kafka` section is always the "default" target.
+Override brokers/auth only when targeting a different Kafka cluster.
 
 ## Tuning Arguments
 

@@ -16,7 +16,7 @@ Rust 独立工具与库的集合仓库。每个子目录是独立的 Cargo crate
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [img_resize](img_resize/) | 图片缩放与压缩 |
 | [group_vibe_workbench](group_vibe_workbench/) | 桌面协作工作台 (GPUI + P2P) |
-| [pgpour](pgpour/) | Postgres CDC → Kafka 数据管道 |
+| [pgpour](pgpour/) | Postgres CDC → Kafka 数据管道（多 topic 扇出） |
 | [omniplan_covers_ding](omniplan_covers_ding/) | 内部工具 (有外部路径依赖) |
 | [video-generator](video-generator/) | 视频工具集 |
 | [crates/murmur](crates/murmur/) | P2P 协作库 (iroh-net + Automerge CRDT) |

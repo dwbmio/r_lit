@@ -5,19 +5,20 @@ Postgres CDC → Kafka real-time data pipeline. Built on [supabase/etl](https://
 ## Architecture
 
 ```
-┌────────────┐  logical replication  ┌──────────┐  produce  ┌───────┐
-│ PostgreSQL │ ────────────────────→ │ pgpour   │ ────────→ │ Kafka │
-│ (WAL)      │                       │          │           │       │
-└────────────┘                       └──────────┘           └───────┘
+┌────────────┐  logical replication  ┌──────────┐  produce  ┌───────────────┐
+│ PostgreSQL │ ────────────────────→ │ pgpour   │ ────────→ │ Topic-A (tbl1)│
+│ (WAL)      │                       │          │ ────────→ │ Topic-B (tbl2)│
+└────────────┘                       └──────────┘           └───────────────┘
 ```
 
 - Zero intrusion on PG side (only requires `wal_level=logical` + `CREATE PUBLICATION`)
 - One Kafka topic per table: `{prefix}.{schema}.{table}`
 - Message format: JSON envelope (`op` / `before` / `after`)
+- Multi-topic fan-out: single replication slot, route events to different topics by table via `kafka_destinations`
 
 ## Prerequisites
 
-- Rust >= 1.88.0, cmake
+- Rust >= 1.90.0, cmake
 - PostgreSQL 14+ with `wal_level = logical`
 - Connection user needs `REPLICATION` privilege
 
@@ -26,24 +27,28 @@ Postgres CDC → Kafka real-time data pipeline. Built on [supabase/etl](https://
 ### 1. Configure PostgreSQL
 
 ```sql
+-- 1. Confirm wal_level (requires superuser; restart PG after changing)
 SHOW wal_level;  -- must output: logical
+-- ALTER SYSTEM SET wal_level = logical;  -- then restart PG
 
+-- 2. Create publication for target tables
 CREATE PUBLICATION cdc_publication FOR TABLE feature_config;
+-- Add more tables later:
+-- ALTER PUBLICATION cdc_publication ADD TABLE solution, feature_config_history;
 
--- (Optional) Include full old row in UPDATE/DELETE
+-- 3. (Optional) Full old row in UPDATE/DELETE events
 ALTER TABLE feature_config REPLICA IDENTITY FULL;
 
+-- 4. Ensure connection user has REPLICATION privilege
 ALTER ROLE repl_user REPLICATION;
 ```
-
-See `sql/setup_publication.sql` for full setup script.
 
 ### 2. Configure the Application
 
 Config priority: **CLI args > env vars > YAML config file > defaults**
 
 ```bash
-cp config.example.yml config.yml
+cp examples/config.example.yml config.yml
 # Edit config.yml with actual values; use env vars for sensitive fields
 ```
 
@@ -76,7 +81,7 @@ docker run -e PG_PASSWORD=xxx pgpour:latest
 
 ## Configuration Reference
 
-All parameters support YAML config file / env vars / CLI args. See `config.example.yml` for a complete example.
+All parameters support YAML config file / env vars / CLI args. See `examples/config.example.yml` for a complete example.
 
 | Env Var | YAML Field | Description | Default |
 |---------|-----------|-------------|---------|
@@ -205,6 +210,30 @@ kafka:
 ```
 
 </details>
+
+### Multi-Topic Fan-out (Per-Target Table Filtering)
+
+Add `kafka_destinations` in the YAML config to route CDC events to different topic prefixes within the same Kafka cluster. A single replication slot is used — WAL is decoded only once, and matching targets are produced to concurrently.
+
+Each target supports an optional `tables` whitelist (`schema.table` format, e.g. `public.orders`); omit or leave empty to forward all tables. Events matching no target's `tables` list are silently dropped and the pipeline continues normally. Extra destinations inherit `brokers` and auth from the primary `kafka` section — only specify what differs (typically just `name`, `topic_prefix`, and `tables`).
+
+```yaml
+kafka:
+  brokers: 10.9.169.2:9092,10.9.131.68:9092
+  topic_prefix: cdc
+  tables:                        # primary target only receives table1
+    - public.table1
+
+kafka_destinations:
+  - name: backup
+    topic_prefix: cdc-backup     # no 'tables' → receives all tables
+  - name: analytics
+    topic_prefix: analytics
+    tables:                      # analytics only receives table2
+      - public.table2
+```
+
+The primary `kafka` section (also configurable via CLI / env vars) is always the `"default"` target. `kafka_destinations` and `tables` are YAML-only. If you need to connect to a different Kafka cluster, override `brokers` / auth fields in that entry.
 
 ## Optional Features
 
