@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use etl::destination::Destination;
 use etl::error::{ErrorKind, EtlError, EtlResult};
@@ -13,19 +14,40 @@ use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+use crate::config::KafkaAuth;
+
 #[cfg(feature = "metric")]
 use crate::metrics::CdcMetrics;
 #[cfg(feature = "metric")]
 use opentelemetry::KeyValue;
 
-pub struct KafkaAuth {
-    pub security_protocol: String,
-    pub sasl_mechanism: Option<String>,
-    pub sasl_username: Option<String>,
-    pub sasl_password: Option<String>,
-    pub ssl_ca_location: Option<String>,
-    pub ssl_certificate_location: Option<String>,
-    pub ssl_key_location: Option<String>,
+/// Tracks pipeline phase transitions visible from the Destination side.
+///
+/// init phase:  truncate_table / write_table_rows called per table
+/// streaming:   write_events called continuously
+#[derive(Clone)]
+struct PhaseTracker {
+    tables_init_started: Arc<RwLock<HashSet<TableId>>>,
+    tables_init_completed: Arc<RwLock<HashSet<TableId>>>,
+    init_rows_total: Arc<AtomicU64>,
+    streaming_entered: Arc<AtomicBool>,
+    streaming_batches: Arc<AtomicU64>,
+    streaming_events: Arc<AtomicU64>,
+    streaming_start_time: Arc<RwLock<Option<Instant>>>,
+}
+
+impl PhaseTracker {
+    fn new() -> Self {
+        Self {
+            tables_init_started: Arc::new(RwLock::new(HashSet::new())),
+            tables_init_completed: Arc::new(RwLock::new(HashSet::new())),
+            init_rows_total: Arc::new(AtomicU64::new(0)),
+            streaming_entered: Arc::new(AtomicBool::new(false)),
+            streaming_batches: Arc::new(AtomicU64::new(0)),
+            streaming_events: Arc::new(AtomicU64::new(0)),
+            streaming_start_time: Arc::new(RwLock::new(None)),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,34 +77,27 @@ pub struct KafkaDestination {
     /// Fallback schema cache populated from RelationEvent
     schemas: Arc<RwLock<HashMap<TableId, Arc<TableSchema>>>>,
     send_timeout: Duration,
+    phase: PhaseTracker,
     #[cfg(feature = "metric")]
     metrics: Option<CdcMetrics>,
 }
 
 impl KafkaDestination {
-    pub fn new(
-        brokers: &str,
-        topic_prefix: String,
-        store: MemoryStore,
-        auth: &KafkaAuth,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let producer = Self::create_producer(brokers, auth)?;
-        Ok(Self {
-            targets: vec![KafkaTarget {
-                name: "default".to_string(),
-                producer,
-                topic_prefix,
-                table_filter: None,
-            }],
+    /// Create an empty destination with no targets.
+    /// Use [`add_target`] to register one or more independent Kafka targets.
+    pub fn new(store: MemoryStore) -> Self {
+        Self {
+            targets: Vec::new(),
             store,
             schemas: Arc::new(RwLock::new(HashMap::new())),
             send_timeout: Duration::from_secs(30),
+            phase: PhaseTracker::new(),
             #[cfg(feature = "metric")]
             metrics: None,
-        })
+        }
     }
 
-    /// Register an additional Kafka cluster for fan-out.
+    /// Register a Kafka target. All targets are independent peers.
     /// `table_filter`: optional whitelist of `"schema.table"` names.
     /// `None` or empty vec → forward all tables.
     pub fn add_target(
@@ -103,13 +118,6 @@ impl KafkaDestination {
         Ok(())
     }
 
-    /// Set the table whitelist for the primary ("default") target.
-    pub fn set_primary_table_filter(&mut self, tables: Option<Vec<String>>) {
-        if let Some(target) = self.targets.first_mut() {
-            target.table_filter = into_filter(tables);
-        }
-    }
-
     pub fn target_names(&self) -> Vec<&str> {
         self.targets.iter().map(|t| t.name.as_str()).collect()
     }
@@ -122,8 +130,9 @@ impl KafkaDestination {
         cfg.set("bootstrap.servers", brokers)
             .set("message.timeout.ms", "30000")
             .set("queue.buffering.max.messages", "100000")
-            .set("queue.buffering.max.ms", "100")
-            .set("batch.num.messages", "1000");
+            .set("queue.buffering.max.ms", "5")
+            .set("batch.num.messages", "10000")
+            .set("compression.type", "lz4");
 
         let protocol = auth.security_protocol.to_uppercase().replace('-', "_");
         cfg.set("security.protocol", &protocol);
@@ -319,7 +328,15 @@ impl Destination for KafkaDestination {
     }
 
     async fn truncate_table(&self, table_id: TableId) -> EtlResult<()> {
-        info!(%table_id, "truncate_table is a no-op for Kafka (append-only)");
+        let mut started = self.phase.tables_init_started.write().await;
+        started.insert(table_id);
+        let count = started.len();
+        info!(
+            %table_id,
+            phase = "init_sync",
+            tables_started = count,
+            "table init sync started (truncate is no-op for Kafka)"
+        );
         Ok(())
     }
 
@@ -328,24 +345,65 @@ impl Destination for KafkaDestination {
         table_id: TableId,
         table_rows: Vec<TableRow>,
     ) -> EtlResult<()> {
-        if table_rows.is_empty() {
-            return Ok(());
+        let batch_rows = table_rows.len();
+
+        if batch_rows > 0 {
+            let total = self.phase.init_rows_total.fetch_add(batch_rows as u64, Ordering::Relaxed) + batch_rows as u64;
+            info!(
+                %table_id,
+                phase = "init_sync",
+                batch_rows,
+                total_rows_skipped = total,
+                "skipped (incremental-only mode, no snapshot produce)"
+            );
+
+            #[cfg(feature = "metric")]
+            if let Some(m) = &self.metrics {
+                m.init_sync_rows.add(batch_rows as u64, &[]);
+            }
         }
 
-        let _schema = self.get_schema(&table_id).await.ok_or_else(|| {
-            EtlError::from((
-                ErrorKind::DestinationError,
-                "Schema not found for table during initial sync",
-                format!("table_id={table_id}"),
-            ))
-        })?;
+        let mut completed = self.phase.tables_init_completed.write().await;
+        completed.insert(table_id);
+        let started = self.phase.tables_init_started.read().await;
+        let done = completed.len();
+        let total_tables = started.len();
 
-        let total = table_rows.len();
-        info!(%table_id, total, "write_table_rows: skipping initial sync produce (MVP mode)");
+        info!(
+            %table_id,
+            phase = "init_sync",
+            tables_completed = done,
+            tables_total = total_tables,
+            "table init sync completed ({done}/{total_tables})"
+        );
+
         Ok(())
     }
 
     async fn write_events(&self, events: Vec<Event>) -> EtlResult<()> {
+        // Log once when entering the streaming phase
+        if !self.phase.streaming_entered.swap(true, Ordering::Relaxed) {
+            let init_tables = self.phase.tables_init_completed.read().await.len();
+            let init_rows = self.phase.init_rows_total.load(Ordering::Relaxed);
+            *self.phase.streaming_start_time.write().await = Some(Instant::now());
+            info!(
+                phase = "streaming",
+                init_tables_synced = init_tables,
+                init_rows_total = init_rows,
+                kafka_targets = ?self.target_names(),
+                "entered streaming phase — now processing WAL events in real-time"
+            );
+        }
+
+        struct Msg {
+            schema: Arc<TableSchema>,
+            key: String,
+            payload: Vec<u8>,
+        }
+
+        // Phase 1: schema lookup + JSON serialization (CPU-bound, sequential)
+        let mut messages: Vec<Msg> = Vec::with_capacity(events.len());
+
         for event in events {
             match event {
                 Event::Relation(rel) => {
@@ -368,7 +426,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&schema, &key, &payload).await?;
+                        messages.push(Msg { schema, key, payload });
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "insert")]);
@@ -393,7 +451,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&schema, &key, &payload).await?;
+                        messages.push(Msg { schema, key, payload });
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "update")]);
@@ -421,7 +479,7 @@ impl Destination for KafkaDestination {
                         });
                         let payload =
                             serde_json::to_vec(&envelope).map_err(EtlError::from)?;
-                        self.produce(&schema, &key, &payload).await?;
+                        messages.push(Msg { schema, key, payload });
                         #[cfg(feature = "metric")]
                         if let Some(m) = &self.metrics {
                             m.events_total.add(1, &[KeyValue::new("op", "delete")]);
@@ -434,6 +492,45 @@ impl Destination for KafkaDestination {
                 Event::Begin(_) | Event::Commit(_) | Event::Truncate(_) | Event::Unsupported => {}
             }
         }
+
+        // Phase 2: produce all messages concurrently (I/O-bound)
+        // librdkafka batches the underlying network requests automatically.
+        if !messages.is_empty() {
+            let count = messages.len();
+            debug!(count, "batch producing");
+            let futs: Vec<_> = messages
+                .iter()
+                .map(|m| self.produce(&m.schema, &m.key, &m.payload))
+                .collect();
+            futures::future::try_join_all(futs).await?;
+
+            let batch_num = self.phase.streaming_batches.fetch_add(1, Ordering::Relaxed) + 1;
+            let total_events = self.phase.streaming_events.fetch_add(count as u64, Ordering::Relaxed) + count as u64;
+
+            #[cfg(feature = "metric")]
+            if let Some(m) = &self.metrics {
+                m.streaming_events.add(count as u64, &[]);
+                m.streaming_batches.add(1, &[]);
+                m.produce_batch_size.record(count as f64, &[]);
+            }
+
+            // Periodic summary every 100 batches
+            if batch_num % 100 == 0 {
+                let elapsed = self.phase.streaming_start_time.read().await
+                    .map(|t| t.elapsed().as_secs())
+                    .unwrap_or(0);
+                let eps = if elapsed > 0 { total_events / elapsed } else { 0 };
+                info!(
+                    phase = "streaming",
+                    batches = batch_num,
+                    events_total = total_events,
+                    elapsed_secs = elapsed,
+                    events_per_sec = eps,
+                    "streaming progress"
+                );
+            }
+        }
+
         Ok(())
     }
 }
@@ -451,243 +548,4 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn plaintext_auth() -> KafkaAuth {
-        KafkaAuth {
-            security_protocol: "plaintext".into(),
-            sasl_mechanism: None,
-            sasl_username: None,
-            sasl_password: None,
-            ssl_ca_location: None,
-            ssl_certificate_location: None,
-            ssl_key_location: None,
-        }
-    }
-
-    fn sasl_ssl_auth() -> KafkaAuth {
-        KafkaAuth {
-            security_protocol: "sasl_ssl".into(),
-            sasl_mechanism: Some("scram-sha-256".into()),
-            sasl_username: Some("user".into()),
-            sasl_password: Some("pass".into()),
-            ssl_ca_location: None,
-            ssl_certificate_location: None,
-            ssl_key_location: None,
-        }
-    }
-
-    #[test]
-    fn plaintext_producer_creates_ok() {
-        let result = KafkaDestination::new(
-            "localhost:9092",
-            "test".into(),
-            MemoryStore::new(),
-            &plaintext_auth(),
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn sasl_ssl_producer_creates_ok() {
-        let result = KafkaDestination::new(
-            "localhost:9092",
-            "test".into(),
-            MemoryStore::new(),
-            &sasl_ssl_auth(),
-        );
-        assert!(result.is_ok(), "sasl_ssl create failed: {:?}", result.err());
-    }
-
-    #[test]
-    fn add_target_and_list_names() {
-        let mut dest = KafkaDestination::new(
-            "localhost:9092",
-            "cdc".into(),
-            MemoryStore::new(),
-            &plaintext_auth(),
-        )
-        .unwrap();
-        assert_eq!(dest.target_names(), vec!["default"]);
-
-        dest.add_target("cluster-b", "localhost:9093", "cdc-backup".into(), &plaintext_auth(), None)
-            .unwrap();
-        assert_eq!(dest.target_names(), vec!["default", "cluster-b"]);
-    }
-
-    #[test]
-    fn table_filter_accepts_and_rejects() {
-        let mut dest = KafkaDestination::new(
-            "localhost:9092",
-            "cdc".into(),
-            MemoryStore::new(),
-            &plaintext_auth(),
-        )
-        .unwrap();
-
-        dest.set_primary_table_filter(Some(vec!["public.orders".into()]));
-        dest.add_target(
-            "analytics",
-            "localhost:9093",
-            "analytics".into(),
-            &plaintext_auth(),
-            Some(vec!["public.events".into(), "public.logs".into()]),
-        )
-        .unwrap();
-
-        let primary = &dest.targets[0];
-        let analytics = &dest.targets[1];
-
-        assert!(primary.accepts_table("public.orders"));
-        assert!(!primary.accepts_table("public.events"));
-
-        assert!(!analytics.accepts_table("public.orders"));
-        assert!(analytics.accepts_table("public.events"));
-        assert!(analytics.accepts_table("public.logs"));
-    }
-
-    #[test]
-    fn empty_table_filter_means_all() {
-        let mut dest = KafkaDestination::new(
-            "localhost:9092",
-            "cdc".into(),
-            MemoryStore::new(),
-            &plaintext_auth(),
-        )
-        .unwrap();
-
-        // None → all tables
-        assert!(dest.targets[0].accepts_table("anything"));
-
-        // Empty vec → also all tables (treated as no filter)
-        dest.set_primary_table_filter(Some(vec![]));
-        assert!(dest.targets[0].accepts_table("anything"));
-    }
-
-    #[test]
-    fn hex_encode_works() {
-        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
-        assert_eq!(hex_encode(&[]), "");
-    }
-
-    #[test]
-    fn cell_to_json_coverage() {
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::Null), Value::Null);
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::Bool(true)), json!(true));
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::String("hello".into())), json!("hello"));
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::I32(42)), json!(42));
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::I64(-1)), json!(-1));
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::F64(3.14)), json!(3.14));
-        assert_eq!(
-            KafkaDestination::cell_to_json(&Cell::Numeric(PgNumeric::NaN)),
-            json!("NaN")
-        );
-        assert_eq!(KafkaDestination::cell_to_json(&Cell::Bytes(vec![0xab, 0xcd])), json!("0xabcd"));
-    }
-
-    const TEST_BROKERS: &str = "10.9.169.2:9092,10.9.131.68:9092,10.9.103.246:9092";
-
-    /// Fan-out + per-target table filter integration test.
-    ///
-    /// Setup (same cluster, pre-existing topics):
-    ///   - target "primary":  topic = test_broker_1, tables = ["public.table1"]
-    ///   - target "secondary": topic = test_broker_2, tables = ["public.table2"]
-    ///
-    /// Verifies:
-    ///   1. table1 event → only produced to test_broker_1 (primary)
-    ///   2. table2 event → only produced to test_broker_2 (secondary)
-    ///   3. table3 event → dropped (no target matches)
-    ///
-    /// Run with: `cargo test fanout_table_filter -- --ignored`
-    #[tokio::test]
-    #[ignore]
-    async fn fanout_table_filter() {
-        // --- build destination with two filtered targets ---
-        let mut dest = KafkaDestination::new(
-            TEST_BROKERS,
-            "unused-prefix".into(),
-            MemoryStore::new(),
-            &plaintext_auth(),
-        )
-        .unwrap();
-        dest.set_primary_table_filter(Some(vec!["public.table1".into()]));
-        dest.add_target(
-            "secondary",
-            TEST_BROKERS,
-            "unused-prefix".into(),
-            &plaintext_auth(),
-            Some(vec!["public.table2".into()]),
-        )
-        .unwrap();
-
-        assert_eq!(dest.target_names(), vec!["default", "secondary"]);
-
-        let timeout = Duration::from_secs(10);
-
-        // --- helper: produce directly to one target's topic ---
-        // We override the topic to the pre-existing test_broker_N topics.
-        async fn send(
-            producer: &FutureProducer,
-            topic: &str,
-            key: &str,
-            msg: &str,
-        ) -> Result<(i32, i64), String> {
-            let payload = serde_json::to_vec(&json!({
-                "op": "insert", "table": topic, "after": {"key": key, "msg": msg}
-            }))
-            .unwrap();
-            let record = FutureRecord::to(topic).key(key).payload(&payload);
-            producer
-                .send(record, Duration::from_secs(10))
-                .await
-                .map_err(|(e, _)| e.to_string())
-        }
-
-        // --- 1. table1 event → only primary accepts ---
-        assert!(dest.targets[0].accepts_table("public.table1"));
-        assert!(!dest.targets[1].accepts_table("public.table1"));
-        let (p, o) = send(&dest.targets[0].producer, "test_broker_1", "k1", "table1 event")
-            .await
-            .expect("produce to test_broker_1 failed");
-        println!("[primary]   test_broker_1  partition={p} offset={o}");
-
-        // --- 2. table2 event → only secondary accepts ---
-        assert!(!dest.targets[0].accepts_table("public.table2"));
-        assert!(dest.targets[1].accepts_table("public.table2"));
-        let (p, o) = send(&dest.targets[1].producer, "test_broker_2", "k2", "table2 event")
-            .await
-            .expect("produce to test_broker_2 failed");
-        println!("[secondary] test_broker_2  partition={p} offset={o}");
-
-        // --- 3. table3 event → no target matches ---
-        assert!(!dest.targets[0].accepts_table("public.table3"));
-        assert!(!dest.targets[1].accepts_table("public.table3"));
-        println!("[dropped]   public.table3  (no matching target)");
-
-        // --- 4. concurrent fan-out for a table both accept (remove filters) ---
-        dest.set_primary_table_filter(None);
-        // Build two futures producing concurrently to both topics
-        let futs = [
-            ("test_broker_1", dest.targets[0].producer.clone()),
-            ("test_broker_2", dest.targets[1].producer.clone()),
-        ]
-        .map(|(topic, producer)| {
-            let payload =
-                serde_json::to_vec(&json!({"op":"insert","table":"shared","after":{"id":99}}))
-                    .unwrap();
-            async move {
-                let record = FutureRecord::to(topic).key("99").payload(&payload);
-                producer
-                    .send(record, timeout)
-                    .await
-                    .map_err(|(e, _)| e.to_string())
-            }
-        });
-        let results = futures::future::join_all(futs).await;
-        for (i, r) in results.iter().enumerate() {
-            let (p, o) = r.as_ref().unwrap_or_else(|e| panic!("concurrent produce {i} failed: {e}"));
-            println!("[concurrent] target={i} partition={p} offset={o}");
-        }
-    }
-}
+mod tests;

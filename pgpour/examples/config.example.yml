@@ -19,7 +19,6 @@ postgres:
 
 kafka:
   brokers: 10.9.169.2:9092,10.9.131.68:9092,10.9.103.246:9092
-  topic_prefix: cdc
   # Auth: plaintext (default) | ssl | sasl_plaintext | sasl_ssl
   security_protocol: plaintext
   # SASL (required when security_protocol contains "sasl")
@@ -31,30 +30,14 @@ kafka:
   # ssl_certificate_location: /etc/pgpour/client.pem
   # ssl_key_location: /etc/pgpour/client.key
 
-# Per-target table whitelist (optional, YAML-only).
-# Format: schema.table (e.g. public.feature_config).
-# When set, only events for listed tables are forwarded to this target.
-# Omit or leave empty to forward all tables.
-# Events matching no target's tables list are silently dropped.
-# tables:
-#   - public.feature_config
-
-# Extra Kafka destinations for multi-topic fan-out (same cluster, different topic prefixes).
-# Brokers/auth omitted = inherit from primary 'kafka' above.
-# Typically only name, topic_prefix, and tables need to be specified.
-# kafka_destinations:
-#   - name: analytics
-#     topic_prefix: analytics
-#     tables:
-#       - public.events
-#       - public.logs
-#   # Override brokers/auth only if targeting a different Kafka cluster:
-#   - name: remote
-#     brokers: other-kafka:9092
-#     topic_prefix: remote
-#     security_protocol: sasl_ssl
-#     sasl_mechanism: scram-sha-512
-#     sasl_username: remote_user
+  # Routing targets — each is an independent peer.
+  # Every target must have 'name' and 'topic_prefix'.
+  # 'tables' is an optional whitelist; omit to forward all publication tables.
+  targets:
+    - name: default
+      topic_prefix: cdc
+      # tables:
+      #   - public.feature_config
 
 pipeline:
   batch_max_fill_ms: 5000
