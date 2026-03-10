@@ -292,33 +292,21 @@ jobs:
             sha256sum * > SHA256SUMS
             cd ..
 
-            # Collect platform list from actual artifacts
-            PLATFORMS=""
+            # Build release notes
+            NOTES="${NAME} v${VERSION}"$'\n\n'"Platforms:"$'\n'
             for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip; do
               [ -f "$f" ] || continue
               BASE=$(basename "$f")
               PLAT=$(echo "$BASE" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//')
-              PLATFORMS="${PLATFORMS}\n- ${PLAT}"
+              NOTES="${NOTES}- ${PLAT}"$'\n'
             done
+            NOTES="${NOTES}"$'\n'"Install: gh release download ${TAG} -p '${NAME}-*' -R ${{ env.GITHUB_REPO }}"
+            NOTES="${NOTES}"$'\n\n'"Built by GitHub Actions run #${{ github.run_number }}"
 
             # Create GitHub release
             gh release create "$TAG" pkg-${NAME}/* \
               --title "${NAME} v${VERSION}" \
-              --notes "$(cat <<NOTES
-## ${NAME} v${VERSION}
-
-### Platforms
-$(echo -e "$PLATFORMS")
-
-### Install
-\`\`\`bash
-# Download from this release
-gh release download ${TAG} -p '${NAME}-*' -R ${GITHUB_REPO}
-\`\`\`
-
-Built by GitHub Actions run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-NOTES
-)"
+              --notes "$NOTES"
 
             echo "  ✓ Release ${TAG} created with ${ASSET_COUNT} assets"
             RELEASED=$(echo "$RELEASED" | jq -c --arg n "$NAME" --arg v "$VERSION" --arg t "$TAG" \
