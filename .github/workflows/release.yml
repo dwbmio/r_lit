@@ -6,6 +6,11 @@ on:
     paths:
       - '**/Cargo.toml'
   workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Space-separated project names to build (e.g. "pgpour bulk_upload")'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -51,6 +56,17 @@ jobs:
         run: |
           echo "Detecting changes..."
           CHANGED_PROJECTS=""
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            CHANGED_PROJECTS="${{ github.event.inputs.projects }}"
+            for p in $CHANGED_PROJECTS; do
+              VERSION=$(grep '^version' ${p}/Cargo.toml | head -1 | cut -d'"' -f2)
+              echo "${p}_version=$VERSION" >> $GITHUB_OUTPUT
+            done
+            echo "changed_projects=$CHANGED_PROJECTS" >> $GITHUB_OUTPUT
+            echo "Manual dispatch — building: $CHANGED_PROJECTS"
+            exit 0
+          fi
 
           if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
             CHANGED_PROJECTS="$CHANGED_PROJECTS bulk_upload"
@@ -180,6 +196,18 @@ jobs:
         id: versions
         run: |
           RELEASE_NOTES=""
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            for p in ${{ github.event.inputs.projects }}; do
+              VERSION=$(grep '^version' ${p}/Cargo.toml | head -1 | cut -d'"' -f2)
+              echo "${p}_version=$VERSION" >> $GITHUB_OUTPUT
+              RELEASE_NOTES="$RELEASE_NOTES\n- ${p} v$VERSION"
+            done
+            echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+            echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
             VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
