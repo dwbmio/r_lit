@@ -23,180 +23,211 @@ env:
   GITHUB_REPO: dwbmio/r_lit
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Job 1: Build binaries for all platforms
-  # ──────────────────────────────────────────────
-  build-and-release:
-    name: Build and Release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            use_cross: false
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            use_cross: false
-          - os: ubuntu-latest
-            target: i686-unknown-linux-musl
-            use_cross: true
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            use_cross: true
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            use_cross: false
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            use_cross: false
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            use_cross: false
-          - os: windows-latest
-            target: i686-pc-windows-msvc
-            use_cross: false
-
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 1: Detect version changes, build matrix  ║
+  # ╚══════════════════════════════════════════════╝
+  detect:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.detect.outputs.projects }}
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Detect changed projects
-        id: changes
-        shell: bash
+      - name: Detect version changes
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Detecting changes..."
-          CHANGED_PROJECTS=""
+          PROJECTS="[]"
+          SERVER_ONLY="pgpour"
+
+          add_project() {
+            local name=$1 version=$2
+            PROJECTS=$(echo "$PROJECTS" | jq -c --arg n "$name" --arg v "$version" '. + [{"name":$n,"version":$v}]')
+            echo "  + ${name} v${version} (new version, no existing release)"
+          }
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            CHANGED_PROJECTS="${{ github.event.inputs.projects }}"
-            for p in $CHANGED_PROJECTS; do
-              VERSION=$(grep '^version' ${p}/Cargo.toml | head -1 | cut -d'"' -f2)
-              echo "${p}_version=$VERSION" >> $GITHUB_OUTPUT
+            echo "=== Manual dispatch ==="
+            for p in ${{ github.event.inputs.projects }}; do
+              if [ ! -f "${p}/Cargo.toml" ]; then
+                echo "  ✗ ${p}/Cargo.toml not found, skipping"
+                continue
+              fi
+              VER=$(grep '^version' "${p}/Cargo.toml" | head -1 | cut -d'"' -f2)
+              if gh release view "${p}-v${VER}" --json tagName >/dev/null 2>&1; then
+                echo "  ≡ ${p}-v${VER} already released, skipping"
+              else
+                add_project "$p" "$VER"
+              fi
             done
-            echo "changed_projects=$CHANGED_PROJECTS" >> $GITHUB_OUTPUT
-            echo "Manual dispatch — building: $CHANGED_PROJECTS"
+          else
+            echo "=== Checking version diffs (HEAD vs HEAD^) ==="
+            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench pgpour; do
+              [ -f "${dir}/Cargo.toml" ] || continue
+              NEW_VER=$(grep '^version' "${dir}/Cargo.toml" | head -1 | cut -d'"' -f2)
+              OLD_VER=$(git show HEAD^:"${dir}/Cargo.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
+              if [ "$NEW_VER" != "$OLD_VER" ]; then
+                if gh release view "${dir}-v${NEW_VER}" --json tagName >/dev/null 2>&1; then
+                  echo "  ≡ ${dir} ${OLD_VER}→${NEW_VER} but ${dir}-v${NEW_VER} already released"
+                else
+                  echo "  Δ ${dir} ${OLD_VER}→${NEW_VER}"
+                  add_project "$dir" "$NEW_VER"
+                fi
+              else
+                echo "  · ${dir} v${NEW_VER} (unchanged)"
+              fi
+            done
+          fi
+
+          COUNT=$(echo "$PROJECTS" | jq 'length')
+          echo ""
+          echo "=== Result: ${COUNT} project(s) to build ==="
+          echo "$PROJECTS" | jq .
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo 'projects=[]' >> $GITHUB_OUTPUT
+            echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          if git diff HEAD^ HEAD --name-only | grep -q "^bulk_upload/Cargo.toml"; then
-            CHANGED_PROJECTS="$CHANGED_PROJECTS bulk_upload"
-            BULK_VERSION=$(grep '^version' bulk_upload/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "bulk_upload_version=$BULK_VERSION" >> $GITHUB_OUTPUT
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "projects=$(echo "$PROJECTS" | jq -c)" >> $GITHUB_OUTPUT
+
+          # Determine needed build targets
+          HAS_GENERAL=false
+          HAS_SERVER_ONLY=false
+          for name in $(echo "$PROJECTS" | jq -r '.[].name'); do
+            if [[ " $SERVER_ONLY " == *" $name "* ]]; then
+              HAS_SERVER_ONLY=true
+            else
+              HAS_GENERAL=true
+            fi
+          done
+
+          if $HAS_GENERAL; then
+            # General projects need ALL targets
+            MATRIX='{"include":[
+              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
+              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","use_cross":false},
+              {"os":"ubuntu-latest","target":"i686-unknown-linux-musl","use_cross":true},
+              {"os":"ubuntu-latest","target":"aarch64-unknown-linux-musl","use_cross":true},
+              {"os":"macos-latest","target":"x86_64-apple-darwin","use_cross":false},
+              {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false},
+              {"os":"windows-latest","target":"x86_64-pc-windows-msvc","use_cross":false},
+              {"os":"windows-latest","target":"i686-pc-windows-msvc","use_cross":false}
+            ]}'
+          else
+            # Server-only projects: Linux glibc + macOS only
+            MATRIX='{"include":[
+              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
+              {"os":"macos-latest","target":"x86_64-apple-darwin","use_cross":false},
+              {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false}
+            ]}'
           fi
 
-          if git diff HEAD^ HEAD --name-only | grep -q "^img_resize/Cargo.toml"; then
-            CHANGED_PROJECTS="$CHANGED_PROJECTS img_resize"
-            IMG_VERSION=$(grep '^version' img_resize/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "img_resize_version=$IMG_VERSION" >> $GITHUB_OUTPUT
-          fi
+          echo "matrix=$(echo "$MATRIX" | jq -c)" >> $GITHUB_OUTPUT
 
-          if git diff HEAD^ HEAD --name-only | grep -q "^omniplan_covers_ding/Cargo.toml"; then
-            CHANGED_PROJECTS="$CHANGED_PROJECTS omniplan_covers_ding"
-            OMNI_VERSION=$(grep '^version' omniplan_covers_ding/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "omniplan_covers_ding_version=$OMNI_VERSION" >> $GITHUB_OUTPUT
-          fi
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 2: Build changed binaries                ║
+  # ╚══════════════════════════════════════════════╝
+  build:
+    name: Build (${{ matrix.target }})
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
 
-          if git diff HEAD^ HEAD --name-only | grep -q "^group_vibe_workbench/Cargo.toml"; then
-            CHANGED_PROJECTS="$CHANGED_PROJECTS group_vibe_workbench"
-            GVW_VERSION=$(grep '^version' group_vibe_workbench/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "group_vibe_workbench_version=$GVW_VERSION" >> $GITHUB_OUTPUT
-          fi
-
-          if git diff HEAD^ HEAD --name-only | grep -q "^pgpour/Cargo.toml"; then
-            CHANGED_PROJECTS="$CHANGED_PROJECTS pgpour"
-            PGPOUR_VERSION=$(grep '^version' pgpour/Cargo.toml | head -1 | cut -d'"' -f2)
-            echo "pgpour_version=$PGPOUR_VERSION" >> $GITHUB_OUTPUT
-          fi
-
-          echo "changed_projects=$CHANGED_PROJECTS" >> $GITHUB_OUTPUT
-          echo "Changed projects: $CHANGED_PROJECTS"
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install Rust
-        if: steps.changes.outputs.changed_projects != ''
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install build dependencies (Linux)
-        if: steps.changes.outputs.changed_projects != '' && matrix.os == 'ubuntu-latest' && !matrix.use_cross
+        if: matrix.os == 'ubuntu-latest' && !matrix.use_cross
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev cmake pkg-config libcurl4-openssl-dev
 
       - name: Install cross
-        if: steps.changes.outputs.changed_projects != '' && matrix.use_cross
+        if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Setup cache
-        if: steps.changes.outputs.changed_projects != ''
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
           cache-all-crates: true
 
-      - name: Build projects
-        if: steps.changes.outputs.changed_projects != ''
+      - name: Build
         shell: bash
+        env:
+          PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
           SKIP_ON_WINDOWS="pgpour"
           SKIP_ON_MUSL="pgpour"
-          for project in ${{ steps.changes.outputs.changed_projects }}; do
-            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
-              echo "Skipping $project on Windows (server-only tool)"
+
+          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
+            NAME=$(echo "$item" | jq -r '.name')
+
+            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then
+              echo "⏭ Skipping $NAME on Windows"
               continue
             fi
-            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $project "* ]]; then
-              echo "Skipping $project on musl target (complex C deps, use gnu instead)"
+            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then
+              echo "⏭ Skipping $NAME on musl"
               continue
             fi
-            echo "Building $project for ${{ matrix.target }}..."
-            cd $project
+
+            echo "🔨 Building $NAME for ${{ matrix.target }}..."
+            cd "$NAME"
 
             if [ "${{ matrix.use_cross }}" == "true" ]; then
               cross build --release --target ${{ matrix.target }}
+            elif [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+              RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target ${{ matrix.target }}
             else
-              if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-                RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target ${{ matrix.target }}
-              else
-                cargo build --release --target ${{ matrix.target }}
-              fi
+              cargo build --release --target ${{ matrix.target }}
             fi
 
             cd ..
           done
 
-      - name: Package binaries
-        if: steps.changes.outputs.changed_projects != ''
+      - name: Package
         shell: bash
+        env:
+          PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
           mkdir -p release
           SKIP_ON_WINDOWS="pgpour"
           SKIP_ON_MUSL="pgpour"
 
-          for project in ${{ steps.changes.outputs.changed_projects }}; do
-            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
-              continue
-            fi
-            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $project "* ]]; then
-              continue
-            fi
-            cd $project/target/${{ matrix.target }}/release
+          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
+            NAME=$(echo "$item" | jq -r '.name')
+            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then continue; fi
+            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then continue; fi
 
+            cd "${NAME}/target/${{ matrix.target }}/release"
             if [ "${{ matrix.os }}" == "windows-latest" ]; then
-              7z a ../../../../release/${project}-${{ matrix.target }}.zip ${project}.exe
+              7z a ../../../../release/${NAME}-${{ matrix.target }}.zip ${NAME}.exe
             else
-              tar czf ../../../../release/${project}-${{ matrix.target }}.tar.gz ${project}
+              tar czf ../../../../release/${NAME}-${{ matrix.target }}.tar.gz ${NAME}
             fi
-
             cd ../../../..
           done
 
       - name: Upload artifacts
-        if: steps.changes.outputs.changed_projects != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -204,125 +235,113 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # ──────────────────────────────────────────────
-  # Job 2: Create GitHub Release
-  # ──────────────────────────────────────────────
-  create-release:
-    name: Create Release
-    needs: build-and-release
-    runs-on: ubuntu-latest
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 3: Create per-project GitHub Releases    ║
+  # ╚══════════════════════════════════════════════╝
+  release:
+    name: Create Releases
+    needs: [ detect, build ]
     if: success()
+    runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.versions.outputs.release_tag }}
-      projects: ${{ steps.versions.outputs.projects_json }}
+      released: ${{ steps.release.outputs.released }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect versions
-        id: versions
-        run: |
-          RELEASE_NOTES=""
-          RELEASE_TAG=""
-          PROJECTS_JSON="["
-          FIRST=true
-
-          detect_project() {
-            local name=$1
-            local version=$2
-            echo "${name}_version=$version" >> $GITHUB_OUTPUT
-            RELEASE_NOTES="$RELEASE_NOTES\n- ${name} v$version"
-            if [ -z "$RELEASE_TAG" ]; then RELEASE_TAG="$version"; fi
-            if [ "$FIRST" = true ]; then FIRST=false; else PROJECTS_JSON="$PROJECTS_JSON,"; fi
-            PROJECTS_JSON="$PROJECTS_JSON{\"name\":\"${name}\",\"version\":\"${version}\"}"
-          }
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            for p in ${{ github.event.inputs.projects }}; do
-              VERSION=$(grep '^version' ${p}/Cargo.toml | head -1 | cut -d'"' -f2)
-              detect_project "$p" "$VERSION"
-            done
-          else
-            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench pgpour; do
-              if git diff HEAD^ HEAD --name-only | grep -q "^${dir}/Cargo.toml"; then
-                VERSION=$(grep '^version' ${dir}/Cargo.toml | head -1 | cut -d'"' -f2)
-                detect_project "$dir" "$VERSION"
-              fi
-            done
-          fi
-
-          PROJECTS_JSON="$PROJECTS_JSON]"
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          echo "projects_json=$PROJECTS_JSON" >> $GITHUB_OUTPUT
-          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v4
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Prepare release assets
+      - name: Flatten artifacts
         run: |
-          mkdir -p release
-          find artifacts -type f -exec cp {} release/ \; 2>/dev/null || true
-          ls -lh release/
+          mkdir -p flat
+          find artifacts -type f -exec cp {} flat/ \; 2>/dev/null || true
+          ls -lh flat/
 
-      - name: Generate checksums
-        run: |
-          cd release
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.versions.outputs.release_tag }}
-          name: Release ${{ steps.versions.outputs.release_tag }}
-          body: |
-            ## New Releases
-            ${{ steps.versions.outputs.release_notes }}
-
-            ## Supported Platforms
-            - Linux x86_64 (glibc)
-            - Linux x86_64 (musl, static)
-            - Linux i686 (musl, static)
-            - Linux aarch64 (musl, static, ARM64)
-            - macOS x86_64 (Intel)
-            - macOS aarch64 (Apple Silicon)
-            - Windows x86_64
-            - Windows i686 (32-bit)
-
-            > Note: pgpour is server-only, built for Linux (glibc) and macOS only.
-          files: release/*
-          draft: false
-          prerelease: false
+      - name: Create per-project releases
+        id: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PROJECTS: ${{ needs.detect.outputs.projects }}
+        run: |
+          RELEASED="[]"
 
-  # ──────────────────────────────────────────────
-  # Job 3: Sync to HFrog (Release Tracking)
-  # ──────────────────────────────────────────────
+          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
+            NAME=$(echo "$item" | jq -r '.name')
+            VERSION=$(echo "$item" | jq -r '.version')
+            TAG="${NAME}-v${VERSION}"
+
+            echo ""
+            echo "━━━ Creating release: ${TAG} ━━━"
+
+            # Collect this project's assets
+            mkdir -p "pkg-${NAME}"
+            cp flat/${NAME}-*.tar.gz "pkg-${NAME}/" 2>/dev/null || true
+            cp flat/${NAME}-*.zip "pkg-${NAME}/" 2>/dev/null || true
+
+            ASSET_COUNT=$(ls "pkg-${NAME}/" 2>/dev/null | wc -l)
+            if [ "$ASSET_COUNT" -eq 0 ]; then
+              echo "  ⚠ No artifacts for ${NAME}, skipping release"
+              continue
+            fi
+
+            # Generate checksums
+            cd "pkg-${NAME}"
+            sha256sum * > SHA256SUMS
+            cd ..
+
+            # Collect platform list from actual artifacts
+            PLATFORMS=""
+            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip; do
+              [ -f "$f" ] || continue
+              BASE=$(basename "$f")
+              PLAT=$(echo "$BASE" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//')
+              PLATFORMS="${PLATFORMS}\n- ${PLAT}"
+            done
+
+            # Create GitHub release
+            gh release create "$TAG" pkg-${NAME}/* \
+              --title "${NAME} v${VERSION}" \
+              --notes "$(cat <<NOTES
+## ${NAME} v${VERSION}
+
+### Platforms
+$(echo -e "$PLATFORMS")
+
+### Install
+\`\`\`bash
+# Download from this release
+gh release download ${TAG} -p '${NAME}-*' -R ${GITHUB_REPO}
+\`\`\`
+
+Built by GitHub Actions run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+NOTES
+)"
+
+            echo "  ✓ Release ${TAG} created with ${ASSET_COUNT} assets"
+            RELEASED=$(echo "$RELEASED" | jq -c --arg n "$NAME" --arg v "$VERSION" --arg t "$TAG" \
+              '. + [{"name":$n,"version":$v,"tag":$t}]')
+          done
+
+          echo "released=$(echo "$RELEASED" | jq -c)" >> $GITHUB_OUTPUT
+
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 4: Sync to HFrog (Release Tracking)      ║
+  # ╚══════════════════════════════════════════════╝
   sync-hfrog:
     name: Sync to HFrog
-    needs: create-release
-    runs-on: ubuntu-latest
+    needs: release
     if: success()
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Sync releases to HFrog
+        env:
+          RELEASED: ${{ needs.release.outputs.released }}
         run: |
           HFROG="${{ env.HFROG_API }}"
-          TAG="${{ needs.create-release.outputs.tag_name }}"
-          PROJECTS='${{ needs.create-release.outputs.projects }}'
-          GH_DL="https://github.com/${{ env.GITHUB_REPO }}/releases/download/${TAG}"
 
           declare -A TOOL_DESC=(
             [pgpour]="Postgres CDC → Kafka 数据管道"
@@ -344,85 +363,71 @@ jobs:
           )
 
           hfrog_post() {
-            local endpoint=$1
-            local data=$2
-            local resp
+            local endpoint=$1 data=$2
+            local resp code body
             resp=$(curl -sS -w "\n%{http_code}" -X POST "${HFROG}${endpoint}" \
               -H 'Content-Type: application/json' -d "$data" 2>&1)
-            local code=$(echo "$resp" | tail -1)
-            local body=$(echo "$resp" | head -n -1)
+            code=$(echo "$resp" | tail -1)
+            body=$(echo "$resp" | head -n -1)
             if [[ "$code" =~ ^2 ]] || echo "$body" | grep -qi "exist"; then
-              echo "  ✓ ${endpoint} → ${code}"
+              echo "  ✓ ${endpoint} (${code})"
             else
-              echo "  ✗ ${endpoint} → ${code}: ${body}"
+              echo "  ✗ ${endpoint} (${code}): ${body}"
             fi
           }
 
-          echo "$PROJECTS" | jq -c '.[]' | while read -r item; do
+          echo "$RELEASED" | jq -c '.[]' | while read -r item; do
             NAME=$(echo "$item" | jq -r '.name')
             VERSION=$(echo "$item" | jq -r '.version')
+            TAG=$(echo "$item" | jq -r '.tag')
             DESC="${TOOL_DESC[$NAME]:-r_lit - ${NAME}}"
+            GH_DL="https://github.com/${{ env.GITHUB_REPO }}/releases/download/${TAG}"
 
             echo ""
-            echo "━━━ Syncing ${NAME} v${VERSION} to HFrog ━━━"
+            echo "━━━ HFrog: ${NAME} v${VERSION} ━━━"
 
-            # Step 1: Create software
-            echo "[1/4] Creating software..."
+            # 1. Software
             hfrog_post "/api/release/softwares" \
               "{\"name\":\"${NAME}\",\"description\":\"${DESC}\",\"install_command\":\"gh release download ${TAG} -p '${NAME}-*' -R ${{ env.GITHUB_REPO }}\"}"
 
-            # Step 2: Create platforms
-            echo "[2/4] Creating platforms..."
+            # 2. Platforms
             for p in "${PLATFORMS[@]}"; do
               IFS='|' read -r code os arch display <<< "$p"
               hfrog_post "/api/release/platforms" \
                 "{\"code\":\"${code}\",\"os\":\"${os}\",\"arch\":\"${arch}\",\"display_name\":\"${display}\"}"
             done
 
-            # Step 3: Create version
-            echo "[3/4] Creating version..."
+            # 3. Version
             hfrog_post "/api/release/versions" \
               "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"is_latest\":true,\"release_notes\":\"Built by GitHub Actions\",\"created_by\":\"github-actions/${{ github.run_number }}\"}"
 
-            # Step 4: Create release records for each artifact that exists
-            echo "[4/4] Creating release records..."
+            # 4. Release records (only for actually built platforms)
+            SKIP_ON_WINDOWS="pgpour"
+            SKIP_ON_MUSL="pgpour"
             for p in "${PLATFORMS[@]}"; do
               IFS='|' read -r code os arch display <<< "$p"
-              ASSET_TAR="${NAME}-${code}.tar.gz"
-              ASSET_ZIP="${NAME}-${code}.zip"
-
-              if [[ "$os" == "windows" ]]; then
-                DOWNLOAD_URL="${GH_DL}/${ASSET_ZIP}"
-              else
-                DOWNLOAD_URL="${GH_DL}/${ASSET_TAR}"
-              fi
-
-              # Only create release if the asset was actually built
-              SKIP_ON_WINDOWS="pgpour"
-              SKIP_ON_MUSL="pgpour"
               if [[ "$os" == "windows" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then continue; fi
               if [[ "$code" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then continue; fi
-
+              if [[ "$os" == "windows" ]]; then
+                DL_URL="${GH_DL}/${NAME}-${code}.zip"
+              else
+                DL_URL="${GH_DL}/${NAME}-${code}.tar.gz"
+              fi
               hfrog_post "/api/release/releases" \
-                "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"platform_code\":\"${code}\",\"download_url\":\"${DOWNLOAD_URL}\"}"
+                "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"platform_code\":\"${code}\",\"download_url\":\"${DL_URL}\"}"
             done
-
-            echo "━━━ ${NAME} sync complete ━━━"
           done
 
-  # ──────────────────────────────────────────────
-  # Job 4: Mirror to Nexus (optional, needs secrets)
-  # ──────────────────────────────────────────────
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 5: Mirror to Nexus (optional)            ║
+  # ╚══════════════════════════════════════════════╝
   mirror-nexus:
     name: Mirror to Nexus
-    needs: create-release
-    runs-on: ubuntu-latest
+    needs: release
     if: success() && vars.ENABLE_NEXUS_MIRROR == 'true'
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -432,74 +437,57 @@ jobs:
         env:
           NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+          RELEASED: ${{ needs.release.outputs.released }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag_name }}"
-          PROJECTS='${{ needs.create-release.outputs.projects }}'
-
           mkdir -p flat
           find artifacts -type f -exec cp {} flat/ \; 2>/dev/null || true
-          ls -lh flat/
 
-          echo "$PROJECTS" | jq -c '.[]' | while read -r item; do
+          echo "$RELEASED" | jq -c '.[]' | while read -r item; do
             NAME=$(echo "$item" | jq -r '.name')
             VERSION=$(echo "$item" | jq -r '.version')
             NEXUS_PATH="r_lit/${NAME}"
 
-            echo "=== Uploading ${NAME} v${VERSION} to Nexus ==="
-
-            for f in flat/${NAME}-*.tar.gz flat/${NAME}-*.zip; do
+            echo "=== ${NAME} v${VERSION} → Nexus ==="
+            for f in flat/${NAME}-*.tar.gz; do
               [ -f "$f" ] || continue
               BASENAME=$(basename "$f")
-              # Extract platform from filename: pgpour-x86_64-unknown-linux-gnu.tar.gz -> x86_64-unknown-linux-gnu
-              PLATFORM=$(echo "$BASENAME" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//')
+              PLATFORM=$(echo "$BASENAME" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//')
 
-              # Repack as gzip (Nexus convention: raw binary .gz, not tar.gz)
-              if [[ "$f" == *.tar.gz ]]; then
-                tar xzf "$f" -C /tmp/ "${NAME}" 2>/dev/null || tar xzf "$f" -C /tmp/
-                gzip -9 -k "/tmp/${NAME}"
-                UPLOAD_FILE="/tmp/${NAME}.gz"
-              else
-                UPLOAD_FILE="$f"
-              fi
+              tar xzf "$f" -C /tmp/ 2>/dev/null
+              gzip -9 -f "/tmp/${NAME}"
 
-              echo "  Uploading ${BASENAME} → ${NEXUS_PATH}/v${VERSION}/${PLATFORM}/"
-              # Version directory
-              curl -f --max-time 120 \
-                -u "${NEXUS_USER}:${NEXUS_PASS}" \
-                --upload-file "${UPLOAD_FILE}" \
-                "${{ env.NEXUS_PUBLIC_URL }}/repository/${{ env.NEXUS_REPO }}/${NEXUS_PATH}/v${VERSION}/${PLATFORM}/${NAME}.gz" || echo "  ⚠ Upload failed (version)"
-
-              # Latest directory
-              curl -f --max-time 120 \
-                -u "${NEXUS_USER}:${NEXUS_PASS}" \
-                --upload-file "${UPLOAD_FILE}" \
-                "${{ env.NEXUS_PUBLIC_URL }}/repository/${{ env.NEXUS_REPO }}/${NEXUS_PATH}/latest/${PLATFORM}/${NAME}.gz" || echo "  ⚠ Upload failed (latest)"
-
+              for dest in "v${VERSION}" "latest"; do
+                curl -f --max-time 120 -u "${NEXUS_USER}:${NEXUS_PASS}" \
+                  --upload-file "/tmp/${NAME}.gz" \
+                  "${{ env.NEXUS_PUBLIC_URL }}/repository/${{ env.NEXUS_REPO }}/${NEXUS_PATH}/${dest}/${PLATFORM}/${NAME}.gz" \
+                  && echo "  ✓ ${dest}/${PLATFORM}" \
+                  || echo "  ✗ ${dest}/${PLATFORM}"
+              done
               rm -f "/tmp/${NAME}" "/tmp/${NAME}.gz"
             done
           done
 
-  # ──────────────────────────────────────────────
-  # Job 5: Build & Push Docker to Harbor (pgpour only)
-  # ──────────────────────────────────────────────
+  # ╔══════════════════════════════════════════════╗
+  # ║ Job 6: Docker → Harbor (pgpour only)         ║
+  # ╚══════════════════════════════════════════════╝
   push-harbor:
     name: Push Docker to Harbor
-    needs: create-release
-    runs-on: ubuntu-latest
+    needs: release
     if: success() && vars.ENABLE_HARBOR_PUSH == 'true'
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Check if pgpour was built
+      - name: Check if pgpour was released
         id: check
+        env:
+          RELEASED: ${{ needs.release.outputs.released }}
         run: |
-          PROJECTS='${{ needs.create-release.outputs.projects }}'
-          if echo "$PROJECTS" | jq -e '.[] | select(.name == "pgpour")' > /dev/null 2>&1; then
-            VERSION=$(echo "$PROJECTS" | jq -r '.[] | select(.name == "pgpour") | .version')
+          if echo "$RELEASED" | jq -e '.[] | select(.name == "pgpour")' >/dev/null 2>&1; then
+            VER=$(echo "$RELEASED" | jq -r '.[] | select(.name == "pgpour") | .version')
             echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "version=$VER" >> $GITHUB_OUTPUT
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
@@ -512,24 +500,11 @@ jobs:
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
-      - name: Build and push pgpour
+      - name: Build and push
         if: steps.check.outputs.should_build == 'true'
         working-directory: pgpour
         run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          COMMIT_SHORT="${GITHUB_SHA:0:8}"
-          REGISTRY="harbor.gamesci-lite.com/gamescilite/pgpour"
-
-          docker build \
-            -t "${REGISTRY}:main-${COMMIT_SHORT}" \
-            -t "${REGISTRY}:main" \
-            -t "${REGISTRY}:v${VERSION}" \
-            -t "${REGISTRY}:latest" \
-            .
-
-          docker push "${REGISTRY}:main-${COMMIT_SHORT}"
-          docker push "${REGISTRY}:main"
-          docker push "${REGISTRY}:v${VERSION}"
-          docker push "${REGISTRY}:latest"
-
-          echo "✓ Pushed 4 tags to Harbor"
+          V="${{ steps.check.outputs.version }}"
+          R="harbor.gamesci-lite.com/gamescilite/pgpour"
+          docker build -t "${R}:v${V}" -t "${R}:latest" -t "${R}:main-${GITHUB_SHA:0:8}" .
+          docker push "${R}" --all-tags
