@@ -20,11 +20,15 @@ jobs:
     name: Build and Release
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            use_cross: true
+            use_cross: false
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             use_cross: true
@@ -129,14 +133,19 @@ jobs:
         shell: bash
         run: |
           SKIP_ON_WINDOWS="pgpour"
+          SKIP_ON_MUSL="pgpour"
           for project in ${{ steps.changes.outputs.changed_projects }}; do
             if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
               echo "Skipping $project on Windows (server-only tool)"
               continue
             fi
+            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $project "* ]]; then
+              echo "Skipping $project on musl target (complex C deps, use gnu instead)"
+              continue
+            fi
             echo "Building $project for ${{ matrix.target }}..."
             cd $project
-            
+
             if [ "${{ matrix.use_cross }}" == "true" ]; then
               cross build --release --target ${{ matrix.target }}
             else
@@ -146,7 +155,7 @@ jobs:
                 cargo build --release --target ${{ matrix.target }}
               fi
             fi
-            
+
             cd ..
           done
 
@@ -156,19 +165,23 @@ jobs:
         run: |
           mkdir -p release
           SKIP_ON_WINDOWS="pgpour"
-          
+          SKIP_ON_MUSL="pgpour"
+
           for project in ${{ steps.changes.outputs.changed_projects }}; do
             if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
               continue
             fi
+            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $project "* ]]; then
+              continue
+            fi
             cd $project/target/${{ matrix.target }}/release
-            
+
             if [ "${{ matrix.os }}" == "windows-latest" ]; then
               7z a ../../../../release/${project}-${{ matrix.target }}.zip ${project}.exe
             else
               tar czf ../../../../release/${project}-${{ matrix.target }}.tar.gz ${project}
             fi
-            
+
             cd ../../../..
           done
 
@@ -178,6 +191,7 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: release/*
+          if-no-files-found: ignore
           retention-days: 7
 
   create-release:
@@ -185,7 +199,7 @@ jobs:
     needs: build-and-release
     runs-on: ubuntu-latest
     if: success()
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -251,7 +265,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          find artifacts -type f -exec cp {} release/ \;
+          find artifacts -type f -exec cp {} release/ \; 2>/dev/null || true
           ls -lh release/
 
       - name: Generate checksums
@@ -270,6 +284,7 @@ jobs:
             ${{ steps.versions.outputs.release_notes }}
 
             ## Supported Platforms
+            - Linux x86_64 (glibc)
             - Linux x86_64 (musl, static)
             - Linux i686 (musl, static)
             - Linux aarch64 (musl, static, ARM64)
@@ -277,6 +292,8 @@ jobs:
             - macOS aarch64 (Apple Silicon)
             - Windows x86_64
             - Windows i686 (32-bit)
+
+            > Note: pgpour is server-only, built for Linux (glibc) and macOS only.
           files: release/*
           draft: false
           prerelease: false
