@@ -39,13 +39,7 @@ jobs:
           cd img_resize
           cargo build --release --verbose
 
-      - name: Build pgpour
-        run: |
-          cd pgpour
-          cargo build --release --verbose
-
       - name: Test binaries
         run: |
           ./bulk_upload/target/release/bulk_upload --help
           ./img_resize/target/release/img_resize --help
-          ./pgpour/target/release/pgpour --help

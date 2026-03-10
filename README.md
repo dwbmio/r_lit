@@ -1,6 +1,6 @@
 # R_LIT
 
-A collection of independent Rust tools and libraries. Each subdirectory is a standalone Cargo crate with no root workspace.
+A collection of independent, **short-running** Rust CLI tools and libraries. Each subdirectory is a standalone Cargo crate with no root workspace. This repo is designed for tools that run, do their job, and exit — not for long-running services or daemons.
 
 Homepage: [https://www.snappywatt.com/](https://www.snappywatt.com/)
 
@@ -16,7 +16,6 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |
 | [img_resize](img_resize/) | Image resizing and compression |
 | [group_vibe_workbench](group_vibe_workbench/) | Desktop collaboration workbench (GPUI + P2P) |
-| [pgpour](pgpour/) | Postgres CDC → Kafka data pipeline (multi-topic fan-out) |
 | [omniplan_covers_ding](omniplan_covers_ding/) | Internal tool (has external path dependency) |
 | [video-generator](video-generator/) | Video generation tools |
 | [crates/murmur](crates/murmur/) | P2P collaboration library (iroh-net + Automerge CRDT) |

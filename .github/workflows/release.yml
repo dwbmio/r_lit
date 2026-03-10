@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       projects:
-        description: 'Space-separated project names to build (e.g. "pgpour bulk_upload")'
+        description: 'Space-separated project names to build (e.g. "bulk_upload img_resize")'
         required: true
         type: string
 
@@ -44,7 +44,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           PROJECTS="[]"
-          SERVER_ONLY="pgpour"
 
           add_project() {
             local name=$1 version=$2
@@ -68,7 +67,7 @@ jobs:
             done
           else
             echo "=== Checking version diffs (HEAD vs HEAD^) ==="
-            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench pgpour; do
+            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench; do
               [ -f "${dir}/Cargo.toml" ] || continue
               NEW_VER=$(grep '^version' "${dir}/Cargo.toml" | head -1 | cut -d'"' -f2)
               OLD_VER=$(git show HEAD^:"${dir}/Cargo.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
@@ -100,37 +99,16 @@ jobs:
           echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "projects=$(echo "$PROJECTS" | jq -c)" >> $GITHUB_OUTPUT
 
-          # Determine needed build targets
-          HAS_GENERAL=false
-          HAS_SERVER_ONLY=false
-          for name in $(echo "$PROJECTS" | jq -r '.[].name'); do
-            if [[ " $SERVER_ONLY " == *" $name "* ]]; then
-              HAS_SERVER_ONLY=true
-            else
-              HAS_GENERAL=true
-            fi
-          done
-
-          if $HAS_GENERAL; then
-            # General projects need ALL targets
-            MATRIX='{"include":[
-              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
-              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","use_cross":false},
-              {"os":"ubuntu-latest","target":"i686-unknown-linux-musl","use_cross":true},
-              {"os":"ubuntu-latest","target":"aarch64-unknown-linux-musl","use_cross":true},
-              {"os":"macos-latest","target":"x86_64-apple-darwin","use_cross":false},
-              {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false},
-              {"os":"windows-latest","target":"x86_64-pc-windows-msvc","use_cross":false},
-              {"os":"windows-latest","target":"i686-pc-windows-msvc","use_cross":false}
-            ]}'
-          else
-            # Server-only projects: Linux glibc + macOS only
-            MATRIX='{"include":[
-              {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
-              {"os":"macos-latest","target":"x86_64-apple-darwin","use_cross":false},
-              {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false}
-            ]}'
-          fi
+          MATRIX='{"include":[
+            {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
+            {"os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","use_cross":false},
+            {"os":"ubuntu-latest","target":"i686-unknown-linux-musl","use_cross":true},
+            {"os":"ubuntu-latest","target":"aarch64-unknown-linux-musl","use_cross":true},
+            {"os":"macos-latest","target":"x86_64-apple-darwin","use_cross":false},
+            {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false},
+            {"os":"windows-latest","target":"x86_64-pc-windows-msvc","use_cross":false},
+            {"os":"windows-latest","target":"i686-pc-windows-msvc","use_cross":false}
+          ]}'
 
           echo "matrix=$(echo "$MATRIX" | jq -c)" >> $GITHUB_OUTPUT
 
@@ -175,20 +153,8 @@ jobs:
         env:
           PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
-          SKIP_ON_WINDOWS="pgpour"
-          SKIP_ON_MUSL="pgpour"
-
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
-
-            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then
-              echo "⏭ Skipping $NAME on Windows"
-              continue
-            fi
-            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then
-              echo "⏭ Skipping $NAME on musl"
-              continue
-            fi
 
             echo "🔨 Building $NAME for ${{ matrix.target }}..."
             cd "$NAME"
@@ -210,13 +176,9 @@ jobs:
           PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
           mkdir -p release
-          SKIP_ON_WINDOWS="pgpour"
-          SKIP_ON_MUSL="pgpour"
 
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
-            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then continue; fi
-            if [[ "${{ matrix.target }}" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then continue; fi
 
             cd "${NAME}/target/${{ matrix.target }}/release"
             if [ "${{ matrix.os }}" == "windows-latest" ]; then
@@ -332,7 +294,6 @@ jobs:
           HFROG="${{ env.HFROG_API }}"
 
           declare -A TOOL_DESC=(
-            [pgpour]="Postgres CDC → Kafka 数据管道"
             [img_resize]="图片批量缩放/压缩工具"
             [bulk_upload]="批量下载上传工具"
             [omniplan_covers_ding]="OmniPlan 封面生成工具"
@@ -389,13 +350,9 @@ jobs:
             hfrog_post "/api/release/versions" \
               "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"is_latest\":true,\"release_notes\":\"Built by GitHub Actions\",\"created_by\":\"github-actions/${{ github.run_number }}\"}"
 
-            # 4. Release records (only for actually built platforms)
-            SKIP_ON_WINDOWS="pgpour"
-            SKIP_ON_MUSL="pgpour"
+            # 4. Release records
             for p in "${PLATFORMS[@]}"; do
               IFS='|' read -r code os arch display <<< "$p"
-              if [[ "$os" == "windows" && " $SKIP_ON_WINDOWS " == *" $NAME "* ]]; then continue; fi
-              if [[ "$code" == *"-musl" && " $SKIP_ON_MUSL " == *" $NAME "* ]]; then continue; fi
               if [[ "$os" == "windows" ]]; then
                 DL_URL="${GH_DL}/${NAME}-${code}.zip"
               else
@@ -455,44 +412,3 @@ jobs:
             done
           done
 
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 6: Docker → Harbor (pgpour only)         ║
-  # ╚══════════════════════════════════════════════╝
-  push-harbor:
-    name: Push Docker to Harbor
-    needs: release
-    if: success() && vars.ENABLE_HARBOR_PUSH == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check if pgpour was released
-        id: check
-        env:
-          RELEASED: ${{ needs.release.outputs.released }}
-        run: |
-          if echo "$RELEASED" | jq -e '.[] | select(.name == "pgpour")' >/dev/null 2>&1; then
-            VER=$(echo "$RELEASED" | jq -r '.[] | select(.name == "pgpour") | .version')
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "version=$VER" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Login to Harbor
-        if: steps.check.outputs.should_build == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: harbor.gamesci-lite.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-
-      - name: Build and push
-        if: steps.check.outputs.should_build == 'true'
-        working-directory: pgpour
-        run: |
-          V="${{ steps.check.outputs.version }}"
-          R="harbor.gamesci-lite.com/gamescilite/pgpour"
-          docker build -t "${R}:v${V}" -t "${R}:latest" -t "${R}:main-${GITHUB_SHA:0:8}" .
-          docker push "${R}" --all-tags
