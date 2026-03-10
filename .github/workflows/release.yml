@@ -112,7 +112,12 @@ jobs:
         if: steps.changes.outputs.changed_projects != ''
         shell: bash
         run: |
+          SKIP_ON_WINDOWS="pgpour"
           for project in ${{ steps.changes.outputs.changed_projects }}; do
+            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
+              echo "Skipping $project on Windows (server-only tool)"
+              continue
+            fi
             echo "Building $project for ${{ matrix.target }}..."
             cd $project
             
@@ -134,8 +139,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
+          SKIP_ON_WINDOWS="pgpour"
           
           for project in ${{ steps.changes.outputs.changed_projects }}; do
+            if [[ "${{ matrix.os }}" == "windows-latest" && " $SKIP_ON_WINDOWS " == *" $project "* ]]; then
+              continue
+            fi
             cd $project/target/${{ matrix.target }}/release
             
             if [ "${{ matrix.os }}" == "windows-latest" ]; then
