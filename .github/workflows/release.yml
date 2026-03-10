@@ -115,7 +115,7 @@ jobs:
         if: steps.changes.outputs.changed_projects != '' && matrix.os == 'ubuntu-latest' && !matrix.use_cross
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev cmake pkg-config
+          sudo apt-get install -y musl-tools musl-dev cmake pkg-config libcurl4-openssl-dev
 
       - name: Install cross
         if: steps.changes.outputs.changed_projects != '' && matrix.use_cross
