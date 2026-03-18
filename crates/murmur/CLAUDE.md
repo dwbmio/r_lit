@@ -38,15 +38,22 @@ Murmur is a distributed P2P collaboration library written in Rust. It enables ap
 **Network Layer** ([src/network.rs](src/network.rs))
 - P2P networking using iroh-net
 - Automatic local network discovery via mDNS
-- QUIC-based transport with "murmur" ALPN
+- QUIC-based transport with per-group ALPN (`murmur/<group_id>`)
 - Message broadcasting and peer management
 - Vector clock for causality tracking
+- SyncRequest sending is done at the swarm layer (PeerConnected event handler), not in network's handle_incoming
 
 **CRDT Sync** ([src/sync.rs](src/sync.rs))
 - Automerge-based conflict-free synchronization
 - Automatic merge of concurrent updates
 - Change propagation to all peers
 - Eventual consistency guarantee
+
+**Sync Protocol**
+- On PeerConnected: swarm sends SyncRequest to new peer (via `spawn_peer_event_forwarder`)
+- On SyncRequest: node sends SyncResponse with full automerge document
+- On SyncResponse: node loads document, then emits per-key DataSynced events (not a single bulk `key="*"` event)
+- This ensures consumers (like murmur-scope bridge) receive individual key updates for history replay
 
 **Leader Election** ([src/election.rs](src/election.rs))
 - Bully algorithm implementation
@@ -296,6 +303,8 @@ murmur/
 ├── examples/
 │   ├── basic.rs            # Basic KV usage
 │   ├── group_chat.rs       # Chat application
+│   ├── cli_dev_scope.rs    # Interactive CLI for testing murmur-scope (LZ4 compressed messages)
+│   ├── clean_test.sh       # Kill stale CLI processes + clean storage
 │   ├── file_sync.rs        # File sync with versioning
 │   ├── benchmark.rs        # Performance benchmarks
 │   └── ...

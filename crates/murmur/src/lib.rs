@@ -66,7 +66,8 @@ pub enum SwarmEvent {
     /// A peer disconnected.
     PeerDisconnected { node_id: String },
     /// CRDT data was synced from a peer (SyncResponse merged or CrdtUpdate applied).
-    DataSynced,
+    /// `key` is the specific key updated, or `"*"` for bulk sync.
+    DataSynced { key: String, value: Vec<u8> },
     /// A file conflict was detected; the file is now locked until the resolver resolves it.
     ConflictDetected {
         file_name: String,
@@ -691,8 +692,10 @@ impl Swarm {
         });
     }
 
-    /// Forward network-layer PeerEvents into SwarmEvents.
+    /// Forward network-layer PeerEvents into SwarmEvents,
+    /// and send SyncRequest to newly connected peers.
     async fn spawn_peer_event_forwarder(&self) {
+        let inner = self.inner.clone();
         let network = self.inner.network.read().await;
         let mut peer_rx = network.subscribe_peer_events();
         drop(network);
@@ -707,7 +710,14 @@ impl Swarm {
                     result = peer_rx.recv() => {
                         match result {
                             Ok(network::PeerEvent::Connected(id)) => {
-                                let _ = event_tx.send(SwarmEvent::PeerConnected { node_id: id });
+                                let _ = event_tx.send(SwarmEvent::PeerConnected { node_id: id.clone() });
+                                // Send SyncRequest to the newly connected peer
+                                let network = inner.network.read().await;
+                                if let Err(e) = network.send(&id, network::Message::SyncRequest).await {
+                                    warn!("Failed to send SyncRequest to new peer {}: {}", id, e);
+                                } else {
+                                    info!("Sent SyncRequest to new peer {}", &id[..8.min(id.len())]);
+                                }
                             }
                             Ok(network::PeerEvent::Disconnected(id)) => {
                                 let _ = event_tx.send(SwarmEvent::PeerDisconnected { node_id: id });
@@ -787,9 +797,14 @@ impl Swarm {
                 network.merge_vector_clock(&vector_clock).await;
                 drop(network);
 
-                // Apply CRDT changes
+                // Apply CRDT changes and read back value while holding write lock
                 let mut sync = self.inner.sync.write().await;
                 sync.apply_changes(&operation)?;
+
+                // Read the synced value immediately
+                let synced_value = sync.get(&key)?.unwrap_or_default();
+                debug!("DataSynced: key={} value_len={} value={:?}",
+                    key, synced_value.len(), String::from_utf8_lossy(&synced_value));
 
                 // Detect file-level conflicts via Automerge multi-value check
                 #[cfg(feature = "file-ops")]
@@ -804,11 +819,7 @@ impl Swarm {
                 drop(sync);
 
                 // Update local storage
-                let sync = self.inner.sync.read().await;
-                if let Some(value) = sync.get(&key)? {
-                    self.inner.storage.put(&key, &value)?;
-                }
-                drop(sync);
+                self.inner.storage.put(&key, &synced_value)?;
 
                 // If a file:meta conflict was detected, lock the file
                 #[cfg(feature = "file-ops")]
@@ -833,7 +844,7 @@ impl Swarm {
                 if let Err(e) = network.send(&peer_id.to_string(), ack_msg).await {
                     warn!("Failed to send ACK: {}", e);
                 }
-                self.emit_event(SwarmEvent::DataSynced);
+                self.emit_event(SwarmEvent::DataSynced { key, value: synced_value });
             }
 
             network::Message::Ack { seq_num } => {
@@ -843,9 +854,11 @@ impl Swarm {
             }
 
             network::Message::SyncRequest => {
+                info!("SyncRequest from peer {}", peer_id);
                 let mut sync = self.inner.sync.write().await;
                 let all_changes = sync.get_all_changes()?;
                 drop(sync);
+                info!("SyncRequest: sending SyncResponse ({} bytes)", all_changes.len());
 
                 let network = self.inner.network.read().await;
                 network.send(
@@ -856,18 +869,35 @@ impl Swarm {
 
             network::Message::SyncResponse { data } => {
                 let mut sync = self.inner.sync.write().await;
-                sync.load_document(&data)?;
+                match sync.load_document(&data) {
+                    Ok(()) => {
+                        info!("SyncResponse: loaded document, scanning keys...");
+                        // Populate local storage from all CRDT keys and emit per-key events
+                        let keys = sync.keys();
+                        info!("SyncResponse: found {} keys", keys.len());
+                        let mut synced_pairs = Vec::new();
+                        for k in &keys {
+                            if let Some(value) = sync.get(k)? {
+                                self.inner.storage.put(k, &value)?;
+                                synced_pairs.push((k.clone(), value));
+                            }
+                        }
+                        drop(sync);
 
-                // Populate local storage from all CRDT keys
-                let keys = sync.keys();
-                for k in &keys {
-                    if let Some(value) = sync.get(k)? {
-                        self.inner.storage.put(k, &value)?;
+                        // Emit per-key DataSynced events so consumers get individual updates
+                        for (k, v) in &synced_pairs {
+                            info!("SyncResponse: emitting DataSynced key={} value_len={}", k, v.len());
+                            self.emit_event(SwarmEvent::DataSynced { key: k.clone(), value: v.clone() });
+                        }
+                        info!("SyncResponse: done, emitted {} events", synced_pairs.len());
+                    }
+                    Err(e) => {
+                        warn!("SyncResponse: load_document failed: {}", e);
+                        drop(sync);
+                        // Still emit a bulk sync event so consumers know sync was attempted
+                        self.emit_event(SwarmEvent::DataSynced { key: "*".into(), value: vec![] });
                     }
                 }
-                drop(sync);
-
-                self.emit_event(SwarmEvent::DataSynced);
             }
 
             network::Message::ConflictLock {

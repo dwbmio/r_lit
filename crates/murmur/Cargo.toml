@@ -46,6 +46,7 @@ tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
+lz4_flex = "0.11"
 anyhow = "1"
 
 [[example]]
@@ -71,6 +72,10 @@ path = "examples/structured_data.rs"
 [[example]]
 name = "chat_room"
 path = "examples/chat_room.rs"
+
+[[example]]
+name = "cli_dev_scope"
+path = "examples/cli_dev_scope.rs"
 
 [[example]]
 name = "file_sync"

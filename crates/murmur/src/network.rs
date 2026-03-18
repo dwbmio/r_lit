@@ -72,6 +72,13 @@ pub enum PeerEvent {
     Disconnected(String),
 }
 
+/// Derive a per-group ALPN protocol identifier.
+/// Different group_ids produce different ALPNs, so QUIC handshakes between
+/// nodes in different groups will fail at the transport layer.
+fn group_alpn(group_id: &str) -> Vec<u8> {
+    format!("murmur/{}", group_id).into_bytes()
+}
+
 /// P2P network layer using iroh.
 pub struct Network {
     endpoint: Endpoint,
@@ -122,8 +129,8 @@ impl Network {
             .await
             .map_err(|e| Error::Network(format!("Failed to create endpoint: {}", e)))?;
 
-        // Create server config with "murmur" ALPN
-        let alpn_protocols = vec![b"murmur".to_vec()];
+        // Create server config with group-specific ALPN for network isolation
+        let alpn_protocols = vec![group_alpn(&group_id)];
         let transport_config = Arc::new(TransportConfig::default());
         let server_config = iroh_net::endpoint::make_server_config(
             &secret_key,
@@ -215,7 +222,8 @@ impl Network {
         }
 
         // Establish connection
-        let conn = self.endpoint.connect(peer_addr, b"murmur")
+        let alpn = group_alpn(&self.group_id);
+        let conn = self.endpoint.connect(peer_addr, &alpn)
             .await
             .map_err(|e| Error::Network(format!("Failed to connect: {}", e)))?;
 
@@ -524,7 +532,7 @@ impl Network {
         my_node_id: NodeId,
         stale_peers: Arc<RwLock<HashSet<NodeId>>>,
     ) {
-        // Accept the connection with the server config that has "murmur" ALPN
+        // Accept the connection with the server config that has group-specific ALPN
         let connecting = match incoming.accept_with(server_config) {
             Ok(connecting) => connecting,
             Err(e) => {
@@ -568,26 +576,8 @@ impl Network {
         }
         let _ = peer_event_tx.send(PeerEvent::Connected(peer_id.to_string()));
 
-        // Request full sync from the connecting peer so we get their CRDT state
-        {
-            let msg = bincode::serialize(&Message::SyncRequest)
-                .unwrap_or_default();
-            if !msg.is_empty() {
-                match conn.open_uni().await {
-                    Ok(mut send_stream) => {
-                        if let Err(e) = send_stream.write_all(&msg).await {
-                            warn!("Failed to send SyncRequest to {}: {}", peer_id, e);
-                        } else {
-                            let _ = send_stream.finish();
-                            info!("Sent SyncRequest to incoming peer {}", peer_id);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to open stream to {}: {}", peer_id, e);
-                    }
-                }
-            }
-        }
+        // NOTE: SyncRequest is now sent by the swarm layer when it receives PeerConnected,
+        // not here. This avoids issues with open_uni on the acceptor side.
 
         // Handle messages from this peer
         loop {
@@ -656,5 +646,52 @@ mod tests {
 
         let removed_again = network.ack_received(1).await;
         assert!(!removed_again);
+    }
+
+    #[tokio::test]
+    async fn test_same_group_can_connect() {
+        let net_a = Network::new("alpha".to_string()).await.unwrap();
+        let net_b = Network::new("alpha".to_string()).await.unwrap();
+
+        net_b.start_accepting().await.unwrap();
+
+        let addr_b = net_b.node_addr().await.unwrap();
+        net_a.connect(addr_b).await.unwrap();
+
+        // Give the connection a moment to stabilize
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let peers_a = net_a.peers().await;
+        assert!(
+            peers_a.contains(&net_b.node_id_string()),
+            "same group_id nodes should connect successfully"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_different_group_cannot_connect() {
+        let net_a = Network::new("alpha".to_string()).await.unwrap();
+        let net_b = Network::new("beta".to_string()).await.unwrap();
+
+        net_b.start_accepting().await.unwrap();
+
+        let addr_b = net_b.node_addr().await.unwrap();
+        let result = net_a.connect(addr_b).await;
+
+        // Connection should fail due to ALPN mismatch, or succeed at transport
+        // but the peer handler drops it immediately. Either way, peer list must be empty.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let peers_a = net_a.peers().await;
+        assert!(
+            !peers_a.contains(&net_b.node_id_string()),
+            "different group_id nodes must NOT be connected, but found peer in list"
+        );
+
+        let peers_b = net_b.peers().await;
+        assert!(
+            !peers_b.contains(&net_a.node_id_string()),
+            "different group_id nodes must NOT be connected (receiver side)"
+        );
     }
 }
