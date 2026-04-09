@@ -71,9 +71,9 @@ async fn test_two_nodes_discover_and_connect() -> murmur::Result<()> {
         println!("    LocalSwarmDiscovery may not work in this environment.");
         println!("    Falling back to manual connect test...\n");
 
-        // Manual connection via node_addr JSON
+        // Manual connection via node_addr
         let addr_a = swarm_a.node_addr().await?;
-        println!("Node A addr JSON: {}", addr_a);
+        println!("Node A addr: {:?}", addr_a);
 
         swarm_b.connect_peer(&addr_a).await?;
         println!("Node B manually connected to Node A");

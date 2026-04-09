@@ -48,9 +48,10 @@ pub mod file;
 
 pub use error::{Error, Result};
 pub(crate) use storage_trait::StorageBackend;
+pub use iroh_net::NodeAddr;
 
 #[cfg(feature = "file-ops")]
-pub use file::{FileOps, FileMetadata, FileVersion, FileOperation};
+pub use file::{FileOps, FileMetadata, FileVersion, FileOperation, ConflictResolution};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -68,6 +69,10 @@ pub enum SwarmEvent {
     /// CRDT data was synced from a peer (SyncResponse merged or CrdtUpdate applied).
     /// `key` is the specific key updated, or `"*"` for bulk sync.
     DataSynced { key: String, value: Vec<u8> },
+    /// A bulk sync (SyncResponse) has started.
+    SyncStarted,
+    /// A sync operation completed; includes the new state hash and key count.
+    SyncCompleted { hash: String, key_count: usize },
     /// A file conflict was detected; the file is now locked until the resolver resolves it.
     ConflictDetected {
         file_name: String,
@@ -83,6 +88,14 @@ pub enum SwarmEvent {
     },
 }
 
+/// Information about an announced peer in the swarm.
+#[derive(Debug, Clone)]
+pub struct PeerInfo {
+    pub node_id: String,
+    pub nickname: String,
+    pub group_id: String,
+}
+
 /// Information about an active file conflict lock.
 #[derive(Debug, Clone)]
 pub struct ConflictInfo {
@@ -92,17 +105,6 @@ pub struct ConflictInfo {
     pub expected_version: u64,
     pub current_version: u64,
     pub detected_at: u64,
-}
-
-/// How to resolve a file conflict.
-#[cfg(feature = "file-ops")]
-pub enum ConflictResolution {
-    /// Keep the local version of the file.
-    KeepLocal,
-    /// Accept the remote version of the file.
-    KeepRemote,
-    /// Provide custom merged content.
-    MergeWith(Vec<u8>),
 }
 
 /// Main entry point for the Murmur library.
@@ -262,28 +264,19 @@ impl Swarm {
         network.node_id_string()
     }
 
-    /// Get this node's address as JSON string (for sharing with other peers).
+    /// Get this node's address (for sharing with other peers).
     ///
-    /// The returned string can be passed to [`Swarm::connect_peer`] on another node.
-    pub async fn node_addr(&self) -> Result<String> {
+    /// The returned [`NodeAddr`] can be passed to [`Swarm::connect_peer`] on another node,
+    /// or serialized to JSON with `serde_json::to_string(&addr)` for transport.
+    pub async fn node_addr(&self) -> Result<NodeAddr> {
         let network = self.inner.network.read().await;
-        let addr = network.node_addr().await?;
-        serde_json::to_string(&addr)
-            .map_err(|e| Error::Serialization(format!("Failed to serialize NodeAddr: {}", e)))
+        network.node_addr().await
     }
 
     /// Connect to another peer by their node address.
     ///
-    /// Accepts a JSON-serialized `NodeAddr`, e.g.:
-    /// ```json
-    /// {"node_id":"<base32-public-key>","relay_url":"https://...","direct_addresses":["ip:port"]}
-    /// ```
-    ///
-    /// You can obtain this string from [`Swarm::node_addr`] on the remote peer.
-    pub async fn connect_peer(&self, peer_addr_str: &str) -> Result<()> {
-        let node_addr: iroh_net::NodeAddr = serde_json::from_str(peer_addr_str)
-            .map_err(|e| Error::Network(format!("Failed to parse NodeAddr JSON: {}", e)))?;
-
+    /// You can obtain a [`NodeAddr`] from [`Swarm::node_addr`] on the remote peer.
+    pub async fn connect_peer(&self, node_addr: &NodeAddr) -> Result<()> {
         let peer_id = node_addr.node_id;
 
         let my_id = self.node_id().await;
@@ -293,11 +286,18 @@ impl Swarm {
         }
 
         let network = self.inner.network.read().await;
-        network.connect(node_addr).await?;
+        network.connect(node_addr.clone()).await?;
+        drop(network);
 
-        // Request full sync from the newly connected peer
-        if let Err(e) = network.send(&peer_id.to_string(), network::Message::SyncRequest).await {
-            warn!("Failed to send SyncRequest after connect_peer: {}", e);
+        // Generate initial incremental sync message
+        let peer_id_str = peer_id.to_string();
+        let mut sync = self.inner.sync.write().await;
+        if let Some(msg_bytes) = sync.generate_sync_message(&peer_id_str) {
+            drop(sync);
+            let network = self.inner.network.read().await;
+            if let Err(e) = network.send(&peer_id_str, network::Message::SyncMsg { data: msg_bytes }).await {
+                warn!("Failed to send initial SyncMsg after connect_peer: {}", e);
+            }
         }
 
         info!("Connected to peer via address: {}", peer_id);
@@ -335,9 +335,16 @@ impl Swarm {
         let node_addr = iroh_net::NodeAddr::new(node_id);
 
         network.connect(node_addr).await?;
+        drop(network);
 
-        if let Err(e) = network.send(node_id_str, network::Message::SyncRequest).await {
-            warn!("Failed to send SyncRequest after connect_peer_by_id: {}", e);
+        // Generate initial incremental sync message
+        let mut sync = self.inner.sync.write().await;
+        if let Some(msg_bytes) = sync.generate_sync_message(node_id_str) {
+            drop(sync);
+            let network = self.inner.network.read().await;
+            if let Err(e) = network.send(node_id_str, network::Message::SyncMsg { data: msg_bytes }).await {
+                warn!("Failed to send initial SyncMsg after connect_peer_by_id: {}", e);
+            }
         }
 
         info!("Connected to peer: {}", node_id_str);
@@ -352,8 +359,8 @@ impl Swarm {
 
     /// Discover and connect to peers found by iroh's LocalSwarmDiscovery.
     ///
-    /// After connecting to new peers, automatically sends a SyncRequest
-    /// so CRDT state is exchanged.
+    /// After connecting to new peers, automatically initiates incremental sync
+    /// so only missing CRDT changes are exchanged.
     ///
     /// Returns the number of new connections established.
     pub async fn discover_and_connect_local_peers(&self) -> Result<usize> {
@@ -375,10 +382,14 @@ impl Swarm {
 
             for peer_id in &peers_after {
                 if !peers_before.contains(peer_id) {
-                    debug!("Requesting full sync from new peer: {}", peer_id);
-                    let network = self.inner.network.read().await;
-                    if let Err(e) = network.send(peer_id, network::Message::SyncRequest).await {
-                        warn!("Failed to send SyncRequest to {}: {}", peer_id, e);
+                    debug!("Initiating incremental sync with new peer: {}", peer_id);
+                    let mut sync = self.inner.sync.write().await;
+                    if let Some(msg_bytes) = sync.generate_sync_message(peer_id) {
+                        drop(sync);
+                        let network = self.inner.network.read().await;
+                        if let Err(e) = network.send(peer_id, network::Message::SyncMsg { data: msg_bytes }).await {
+                            warn!("Failed to send initial SyncMsg to {}: {}", peer_id, e);
+                        }
                     }
                 }
             }
@@ -416,9 +427,8 @@ impl Swarm {
 
     /// List all announced peers (from CRDT metadata keys).
     ///
-    /// Returns a vec of (node_id, nickname, group_id) tuples for all peers
-    /// that have called [`announce`].
-    pub async fn list_announced_peers(&self) -> Result<Vec<(String, String, String)>> {
+    /// Returns a vec of [`PeerInfo`] for all peers that have called [`announce`].
+    pub async fn list_announced_peers(&self) -> Result<Vec<PeerInfo>> {
         let sync = self.inner.sync.read().await;
         let keys = sync.keys();
         drop(sync);
@@ -436,7 +446,11 @@ impl Swarm {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        peers.push((node_id_suffix.to_string(), nickname, group_id));
+                        peers.push(PeerInfo {
+                            node_id: node_id_suffix.to_string(),
+                            nickname,
+                            group_id,
+                        });
                     }
                 }
             }
@@ -451,181 +465,15 @@ impl Swarm {
         network.group_id().to_string()
     }
 
-    /// Check whether a file is currently conflict-locked.
-    pub async fn is_file_locked(&self, file_name: &str) -> bool {
-        self.inner.conflict_locks.read().await.contains_key(file_name)
+    /// Get the current CRDT state hash.
+    pub async fn state_hash(&self) -> String {
+        let mut sync = self.inner.sync.write().await;
+        sync.state_hash()
     }
 
-    /// Get conflict info for a locked file (if any).
-    pub async fn get_conflict_info(&self, file_name: &str) -> Option<ConflictInfo> {
-        self.inner.conflict_locks.read().await.get(file_name).cloned()
-    }
-
-    /// List all currently conflict-locked files.
-    pub async fn locked_files(&self) -> Vec<ConflictInfo> {
-        self.inner.conflict_locks.read().await.values().cloned().collect()
-    }
-
-    /// Lock a file due to conflict and broadcast the lock to all peers.
-    ///
-    /// Typically called automatically by [`FileOps::put_file`] when a version
-    /// mismatch is detected. Applications may also call this directly to
-    /// enforce a conflict lock from external logic.
-    pub async fn lock_file_conflict(
-        &self,
-        file_name: &str,
-        resolver_node: &str,
-        expected_version: u64,
-        current_version: u64,
-    ) -> Result<()> {
-        let info = ConflictInfo {
-            file_name: file_name.to_string(),
-            resolver_node: resolver_node.to_string(),
-            expected_version,
-            current_version,
-            detected_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
-
-        self.inner.conflict_locks.write().await
-            .insert(file_name.to_string(), info);
-
-        self.emit_event(SwarmEvent::ConflictDetected {
-            file_name: file_name.to_string(),
-            resolver_node: resolver_node.to_string(),
-            expected_version,
-            current_version,
-        });
-
-        let network = self.inner.network.read().await;
-        let msg = network::Message::ConflictLock {
-            file_name: file_name.to_string(),
-            resolver_node: resolver_node.to_string(),
-            expected_version,
-            current_version,
-        };
-        if let Err(e) = network.broadcast(msg).await {
-            warn!("Failed to broadcast ConflictLock: {}", e);
-        }
-
-        info!(
-            "File conflict locked: {} (resolver={})",
-            file_name, resolver_node
-        );
-        Ok(())
-    }
-
-    /// Resolve a file conflict. Only the resolver node should call this.
-    ///
-    /// `resolved_content` is the final file content to write.
-    /// After resolution, the lock is removed and all peers are notified.
-    #[cfg(feature = "file-ops")]
-    pub async fn resolve_conflict(
-        &self,
-        file_name: &str,
-        resolution: ConflictResolution,
-    ) -> Result<()> {
-        let my_id = self.node_id().await;
-
-        {
-            let locks = self.inner.conflict_locks.read().await;
-            let info = locks.get(file_name).ok_or_else(|| {
-                Error::Other(format!("File '{}' is not conflict-locked", file_name))
-            })?;
-            if info.resolver_node != my_id {
-                return Err(Error::Other(format!(
-                    "Only the resolver node ({}) can resolve this conflict",
-                    info.resolver_node
-                )));
-            }
-        }
-
-        let content_key = format!("file:data:{}", file_name);
-        let meta_key = format!("file:meta:{}", file_name);
-
-        let resolved_content = match resolution {
-            ConflictResolution::KeepLocal => {
-                self.inner.storage.get(&content_key)?
-                    .ok_or_else(|| Error::Other("Local file content not found".into()))?
-            }
-            ConflictResolution::KeepRemote => {
-                let sync = self.inner.sync.read().await;
-                sync.get(&content_key)?
-                    .ok_or_else(|| Error::Sync("Remote file content not found in CRDT".into()))?
-            }
-            ConflictResolution::MergeWith(content) => content,
-        };
-
-        let current_version = {
-            if let Some(meta_bytes) = self.get(&meta_key).await? {
-                serde_json::from_slice::<file::FileMetadata>(&meta_bytes)
-                    .map(|m| m.version)
-                    .unwrap_or(0)
-            } else {
-                0
-            }
-        };
-        let new_version = current_version + 1;
-
-        let metadata = file::FileMetadata {
-            name: file_name.to_string(),
-            size: resolved_content.len(),
-            modified: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            checksum: format!("{}", resolved_content.len()),
-            version: new_version,
-            author: my_id.clone(),
-        };
-
-        let versioned_key = format!("file:data:{}:v{}", file_name, new_version);
-        self.put(&versioned_key, &resolved_content).await?;
-        self.put(&content_key, &resolved_content).await?;
-
-        let meta_bytes = serde_json::to_vec(&metadata)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-        self.put(&meta_key, &meta_bytes).await?;
-
-        let version_entry = file::FileVersion {
-            version: new_version,
-            content_key: versioned_key,
-            timestamp: metadata.modified,
-            author: my_id.clone(),
-            size: resolved_content.len(),
-            operation: file::FileOperation::Update,
-        };
-        let history_key = format!("file:history:{}", file_name);
-        let mut history: Vec<file::FileVersion> = self.get(&history_key).await?
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        history.push(version_entry);
-        let history_bytes = serde_json::to_vec(&history)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-        self.put(&history_key, &history_bytes).await?;
-
-        self.inner.conflict_locks.write().await.remove(file_name);
-
-        self.emit_event(SwarmEvent::ConflictResolved {
-            file_name: file_name.to_string(),
-            resolved_by: my_id.clone(),
-            new_version,
-        });
-
-        let network = self.inner.network.read().await;
-        let msg = network::Message::ConflictUnlock {
-            file_name: file_name.to_string(),
-            resolved_by: my_id,
-            new_version,
-        };
-        if let Err(e) = network.broadcast(msg).await {
-            warn!("Failed to broadcast ConflictUnlock: {}", e);
-        }
-
-        info!("File conflict resolved: {} → v{}", file_name, new_version);
-        Ok(())
+    /// List all keys in local storage that match the given prefix.
+    pub fn keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.storage.keys_with_prefix(prefix)
     }
 
     /// Shutdown the swarm gracefully.
@@ -693,7 +541,7 @@ impl Swarm {
     }
 
     /// Forward network-layer PeerEvents into SwarmEvents,
-    /// and send SyncRequest to newly connected peers.
+    /// and initiate incremental sync with newly connected peers.
     async fn spawn_peer_event_forwarder(&self) {
         let inner = self.inner.clone();
         let network = self.inner.network.read().await;
@@ -711,15 +559,29 @@ impl Swarm {
                         match result {
                             Ok(network::PeerEvent::Connected(id)) => {
                                 let _ = event_tx.send(SwarmEvent::PeerConnected { node_id: id.clone() });
-                                // Send SyncRequest to the newly connected peer
-                                let network = inner.network.read().await;
-                                if let Err(e) = network.send(&id, network::Message::SyncRequest).await {
-                                    warn!("Failed to send SyncRequest to new peer {}: {}", id, e);
+                                // Generate initial incremental sync message for the new peer
+                                let mut sync = inner.sync.write().await;
+                                if let Some(msg_bytes) = sync.generate_sync_message(&id) {
+                                    drop(sync);
+                                    let network = inner.network.read().await;
+                                    if let Err(e) = network.send(
+                                        &id,
+                                        network::Message::SyncMsg { data: msg_bytes },
+                                    ).await {
+                                        warn!("Failed to send initial SyncMsg to {}: {}", &id[..8.min(id.len())], e);
+                                    } else {
+                                        info!("Sent initial SyncMsg to new peer {}", &id[..8.min(id.len())]);
+                                    }
                                 } else {
-                                    info!("Sent SyncRequest to new peer {}", &id[..8.min(id.len())]);
+                                    drop(sync);
+                                    info!("No sync needed for peer {} (empty doc)", &id[..8.min(id.len())]);
                                 }
                             }
                             Ok(network::PeerEvent::Disconnected(id)) => {
+                                // Clean up peer sync state
+                                let mut sync = inner.sync.write().await;
+                                sync.remove_peer_state(&id);
+                                drop(sync);
                                 let _ = event_tx.send(SwarmEvent::PeerDisconnected { node_id: id });
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -844,7 +706,12 @@ impl Swarm {
                 if let Err(e) = network.send(&peer_id.to_string(), ack_msg).await {
                     warn!("Failed to send ACK: {}", e);
                 }
-                self.emit_event(SwarmEvent::DataSynced { key, value: synced_value });
+                self.emit_event(SwarmEvent::DataSynced { key: key.clone(), value: synced_value });
+                // Emit SyncCompleted for individual CrdtUpdate (no SyncStarted for single-key updates)
+                let mut sync = self.inner.sync.write().await;
+                let hash = sync.state_hash();
+                drop(sync);
+                self.emit_event(SwarmEvent::SyncCompleted { hash, key_count: 1 });
             }
 
             network::Message::Ack { seq_num } => {
@@ -853,49 +720,71 @@ impl Swarm {
                 network.ack_received(seq_num).await;
             }
 
-            network::Message::SyncRequest => {
-                info!("SyncRequest from peer {}", peer_id);
-                let mut sync = self.inner.sync.write().await;
-                let all_changes = sync.get_all_changes()?;
-                drop(sync);
-                info!("SyncRequest: sending SyncResponse ({} bytes)", all_changes.len());
+            network::Message::SyncMsg { data } => {
+                let peer_id_str = peer_id.to_string();
+                info!(
+                    "SyncMsg from peer {} ({} bytes)",
+                    &peer_id_str[..8.min(peer_id_str.len())],
+                    data.len()
+                );
 
-                let network = self.inner.network.read().await;
-                network.send(
-                    &peer_id.to_string(),
-                    network::Message::SyncResponse { data: all_changes },
-                ).await?;
-            }
+                self.emit_event(SwarmEvent::SyncStarted);
 
-            network::Message::SyncResponse { data } => {
                 let mut sync = self.inner.sync.write().await;
-                match sync.load_document(&data) {
-                    Ok(()) => {
-                        info!("SyncResponse: loaded document, scanning keys...");
-                        // Populate local storage from all CRDT keys and emit per-key events
-                        let keys = sync.keys();
-                        info!("SyncResponse: found {} keys", keys.len());
+                match sync.receive_sync_message(&peer_id_str, &data) {
+                    Ok(changed_keys) => {
+                        // Persist changed keys to local storage and collect synced pairs
                         let mut synced_pairs = Vec::new();
-                        for k in &keys {
+                        for k in &changed_keys {
                             if let Some(value) = sync.get(k)? {
                                 self.inner.storage.put(k, &value)?;
                                 synced_pairs.push((k.clone(), value));
+                            } else {
+                                // Key was deleted
+                                let _ = self.inner.storage.delete(k);
                             }
                         }
+
+                        let key_count = changed_keys.len();
+
+                        // Generate reply if there's more to sync
+                        let reply = sync.generate_sync_message(&peer_id_str);
+                        let hash = sync.state_hash();
                         drop(sync);
 
-                        // Emit per-key DataSynced events so consumers get individual updates
+                        // Emit per-key DataSynced events
                         for (k, v) in &synced_pairs {
-                            info!("SyncResponse: emitting DataSynced key={} value_len={}", k, v.len());
+                            debug!("SyncMsg: emitting DataSynced key={} value_len={}", k, v.len());
                             self.emit_event(SwarmEvent::DataSynced { key: k.clone(), value: v.clone() });
                         }
-                        info!("SyncResponse: done, emitted {} events", synced_pairs.len());
+                        self.emit_event(SwarmEvent::SyncCompleted { hash, key_count });
+
+                        // Send reply if needed (multi-round)
+                        if let Some(reply_bytes) = reply {
+                            info!(
+                                "SyncMsg: sending reply to {} ({} bytes)",
+                                &peer_id_str[..8.min(peer_id_str.len())],
+                                reply_bytes.len()
+                            );
+                            let network = self.inner.network.read().await;
+                            if let Err(e) = network.send(
+                                &peer_id_str,
+                                network::Message::SyncMsg { data: reply_bytes },
+                            ).await {
+                                warn!("Failed to send SyncMsg reply to {}: {}", peer_id_str, e);
+                            }
+                        } else {
+                            info!(
+                                "SyncMsg: sync complete with peer {}",
+                                &peer_id_str[..8.min(peer_id_str.len())]
+                            );
+                        }
                     }
                     Err(e) => {
-                        warn!("SyncResponse: load_document failed: {}", e);
+                        warn!("SyncMsg: receive failed from {}: {}", peer_id_str, e);
+                        let hash = sync.state_hash();
                         drop(sync);
-                        // Still emit a bulk sync event so consumers know sync was attempted
-                        self.emit_event(SwarmEvent::DataSynced { key: "*".into(), value: vec![] });
+                        self.emit_event(SwarmEvent::SyncCompleted { hash, key_count: 0 });
                     }
                 }
             }

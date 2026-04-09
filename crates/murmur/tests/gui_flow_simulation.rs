@@ -77,11 +77,11 @@ async fn test_full_gui_flow_simulation() -> murmur::Result<()> {
 
     // Group by group_id, filter internal
     let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for (node_id, nickname, group_id) in &peers {
-        if !group_id.starts_with('_') {
-            groups.entry(group_id.clone())
+    for p in &peers {
+        if !p.group_id.starts_with('_') {
+            groups.entry(p.group_id.clone())
                 .or_default()
-                .push((node_id.clone(), nickname.clone()));
+                .push((p.node_id.clone(), p.nickname.clone()));
         }
     }
 
@@ -184,14 +184,14 @@ async fn test_full_gui_flow_simulation() -> murmur::Result<()> {
     // Verify member list from both sides
     println!("\n--- Final member list (from A's view): ---");
     let peers_a = swarm_a.list_announced_peers().await?;
-    for (nid, nick, gid) in &peers_a {
-        println!("  {}  |  {}  |  group={}", nick, &nid[..16], gid);
+    for p in &peers_a {
+        println!("  {}  |  {}  |  group={}", p.nickname, &p.node_id[..16], p.group_id);
     }
 
     println!("\n--- Final member list (from B's view): ---");
     let peers_b = swarm_b_join.list_announced_peers().await?;
-    for (nid, nick, gid) in &peers_b {
-        println!("  {}  |  {}  |  group={}", nick, &nid[..16], gid);
+    for p in &peers_b {
+        println!("  {}  |  {}  |  group={}", p.nickname, &p.node_id[..16], p.group_id);
     }
 
     // Assertions

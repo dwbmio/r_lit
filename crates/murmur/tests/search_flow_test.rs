@@ -56,8 +56,8 @@ async fn test_search_discovers_created_group() -> murmur::Result<()> {
     // Read announced peers
     let peers = swarm_b.list_announced_peers().await?;
     println!("\nNode B sees {} announced peer(s):", peers.len());
-    for (nid, nick, gid) in &peers {
-        println!("  node={} nick={} group={}", &nid[..16], nick, gid);
+    for p in &peers {
+        println!("  node={} nick={} group={}", &p.node_id[..16], p.nickname, p.group_id);
     }
 
     // Group by group_id, filtering out internal groups

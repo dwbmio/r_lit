@@ -53,19 +53,19 @@ async fn test_announce_and_discover() -> murmur::Result<()> {
     // List peers from A's perspective
     let peers_a = swarm_a.list_announced_peers().await?;
     println!("\nNode A sees {} announced peers:", peers_a.len());
-    for (node_id, nickname, gid) in &peers_a {
-        println!("  - {} ({}) group={}", nickname, &node_id[..16], gid);
+    for p in &peers_a {
+        println!("  - {} ({}) group={}", p.nickname, &p.node_id[..16], p.group_id);
     }
 
     // List peers from B's perspective
     let peers_b = swarm_b.list_announced_peers().await?;
     println!("\nNode B sees {} announced peers:", peers_b.len());
-    for (node_id, nickname, gid) in &peers_b {
-        println!("  - {} ({}) group={}", nickname, &node_id[..16], gid);
+    for p in &peers_b {
+        println!("  - {} ({}) group={}", p.nickname, &p.node_id[..16], p.group_id);
     }
 
     // A should see at least itself
-    assert!(peers_a.iter().any(|(_, nick, _)| nick == "Alice"), "A should see Alice");
+    assert!(peers_a.iter().any(|p| p.nickname == "Alice"), "A should see Alice");
 
     // If connection was established, B should also see Alice's announcement
     if count_a + count_b > 0 {
@@ -73,8 +73,8 @@ async fn test_announce_and_discover() -> murmur::Result<()> {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let peers_b_updated = swarm_b.list_announced_peers().await?;
         println!("\nNode B (updated) sees {} announced peers:", peers_b_updated.len());
-        for (node_id, nickname, gid) in &peers_b_updated {
-            println!("  - {} ({}) group={}", nickname, &node_id[..16], gid);
+        for p in &peers_b_updated {
+            println!("  - {} ({}) group={}", p.nickname, &p.node_id[..16], p.group_id);
         }
     }
 

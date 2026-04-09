@@ -1,5 +1,6 @@
-use murmur::{Swarm, SwarmEvent};
+use murmur::{Swarm, SwarmEvent, FileOps};
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 
 /// Interactive CLI for testing murmur-scope extension.
 ///
@@ -46,7 +47,10 @@ async fn main() -> anyhow::Result<()> {
 
     let node_id = swarm.node_id().await;
     eprintln!("Node ID: {}", node_id);
-    eprintln!("Address: {}", swarm.node_addr().await.unwrap_or_else(|e| format!("(err: {})", e)));
+    match swarm.node_addr().await {
+        Ok(addr) => eprintln!("Address: {}", serde_json::to_string(&addr).unwrap_or_default()),
+        Err(e) => eprintln!("Address: (err: {})", e),
+    }
 
     // Announce nickname so other nodes can display it
     if let Err(e) = swarm.announce(&name).await {
@@ -59,6 +63,11 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("  put <key> <value>     write KV");
     eprintln!("  get <key>             read KV");
     eprintln!("  peers                 list peers");
+    eprintln!("  upload <path>         upload file to swarm");
+    eprintln!("  download <key> <out>  download file");
+    eprintln!("  files                 list shared files");
+    eprintln!("  history <key>         file version history");
+    eprintln!("  audit                 recent file operations");
     eprintln!("  <text>                shorthand for put msg:<name> <text>");
     eprintln!("  quit                  exit");
     eprintln!();
@@ -104,6 +113,16 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(SwarmEvent::ConflictResolved { file_name, new_version, .. }) => {
                     eprintln!("\r  [event] conflict resolved: {} → v{}", file_name, new_version);
+                    eprint!("> ");
+                    let _ = io::stderr().flush();
+                }
+                Ok(SwarmEvent::SyncStarted) => {
+                    eprintln!("\r  [event] sync started…");
+                    eprint!("> ");
+                    let _ = io::stderr().flush();
+                }
+                Ok(SwarmEvent::SyncCompleted { hash, key_count }) => {
+                    eprintln!("\r  [event] sync completed: hash={} keys={}", hash, key_count);
                     eprint!("> ");
                     let _ = io::stderr().flush();
                 }
@@ -168,6 +187,68 @@ async fn main() -> anyhow::Result<()> {
                         Ok(()) => eprintln!("  ok: {} = {}", key, val),
                         Err(e) => eprintln!("  error: {}", e),
                     }
+                }
+            } else if let Some(file_path) = line.strip_prefix("upload ") {
+                let file_path = file_path.trim();
+                let p = Path::new(file_path);
+                if !p.exists() {
+                    eprintln!("  file not found: {}", file_path);
+                } else {
+                    match rt.block_on(swarm_clone.put_file(p)) {
+                        Ok(key) => {
+                            eprintln!("  uploaded: {}", key);
+                            if let Ok(Some(meta)) = rt.block_on(swarm_clone.file_metadata(&key)) {
+                                eprintln!("    name: {}, v{}, {} bytes", meta.name, meta.version, meta.size);
+                            }
+                        }
+                        Err(e) => eprintln!("  error: {}", e),
+                    }
+                }
+            } else if let Some(rest) = line.strip_prefix("download ") {
+                let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                if parts.len() < 2 {
+                    eprintln!("  usage: download <key> <output_path>");
+                } else {
+                    let key = parts[0].trim();
+                    let out = Path::new(parts[1].trim());
+                    match rt.block_on(swarm_clone.get_file(key, out)) {
+                        Ok(_) => eprintln!("  downloaded: {}", out.display()),
+                        Err(e) => eprintln!("  error: {}", e),
+                    }
+                }
+            } else if line == "files" {
+                match rt.block_on(swarm_clone.list_files()) {
+                    Ok(files) if files.is_empty() => eprintln!("  (no files)"),
+                    Ok(files) => {
+                        for f in &files {
+                            eprintln!("  {} (v{}, {} bytes)", f.name, f.version, f.size);
+                        }
+                    }
+                    Err(e) => eprintln!("  error: {}", e),
+                }
+            } else if let Some(key) = line.strip_prefix("history ") {
+                match rt.block_on(swarm_clone.file_history(key.trim())) {
+                    Ok(h) if h.is_empty() => eprintln!("  (no history)"),
+                    Ok(h) => {
+                        for entry in h.iter().rev() {
+                            eprintln!("  v{} {:?} {} bytes by {} at {}",
+                                entry.version, entry.operation, entry.size,
+                                entry.author, entry.timestamp);
+                        }
+                    }
+                    Err(e) => eprintln!("  error: {}", e),
+                }
+            } else if line == "audit" {
+                match rt.block_on(swarm_clone.audit_trail(Some(20))) {
+                    Ok(trail) if trail.is_empty() => eprintln!("  (no audit trail)"),
+                    Ok(trail) => {
+                        for entry in trail.iter().rev().take(20) {
+                            eprintln!("  {:?} {} by {} at {}",
+                                entry.operation, entry.content_key,
+                                entry.author, entry.timestamp);
+                        }
+                    }
+                    Err(e) => eprintln!("  error: {}", e),
                 }
             } else {
                 // Shorthand: treat as message with seq key + lz4 compression

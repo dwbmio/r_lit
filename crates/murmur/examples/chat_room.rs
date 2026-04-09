@@ -63,14 +63,17 @@ async fn main() -> anyhow::Result<()> {
     println!("✓ 聊天室已启动");
     println!("  用户名: {}", username);
     println!("  群组: {}", group_id);
-    println!("  节点地址:\n  {}\n", swarm.node_addr().await);
+    println!("  节点地址:\n  {}\n", serde_json::to_string(&swarm.node_addr().await?).unwrap_or_default());
 
     // 连接到其他节点
-    if let Some(addr) = peer_addr {
+    if let Some(addr_str) = peer_addr {
         println!("🔗 正在连接到 peer...");
-        match swarm.connect_peer(addr).await {
-            Ok(_) => println!("✓ 连接成功!\n"),
-            Err(e) => println!("⚠ 连接失败: {} (继续运行)\n", e),
+        match serde_json::from_str::<murmur::NodeAddr>(addr_str) {
+            Ok(addr) => match swarm.connect_peer(&addr).await {
+                Ok(_) => println!("✓ 连接成功!\n"),
+                Err(e) => println!("⚠ 连接失败: {} (继续运行)\n", e),
+            },
+            Err(e) => println!("⚠ 地址解析失败: {} (继续运行)\n", e),
         }
     }
 

@@ -31,10 +31,9 @@ pub enum Message {
         seq_num: u64,           // Sequence number from sender
         vector_clock: VectorClock, // Causal ordering
     },
-    /// Request full state sync
-    SyncRequest,
-    /// Response with full state
-    SyncResponse { data: Vec<u8> },
+    /// Incremental sync message (automerge sync protocol).
+    /// Multi-round: peers exchange these until both return None.
+    SyncMsg { data: Vec<u8> },
     /// Acknowledgment for reliable delivery
     Ack { seq_num: u64 },
     /// Lock a file due to conflict (all nodes must pause writes to this file)
@@ -229,8 +228,18 @@ impl Network {
 
         info!("Connected to peer: {}", peer_id);
 
-        // Store connection
+        // Store connection (with deterministic duplicate resolution)
         let mut peers = self.peers.write().await;
+        if peers.contains_key(&peer_id) {
+            // Incoming connection arrived first — deterministic tie-break by node ID.
+            // Higher node ID wins as initiator (keeps outgoing conn).
+            if self.node_id < peer_id {
+                // The other peer is the initiator → keep their incoming conn
+                debug!("Dropping duplicate outgoing connection to {} (they are initiator)", peer_id);
+                return Ok(());
+            }
+            debug!("Replacing incoming connection from {} with outgoing (we are initiator)", peer_id);
+        }
         peers.insert(peer_id, conn.clone());
         drop(peers);
 
@@ -246,6 +255,8 @@ impl Network {
     fn spawn_peer_handler(&self, peer_id: NodeId, conn: Connection) {
         let message_tx = self.message_tx.clone();
         let peers = self.peers.clone();
+        let peer_event_tx = self.peer_event_tx.clone();
+        let pending_acks = self.pending_acks.clone();
 
         tokio::spawn(async move {
             loop {
@@ -260,6 +271,12 @@ impl Network {
                             }
                         };
 
+                        // Guard empty buffers (connection closed mid-stream)
+                        if buf.is_empty() {
+                            debug!("Received empty stream from {}, skipping", peer_id);
+                            continue;
+                        }
+
                         // Deserialize message
                         match bincode::deserialize::<Message>(&buf) {
                             Ok(message) => {
@@ -270,21 +287,40 @@ impl Network {
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to deserialize message from {}: {}", peer_id, e);
+                                warn!("Failed to deserialize message from {}: {}", peer_id, e);
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("Connection closed with {}: {}", peer_id, e);
+                        debug!("Connection closed with {}: {}", peer_id, e);
                         break;
                     }
                 }
             }
 
-            // Remove peer on disconnect
+            // Only remove peer if this handler's connection is still the active one
+            // (a replaced connection's handler must not remove the new connection)
             let mut peers_lock = peers.write().await;
-            peers_lock.remove(&peer_id);
-            info!("Peer disconnected: {}", peer_id);
+            let should_remove = match peers_lock.get(&peer_id) {
+                Some(stored) => stored.stable_id() == conn.stable_id(),
+                None => false,
+            };
+            if should_remove {
+                peers_lock.remove(&peer_id);
+                drop(peers_lock);
+                // Clear pending ACKs for this peer to avoid pointless retransmits
+                let mut acks = pending_acks.write().await;
+                let before = acks.len();
+                acks.retain(|_, msg| msg.peer_id != peer_id);
+                let cleared = before - acks.len();
+                if cleared > 0 {
+                    debug!("Cleared {} pending ACKs for disconnected peer {}", cleared, peer_id);
+                }
+                info!("Peer disconnected: {}", peer_id);
+                let _ = peer_event_tx.send(PeerEvent::Disconnected(peer_id.to_string()));
+            } else {
+                debug!("Handler exiting for replaced connection to {}", peer_id);
+            }
         });
     }
 
@@ -495,6 +531,7 @@ impl Network {
         let peer_event_tx = self.peer_event_tx.clone();
         let my_node_id = self.node_id;
         let stale_peers = self.stale_peers.clone();
+        let pending_acks = self.pending_acks.clone();
 
         tokio::spawn(async move {
             loop {
@@ -508,6 +545,7 @@ impl Network {
                             peer_event_tx.clone(),
                             my_node_id,
                             stale_peers.clone(),
+                            pending_acks.clone(),
                         ));
                     }
                     None => {
@@ -531,6 +569,7 @@ impl Network {
         peer_event_tx: tokio::sync::broadcast::Sender<PeerEvent>,
         my_node_id: NodeId,
         stale_peers: Arc<RwLock<HashSet<NodeId>>>,
+        pending_acks: Arc<RwLock<HashMap<u64, PendingMessage>>>,
     ) {
         // Accept the connection with the server config that has group-specific ALPN
         let connecting = match incoming.accept_with(server_config) {
@@ -569,14 +608,25 @@ impl Network {
         // Peer came back alive — remove from stale blacklist
         stale_peers.write().await.remove(&peer_id);
 
-        // Store the connection
+        // Store the connection (with deterministic duplicate resolution)
         {
             let mut peers_lock = peers.write().await;
+            if peers_lock.contains_key(&peer_id) {
+                // Duplicate connection — deterministic tie-break by node ID.
+                // Higher node ID wins as initiator (keeps outgoing conn).
+                if my_node_id > peer_id {
+                    // We should be the initiator → keep our outgoing conn, drop this incoming
+                    debug!("Dropping duplicate incoming connection from {} (we are initiator)", peer_id);
+                    return;
+                }
+                // We should be the acceptor → replace outgoing with this incoming
+                debug!("Replacing outgoing connection to {} with incoming (they are initiator)", peer_id);
+            }
             peers_lock.insert(peer_id, conn.clone());
         }
         let _ = peer_event_tx.send(PeerEvent::Connected(peer_id.to_string()));
 
-        // NOTE: SyncRequest is now sent by the swarm layer when it receives PeerConnected,
+        // NOTE: Incremental sync is initiated by the swarm layer when it receives PeerConnected,
         // not here. This avoids issues with open_uni on the acceptor side.
 
         // Handle messages from this peer
@@ -592,6 +642,12 @@ impl Network {
                         }
                     }
 
+                    // Guard empty buffers (connection closed mid-stream)
+                    if buf.is_empty() {
+                        debug!("Received empty stream from {}, skipping", peer_id);
+                        continue;
+                    }
+
                     match bincode::deserialize::<Message>(&buf) {
                         Ok(message) => {
                             debug!("Received message from {}: {:?}", peer_id, message);
@@ -601,22 +657,39 @@ impl Network {
                             }
                         }
                         Err(e) => {
-                            error!("Failed to deserialize message from {}: {}", peer_id, e);
+                            warn!("Failed to deserialize message from {}: {}", peer_id, e);
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("Connection closed with {}: {}", peer_id, e);
+                    debug!("Connection closed with {}: {}", peer_id, e);
                     break;
                 }
             }
         }
 
-        // Remove peer on disconnect
+        // Only remove peer if this handler's connection is still the active one
         let mut peers_lock = peers.write().await;
-        peers_lock.remove(&peer_id);
-        info!("Peer disconnected: {}", peer_id);
-        let _ = peer_event_tx.send(PeerEvent::Disconnected(peer_id.to_string()));
+        let should_remove = match peers_lock.get(&peer_id) {
+            Some(stored) => stored.stable_id() == conn.stable_id(),
+            None => false,
+        };
+        if should_remove {
+            peers_lock.remove(&peer_id);
+            drop(peers_lock);
+            // Clear pending ACKs for this peer to avoid pointless retransmits
+            let mut acks = pending_acks.write().await;
+            let before = acks.len();
+            acks.retain(|_, msg| msg.peer_id != peer_id);
+            let cleared = before - acks.len();
+            if cleared > 0 {
+                debug!("Cleared {} pending ACKs for disconnected peer {}", cleared, peer_id);
+            }
+            info!("Peer disconnected: {}", peer_id);
+            let _ = peer_event_tx.send(PeerEvent::Disconnected(peer_id.to_string()));
+        } else {
+            debug!("Handler exiting for replaced connection to {}", peer_id);
+        }
     }
 }
 

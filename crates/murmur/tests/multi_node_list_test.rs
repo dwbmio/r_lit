@@ -90,13 +90,14 @@ async fn test_multi_node_group_list() -> murmur::Result<()> {
     // === Read and verify results ===
     let peers = searcher.list_announced_peers().await?;
     println!("\n=== Searcher sees {} announced peer(s) ===", peers.len());
-    for (nid, nick, gid) in &peers {
-        println!("  node={}... nick={:<10} group={}", &nid[..12], nick, gid);
+    for p in &peers {
+        println!("  node={}... nick={:<10} group={}", &p.node_id[..12], p.nickname, p.group_id);
     }
 
     // Group by group_id (skip internal groups)
     let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-    for (_, nickname, group_id) in &peers {
+    for p in &peers {
+        let (nickname, group_id) = (&p.nickname, &p.group_id);
         if !group_id.starts_with('_') {
             groups.entry(group_id.clone())
                 .or_default()

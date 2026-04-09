@@ -34,13 +34,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Display connection info
     println!("\n📍 Node Address (share this with others):");
-    println!("   {}", swarm.node_addr().await);
+    println!("   {}", serde_json::to_string(&swarm.node_addr().await?).unwrap_or_default());
     println!("\n🆔 Node ID: {}", swarm.node_id().await);
 
     // Connect to peer if provided
-    if let Some(addr) = peer_addr {
-        println!("\n🔗 Connecting to peer: {}", addr);
-        swarm.connect_peer(addr).await?;
+    if let Some(addr_str) = peer_addr {
+        println!("\n🔗 Connecting to peer: {}", addr_str);
+        let addr: murmur::NodeAddr = serde_json::from_str(addr_str)?;
+        swarm.connect_peer(&addr).await?;
         println!("✓ Connected!");
     }
 

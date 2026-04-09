@@ -9,5 +9,6 @@
 !CLAUDE.md
 !docs/**/*.md
 **/workbench_data_*/
+crates/murmur/data/
 *.bak
 *.bak2

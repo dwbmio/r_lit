@@ -13,10 +13,11 @@
 //! - **CRDT Merge**: Automatic conflict resolution at the KV layer
 //! - **Size Limit**: Files larger than MAX_FILE_SIZE will be rejected
 
-use crate::{Result, Error, Swarm, StorageBackend};
+use crate::{Result, Error, Swarm, SwarmEvent, ConflictInfo, StorageBackend, network};
 use std::path::Path;
 use tokio::fs;
 use serde::{Serialize, Deserialize};
+use tracing::{info, warn};
 
 /// Maximum file size in bytes (10 MB)
 pub const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
@@ -377,5 +378,194 @@ impl FileOps for Swarm {
             }
         }
         Ok(entries)
+    }
+}
+
+// ── Conflict management ─────────────────────────────────────
+
+/// How to resolve a file conflict.
+pub enum ConflictResolution {
+    /// Keep the local version of the file.
+    KeepLocal,
+    /// Accept the remote version of the file.
+    KeepRemote,
+    /// Provide custom merged content.
+    MergeWith(Vec<u8>),
+}
+
+impl Swarm {
+    /// Check whether a file is currently conflict-locked.
+    pub async fn is_file_locked(&self, file_name: &str) -> bool {
+        self.inner.conflict_locks.read().await.contains_key(file_name)
+    }
+
+    /// Get conflict info for a locked file (if any).
+    pub async fn get_conflict_info(&self, file_name: &str) -> Option<ConflictInfo> {
+        self.inner.conflict_locks.read().await.get(file_name).cloned()
+    }
+
+    /// List all currently conflict-locked files.
+    pub async fn locked_files(&self) -> Vec<ConflictInfo> {
+        self.inner.conflict_locks.read().await.values().cloned().collect()
+    }
+
+    /// Lock a file due to conflict and broadcast the lock to all peers.
+    ///
+    /// Typically called automatically by [`FileOps::put_file`] when a version
+    /// mismatch is detected. Applications may also call this directly to
+    /// enforce a conflict lock from external logic.
+    pub async fn lock_file_conflict(
+        &self,
+        file_name: &str,
+        resolver_node: &str,
+        expected_version: u64,
+        current_version: u64,
+    ) -> Result<()> {
+        let info = ConflictInfo {
+            file_name: file_name.to_string(),
+            resolver_node: resolver_node.to_string(),
+            expected_version,
+            current_version,
+            detected_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        self.inner.conflict_locks.write().await
+            .insert(file_name.to_string(), info);
+
+        self.emit_event(SwarmEvent::ConflictDetected {
+            file_name: file_name.to_string(),
+            resolver_node: resolver_node.to_string(),
+            expected_version,
+            current_version,
+        });
+
+        let network = self.inner.network.read().await;
+        let msg = network::Message::ConflictLock {
+            file_name: file_name.to_string(),
+            resolver_node: resolver_node.to_string(),
+            expected_version,
+            current_version,
+        };
+        if let Err(e) = network.broadcast(msg).await {
+            warn!("Failed to broadcast ConflictLock: {}", e);
+        }
+
+        info!(
+            "File conflict locked: {} (resolver={})",
+            file_name, resolver_node
+        );
+        Ok(())
+    }
+
+    /// Resolve a file conflict. Only the resolver node should call this.
+    ///
+    /// After resolution, the lock is removed and all peers are notified.
+    pub async fn resolve_conflict(
+        &self,
+        file_name: &str,
+        resolution: ConflictResolution,
+    ) -> Result<()> {
+        let my_id = self.node_id().await;
+
+        {
+            let locks = self.inner.conflict_locks.read().await;
+            let info = locks.get(file_name).ok_or_else(|| {
+                Error::Other(format!("File '{}' is not conflict-locked", file_name))
+            })?;
+            if info.resolver_node != my_id {
+                return Err(Error::Other(format!(
+                    "Only the resolver node ({}) can resolve this conflict",
+                    info.resolver_node
+                )));
+            }
+        }
+
+        let content_key = format!("file:data:{}", file_name);
+        let meta_key = format!("file:meta:{}", file_name);
+
+        let resolved_content = match resolution {
+            ConflictResolution::KeepLocal => {
+                self.inner.storage.get(&content_key)?
+                    .ok_or_else(|| Error::Other("Local file content not found".into()))?
+            }
+            ConflictResolution::KeepRemote => {
+                let sync = self.inner.sync.read().await;
+                sync.get(&content_key)?
+                    .ok_or_else(|| Error::Sync("Remote file content not found in CRDT".into()))?
+            }
+            ConflictResolution::MergeWith(content) => content,
+        };
+
+        let current_version = {
+            if let Some(meta_bytes) = self.get(&meta_key).await? {
+                serde_json::from_slice::<FileMetadata>(&meta_bytes)
+                    .map(|m| m.version)
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        };
+        let new_version = current_version + 1;
+
+        let metadata = FileMetadata {
+            name: file_name.to_string(),
+            size: resolved_content.len(),
+            modified: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            checksum: format!("{}", resolved_content.len()),
+            version: new_version,
+            author: my_id.clone(),
+        };
+
+        let versioned_key = format!("file:data:{}:v{}", file_name, new_version);
+        self.put(&versioned_key, &resolved_content).await?;
+        self.put(&content_key, &resolved_content).await?;
+
+        let meta_bytes = serde_json::to_vec(&metadata)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        self.put(&meta_key, &meta_bytes).await?;
+
+        let version_entry = FileVersion {
+            version: new_version,
+            content_key: versioned_key,
+            timestamp: metadata.modified,
+            author: my_id.clone(),
+            size: resolved_content.len(),
+            operation: FileOperation::Update,
+        };
+        let history_key = format!("file:history:{}", file_name);
+        let mut history: Vec<FileVersion> = self.get(&history_key).await?
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        history.push(version_entry);
+        let history_bytes = serde_json::to_vec(&history)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        self.put(&history_key, &history_bytes).await?;
+
+        self.inner.conflict_locks.write().await.remove(file_name);
+
+        self.emit_event(SwarmEvent::ConflictResolved {
+            file_name: file_name.to_string(),
+            resolved_by: my_id.clone(),
+            new_version,
+        });
+
+        let network = self.inner.network.read().await;
+        let msg = network::Message::ConflictUnlock {
+            file_name: file_name.to_string(),
+            resolved_by: my_id,
+            new_version,
+        };
+        if let Err(e) = network.broadcast(msg).await {
+            warn!("Failed to broadcast ConflictUnlock: {}", e);
+        }
+
+        info!("File conflict resolved: {} → v{}", file_name, new_version);
+        Ok(())
     }
 }
