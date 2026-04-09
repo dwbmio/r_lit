@@ -1,0 +1,72 @@
+# textexture — 艺术字图片生成器
+
+- 用途: 生成带视觉效果的 PNG 艺术字（阴影、描边、渐变、发光、霓虹）
+- 版本: 0.1.0
+- 语言: Rust
+- 渲染: tiny-skia（矢量光栅化）+ cosmic-text（文字排版）
+- 画布上限: 1920x1920px
+- 自适应: 字号自动缩小以适配宽度，最小 8px
+
+## 命令语法
+
+```
+textexture [--json] render <文字> [选项]
+textexture [--json] list-effects
+textexture [--json] list-fonts [--search <关键词>]
+```
+
+## render 参数
+
+- `<文字>`: 要渲染的文字（必填）
+- `-o, --output <路径>`: 输出路径（默认: textexture_output.png）
+- `-f, --font <名称|路径>`: 字体名或 .ttf/.otf 路径
+- `-s, --font-size <像素>`: 字号（默认: 72，超宽自动缩小）
+- `-c, --color <CSS颜色>`: 文字颜色（默认: #ffffff）
+- `--bg <规格>`: 背景 — 纯色 "#ff0000"、渐变 "#ff0000,#0000ff"、多色渐变 "#r,#g,#b@45"、图片 "./bg.jpg"（默认: #000000）
+- `--transparent`: 透明背景（覆盖 --bg）
+- `-W, --width <像素>`: 宽度，上限 1920（省略则自动）
+- `-H, --height <像素>`: 高度，上限 1920（省略则自动）
+- `--padding <像素>`: 内边距（默认: 40）
+- `-e, --effect <规格>`: 效果（可重复），格式: 名称:键=值,键=值
+- `--json`: JSON 输出
+
+## 背景模式
+
+- 纯色: --bg "#ff0000"
+- 双色渐变: --bg "#ff0000,#0000ff"
+- 多色渐变+角度: --bg "#ff0000,#00ff00,#0000ff@45"
+- 图片: --bg ./photo.jpg（拉伸填充）
+- 透明: --transparent
+
+## 可用效果
+
+- shadow（Pre 阶段）: 阴影。参数: color(#00000080), ox(4), oy(4), blur(8)
+- outline（Post 阶段）: 描边。参数: color(#ffffff), width(2)
+- gradient（Fill 阶段）: 渐变填充。参数: start(#ff0000), end(#0000ff), angle(0)
+- glow（Post 阶段）: 外发光，Screen 混合。参数: color(#00ffff), radius(15)
+- neon（Post 阶段）: 霓虹（外光+内光+亮芯）。参数: color(#ff00ff), radius(20)
+
+## 效果管线
+
+1. Pre（文字后方）: shadow
+2. Fill（替代文字颜色）: gradient
+3. Post（文字前方）: outline, glow, neon
+
+## 示例
+
+```bash
+textexture render "你好" -o hello.png
+textexture render "霓虹" -s 120 --bg "#0a0a2e" -e "neon:color=#00ffff,radius=20" -o neon.png
+textexture render "促销" --bg "#ff6b6b,#ffd93d" -e "outline:color=#fff,width=2" -o sale.png
+textexture render "彩虹" --bg "#ff0000,#00ff00,#0000ff@90" -o rgb.png
+textexture render "英雄" --bg ./photo.jpg -e "glow:color=#fff,radius=10" -o hero.png
+textexture render "适配" -W 300 --transparent -e "gradient:start=#e94560,end=#0f3460" -o fit.png
+textexture --json render "测试" -o test.png
+textexture list-effects
+textexture list-fonts --search "苹方"
+```
+
+## 退出码
+
+- 0: 成功
+- 1: 运行时错误

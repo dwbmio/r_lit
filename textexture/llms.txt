@@ -1,0 +1,72 @@
+# textexture — Stylized Text Image Generator
+
+- purpose: Generate PNG images with decorative text effects (shadow, outline, gradient, glow, neon)
+- version: 0.1.0
+- language: Rust
+- rendering: tiny-skia (vector rasterizer) + cosmic-text (text shaping)
+- max-canvas: 1920x1920px
+- auto-fit: font size shrinks to fit width constraint, min 8px
+
+## Command Syntax
+
+```
+textexture [--json] render <TEXT> [OPTIONS]
+textexture [--json] list-effects
+textexture [--json] list-fonts [--search <QUERY>]
+```
+
+## Render Arguments
+
+- `<TEXT>`: Text to render (positional, required)
+- `-o, --output <PATH>`: Output file (default: textexture_output.png)
+- `-f, --font <NAME|PATH>`: Font family name or .ttf/.otf path
+- `-s, --font-size <PX>`: Font size in pixels (default: 72, auto-shrinks to fit width)
+- `-c, --color <CSS>`: Text color (default: #ffffff)
+- `--bg <SPEC>`: Background — solid "#ff0000", gradient "#ff0000,#0000ff", multi-gradient "#r,#g,#b@45", or image path "./bg.jpg" (default: #000000)
+- `--transparent`: Transparent background (overrides --bg)
+- `-W, --width <PX>`: Image width, max 1920 (auto if omitted)
+- `-H, --height <PX>`: Image height, max 1920 (auto if omitted)
+- `--padding <PX>`: Padding around text (default: 40)
+- `-e, --effect <SPEC>`: Effect, repeatable. Format: name:key=val,key=val
+- `--json`: JSON output
+
+## Background Modes
+
+- Solid color: --bg "#ff0000"
+- 2-color gradient: --bg "#ff0000,#0000ff"
+- Multi-color gradient with angle: --bg "#ff0000,#00ff00,#0000ff@45"
+- Image file: --bg ./photo.jpg (stretched to canvas)
+- Transparent: --transparent
+
+## Effects
+
+- shadow (Pre phase): Drop shadow. Params: color(#00000080), ox(4), oy(4), blur(8)
+- outline (Post phase): Text stroke. Params: color(#ffffff), width(2)
+- gradient (Fill phase): Gradient text fill. Params: start(#ff0000), end(#0000ff), angle(0)
+- glow (Post phase): Outer glow, Screen blend. Params: color(#00ffff), radius(15)
+- neon (Post phase): 3-layer neon (outer+inner+core). Params: color(#ff00ff), radius(20)
+
+## Effect Pipeline Order
+
+1. Pre (behind text): shadow
+2. Fill (replaces text color): gradient
+3. Post (on top): outline, glow, neon
+
+## Examples
+
+```bash
+textexture render "Hello" -o hello.png
+textexture render "NEON" -s 120 --bg "#0a0a2e" -e "neon:color=#00ffff,radius=20" -o neon.png
+textexture render "SALE" --bg "#ff6b6b,#ffd93d" -e "outline:color=#fff,width=2" -o sale.png
+textexture render "RGB" --bg "#ff0000,#00ff00,#0000ff@90" -o rgb.png
+textexture render "HERO" --bg ./photo.jpg -e "glow:color=#fff,radius=10" -o hero.png
+textexture render "FIT" -W 300 --transparent -e "gradient:start=#e94560,end=#0f3460" -o fit.png
+textexture --json render "Test" -o test.png
+textexture list-effects
+textexture list-fonts --search "Helvetica"
+```
+
+## Exit Codes
+
+- 0: Success
+- 1: Runtime error
