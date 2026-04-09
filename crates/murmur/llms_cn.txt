@@ -1,9 +1,12 @@
-# murmur
+# murmur — 分布式 P2P 协作库
 
-- 用途: 分布式 P2P 协作库，CRDT 同步 + 自动 Leader 选举
+- 用途: P2P 协作库，支持 CRDT 同步、领导选举、版本化文件操作
 - 版本: 0.2.0
 - 语言: Rust (edition 2021)
-- 类型: 库
+- 类型: 库（非 CLI 二进制）
+- 传输: iroh-net (QUIC + NAT 穿透)
+- 同步协议: Automerge 增量同步（bloom-filter 差异交换）
+- 文件上限: 10MB
 
 ## API 入口
 
@@ -16,24 +19,45 @@ let swarm = Swarm::builder()
 swarm.start().await?;
 ```
 
-## 核心操作
+## KV 操作
 
-- `put(key, value)` → 存储键值对，同步到对等节点
-- `get(key)` → 获取值
+- `put(key, value)` → 存储键值对，CRDT 同步到对端
+- `get(key)` → 获取值（Option）
 - `delete(key)` → 删除键
-- `connect_peer(addr)` → 手动连接节点
-- `subscribe()` → 接收 SwarmEvent 事件流
-- `announce(nickname)` / `list_announced_peers()` → 群组存在感知
-- `discover_and_connect_local_peers()` → 按需 mDNS 发现
+- `keys_with_prefix(prefix)` → 按前缀列出键
+
+## 对端操作
+
+- `node_id()` → 本节点 ID
+- `node_addr()` → NodeAddr（可用 serde_json 序列化传输）
+- `connect_peer(&NodeAddr)` → 按完整地址连接
+- `connect_peer_by_id(node_id_str)` → 仅用节点 ID 连接
+- `connected_peers()` → 已连接对端列表
+- `discover_and_connect_local_peers()` → 按需 mDNS 扫描
+- `announce(nickname)` → 向组广播存在
+- `list_announced_peers()` → Vec<PeerInfo> { node_id, nickname, group_id }
+
+## 状态
+
+- `is_leader()` → bool
+- `leader_id()` → Option<String>
+- `group_id()` → String
+- `state_hash()` → CRDT 文档哈希（heads 前 16 位 hex）
+
+## 生命周期
+
+- `subscribe()` → broadcast::Receiver<SwarmEvent>
 - `shutdown()` → 优雅关闭
 
 ## 事件 (SwarmEvent)
 
-- `PeerConnected { node_id }` → 节点连入
-- `PeerDisconnected { node_id }` → 节点断开
-- `DataSynced` → CRDT 数据已从对端合并
-- `ConflictDetected { file_name, resolver_node, expected_version, current_version }` → 文件已锁定
-- `ConflictResolved { file_name, resolved_by, new_version }` → 文件已解锁
+- `PeerConnected { node_id }` → 对端加入
+- `PeerDisconnected { node_id }` → 对端离开
+- `DataSynced { key, value }` → 单键从对端更新
+- `SyncStarted` → 批量同步开始
+- `SyncCompleted { hash, key_count }` → 同步轮次完成
+- `ConflictDetected { file_name, resolver_node, expected_version, current_version }` → 文件锁定
+- `ConflictResolved { file_name, resolved_by, new_version }` → 文件解锁
 
 ## Feature Flags
 
@@ -42,50 +66,52 @@ default = ["redb-backend"]
 sqlite-backend = ["rusqlite"]
 redb-backend = ["redb"]
 rocksdb-backend = ["rocksdb"]
-file-ops = []  # 带版本控制的文件同步 API
+file-ops = []  # 版本化文件同步 + 冲突管理
 ```
 
 ## 文件操作 (feature: file-ops)
 
-- `put_file(path)` → 上传，自动版本化；冲突时锁定文件
+- `put_file(path)` → 上传并自动版本化
 - `get_file(key, path)` → 下载最新版
 - `get_file_version(key, version, path)` → 下载指定版本
-- `file_metadata(key)` → 获取 FileMetadata（不含内容）
-- `file_history(key)` → 版本历史（作者/时间戳/操作类型）
-- `list_files()` → 列出所有文件及元数据
-- `audit_trail(limit)` → 所有文件的操作审计记录
-- `delete_file(key)` → 软删除文件
+- `file_metadata(key)` → FileMetadata { name, size, modified, checksum, version, author }
+- `file_history(key)` → Vec<FileVersion>
+- `list_files()` → 所有文件及元数据
+- `audit_trail(limit)` → 全部操作记录
+- `delete_file(key)` → 软删除
 
 ## 冲突解决 (feature: file-ops)
 
-- `is_file_locked(name)` → 检查文件是否因冲突被锁定
-- `get_conflict_info(name)` → 获取 ConflictInfo（解决者、版本、时间戳）
+- `is_file_locked(name)` → bool
+- `get_conflict_info(name)` → Option<ConflictInfo>
+- `locked_files()` → Vec<ConflictInfo>
+- `lock_file(name)` → 广播锁定
 - `resolve_conflict(name, resolution)` → KeepLocal / KeepRemote / MergeWith(bytes)
 
-流程：并发写入 → CRDT 检测到冲突 → 文件在所有节点锁定 →
-ConflictDetected 事件 → 解决者调用 resolve_conflict → ConflictResolved 事件 →
-文件解锁，同步恢复。
+流程: 并发写入 → CRDT 冲突 → 全节点锁定 →
+ConflictDetected 事件 → 解决者调用 resolve_conflict → ConflictResolved →
+解锁，恢复同步。
 
 ## 架构
 
-- network.rs: iroh-net 端点, LocalSwarmDiscovery, ALPN, 节点管理
-- election.rs: Bully 算法, 心跳 2s, 超时 5s
-- sync.rs: Automerge CRDT 文档, has_conflicts() 多值检测
-- storage.rs: 可插拔后端 (默认 redb)
-- file.rs: FileOps trait, 版本化存储, 审计追踪, 冲突锁定
+- network.rs: iroh-net 端点、mDNS、按组 ALPN、确定性重复连接解决
+- sync.rs: Automerge CRDT、按对端增量同步状态 (SyncMsg)、state_hash
+- election.rs: Bully 算法，心跳 2s，超时 5s
+- storage.rs: 可插拔后端（默认 redb）
+- file.rs: FileOps、版本化存储、冲突锁定/解锁/解决
 
 ## 后台任务 (start() 后)
 
 - 心跳 (2s)
-- 消息处理器
+- 消息处理（SyncMsg 多轮交换）
 - 重传 (1s)
-- 节点事件转发
+- 对端事件转发
 - 自动发现 (3s)
 
 ## 依赖
 
 - iroh-net 0.28 (P2P + NAT 穿透)
-- automerge 0.5 (CRDT)
+- automerge 0.5 (CRDT + 增量同步)
 - redb 2 / rusqlite 0.32 / rocksdb 0.22 (存储)
 - tokio, serde, serde_json, bincode, thiserror, chrono, tracing
 
@@ -102,6 +128,9 @@ cd crates/murmur && cargo test --features file-ops
 ```bash
 cargo run --example basic
 cargo run --example group_chat
+cargo run --example chat_room
+cargo run --example shared_kv
+cargo run --example cli_dev_scope
 cargo run --example file_sync --features file-ops
 cargo run --example benchmark --release
 ```

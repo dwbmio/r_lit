@@ -1,27 +1,30 @@
-# img_resize
+# img_resize — Image Resize & Compress CLI
 
-- purpose: Resize and compress images (PNG/JPG). Pure Rust, no network dependencies.
+- purpose: Resize and compress images (PNG/JPG/WebP/BMP/GIF/TIFF). Pure Rust, no network deps.
 - version: 0.2.0
 - language: Rust
+- type: CLI binary
+- supported-formats: PNG, JPEG, WebP, BMP, GIF, TIFF (input); PNG, JPEG (output)
 
 ## Command Syntax
 
 ```
-img_resize [--json] r_resize <PATH> [-m <SIZE>] [--rw <WIDTH> --rh <HEIGHT>] [-c <FILE>] [-j]
+img_resize [--json] r_resize <PATH> [OPTIONS]
 ```
 
 ## Arguments
 
-- `<PATH>`: Image file or directory path (PNG/JPG)
-- `-m <SIZE>`: Max pixel value for proportional scaling (preserves aspect ratio)
-- `--rw <WIDTH>` + `--rh <HEIGHT>`: Exact resize dimensions (must use together)
-- `-c <FILE>`: YAML config file for batch multi-size output
+- `<PATH>`: Image file or directory path (required, positional)
+- `-m, --max-pixel <SIZE>`: Max pixel on longest side, proportional scale (preserves aspect ratio)
+- `--rw <WIDTH>`: Exact resize width (must pair with --rh)
+- `--rh <HEIGHT>`: Exact resize height (must pair with --rw)
+- `-c, --config <FILE>`: YAML config for batch multi-size output
 - `-j`: Force convert output to JPG
-- `--json`: Structured JSON output
+- `--json`: Structured JSON output (global flag)
 
 ## Resize Modes (mutually exclusive)
 
-1. Proportional: `-m 800` — scale so max dimension <= 800px
+1. Proportional: `-m 800` — scale so max(width, height) <= 800px
 2. Exact: `--rw 1920 --rh 1080` — resize to exact dimensions
 3. Config file: `-c config.yaml` — generate multiple sizes per YAML spec
 
@@ -40,20 +43,34 @@ base_f: "/output/base/path"
 ## Examples
 
 ```bash
+# Proportional scale, single file
 img_resize r_resize -m 800 image.jpg
+
+# Exact resize
 img_resize r_resize --rw 1920 --rh 1080 image.jpg
+
+# Batch directory
 img_resize r_resize -m 1024 images/
+
+# JSON output for scripting
 img_resize --json r_resize -m 800 image.jpg
+
+# Convert to JPG
+img_resize r_resize -m 800 -j image.png
+
+# Multi-size via config
+img_resize r_resize -c sizes.yaml image.png
 ```
 
 ## Notes
 
-- `tinyfy` subcommand is disabled (OpenSSL/musl incompatibility)
-- Supports batch directory processing
-- Exit code 1 on error, JSON error envelope when `--json` is set
+- Directory processing: recursively finds all image files, skips hidden dirs
+- Output: overwrites original by default (proportional/exact mode)
+- `tinyfy` subcommand disabled (OpenSSL/musl incompatibility)
+- Exit codes: 0 success, 1 error
 
-## Install
+## Build
 
 ```bash
-cargo build --release
+cd img_resize && cargo build --release
 ```

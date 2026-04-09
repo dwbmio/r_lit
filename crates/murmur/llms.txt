@@ -1,9 +1,12 @@
-# murmur
+# murmur — Distributed P2P Collaboration Library
 
-- purpose: Distributed P2P collaboration library with CRDT sync and automatic leader election
+- purpose: P2P collaboration library with CRDT sync, leader election, and versioned file ops
 - version: 0.2.0
 - language: Rust (edition 2021)
-- type: library
+- type: library (not a CLI binary)
+- transport: iroh-net (QUIC + NAT traversal)
+- sync-protocol: Automerge incremental sync (bloom-filter diff exchange)
+- max-file-size: 10MB
 
 ## API Entry Point
 
@@ -16,22 +19,43 @@ let swarm = Swarm::builder()
 swarm.start().await?;
 ```
 
-## Core Operations
+## KV Operations
 
-- `put(key, value)` → store key-value pair, sync to peers
-- `get(key)` → retrieve value
+- `put(key, value)` → store key-value, CRDT-sync to peers
+- `get(key)` → retrieve value (Option)
 - `delete(key)` → remove key
-- `connect_peer(addr)` → manually connect to a peer
-- `subscribe()` → receive SwarmEvent stream
-- `announce(nickname)` / `list_announced_peers()` → group presence
-- `discover_and_connect_local_peers()` → on-demand mDNS discovery
-- `shutdown()` → graceful shutdown
+- `keys_with_prefix(prefix)` → list keys matching prefix
+
+## Peer Operations
+
+- `node_id()` → this node's ID string
+- `node_addr()` → NodeAddr (serialize with serde_json for transport)
+- `connect_peer(&NodeAddr)` → connect by full address
+- `connect_peer_by_id(node_id_str)` → connect by node ID only
+- `connected_peers()` → list connected peer IDs
+- `discover_and_connect_local_peers()` → on-demand mDNS scan
+- `announce(nickname)` → broadcast presence to group
+- `list_announced_peers()` → Vec<PeerInfo> { node_id, nickname, group_id }
+
+## State
+
+- `is_leader()` → bool
+- `leader_id()` → Option<String>
+- `group_id()` → String
+- `state_hash()` → CRDT document hash (first 16 hex chars of heads)
+
+## Lifecycle
+
+- `subscribe()` → broadcast::Receiver<SwarmEvent>
+- `shutdown()` → graceful stop
 
 ## Events (SwarmEvent)
 
 - `PeerConnected { node_id }` → peer joined
 - `PeerDisconnected { node_id }` → peer left
-- `DataSynced` → CRDT data merged from peer
+- `DataSynced { key, value }` → single key updated from peer
+- `SyncStarted` → bulk sync started
+- `SyncCompleted { hash, key_count }` → sync round finished
 - `ConflictDetected { file_name, resolver_node, expected_version, current_version }` → file locked
 - `ConflictResolved { file_name, resolved_by, new_version }` → file unlocked
 
@@ -42,42 +66,44 @@ default = ["redb-backend"]
 sqlite-backend = ["rusqlite"]
 redb-backend = ["redb"]
 rocksdb-backend = ["rocksdb"]
-file-ops = []  # versioned file sync API
+file-ops = []  # versioned file sync + conflict management
 ```
 
 ## File Operations (feature: file-ops)
 
-- `put_file(path)` → upload with auto-versioning; locks file on conflict
+- `put_file(path)` → upload with auto-versioning
 - `get_file(key, path)` → download latest
 - `get_file_version(key, version, path)` → download specific version
-- `file_metadata(key)` → get FileMetadata without content
-- `file_history(key)` → version history with author/timestamp/operation
-- `list_files()` → list all files with metadata
+- `file_metadata(key)` → FileMetadata { name, size, modified, checksum, version, author }
+- `file_history(key)` → Vec<FileVersion> with author/timestamp/operation
+- `list_files()` → all files with metadata
 - `audit_trail(limit)` → all operations across all files
-- `delete_file(key)` → soft-delete a file
+- `delete_file(key)` → soft-delete
 
 ## Conflict Resolution (feature: file-ops)
 
-- `is_file_locked(name)` → check if file is conflict-locked
-- `get_conflict_info(name)` → get ConflictInfo (resolver, versions, timestamp)
+- `is_file_locked(name)` → bool
+- `get_conflict_info(name)` → Option<ConflictInfo>
+- `locked_files()` → Vec<ConflictInfo>
+- `lock_file(name)` → broadcast lock to peers
 - `resolve_conflict(name, resolution)` → KeepLocal / KeepRemote / MergeWith(bytes)
 
-Flow: concurrent write → CRDT detects conflict → file locked on all nodes →
-ConflictDetected event → resolver calls resolve_conflict → ConflictResolved event →
+Flow: concurrent write → CRDT conflict → file locked on all nodes →
+ConflictDetected event → resolver calls resolve_conflict → ConflictResolved →
 file unlocked, sync resumes.
 
 ## Architecture
 
-- network.rs: iroh-net endpoint, LocalSwarmDiscovery, ALPN, peer management
+- network.rs: iroh-net endpoint, mDNS, ALPN per group, deterministic dup-connection resolution
+- sync.rs: Automerge CRDT, per-peer incremental sync state (SyncMsg), state_hash
 - election.rs: Bully algorithm, heartbeat 2s, timeout 5s
-- sync.rs: Automerge CRDT document, has_conflicts() multi-value check
 - storage.rs: pluggable backends (redb default)
-- file.rs: FileOps trait, versioned storage, audit trail, conflict locking
+- file.rs: FileOps, versioned storage, conflict lock/unlock/resolve
 
 ## Background Tasks (after start())
 
-- Heartbeat (2s interval)
-- Message handler
+- Heartbeat (2s)
+- Message handler (SyncMsg multi-round exchange)
 - Retransmit (1s)
 - Peer event forwarder
 - Auto-discovery (3s)
@@ -85,7 +111,7 @@ file unlocked, sync resumes.
 ## Dependencies
 
 - iroh-net 0.28 (P2P + NAT traversal)
-- automerge 0.5 (CRDT)
+- automerge 0.5 (CRDT + incremental sync)
 - redb 2 / rusqlite 0.32 / rocksdb 0.22 (storage)
 - tokio, serde, serde_json, bincode, thiserror, chrono, tracing
 
@@ -102,6 +128,9 @@ cd crates/murmur && cargo test --features file-ops
 ```bash
 cargo run --example basic
 cargo run --example group_chat
+cargo run --example chat_room
+cargo run --example shared_kv
+cargo run --example cli_dev_scope
 cargo run --example file_sync --features file-ops
 cargo run --example benchmark --release
 ```

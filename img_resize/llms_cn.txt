@@ -1,27 +1,30 @@
-# img_resize
+# img_resize — 图片缩放压缩 CLI
 
-- 用途: 图片缩放与压缩 (PNG/JPG)，纯 Rust 实现，无网络依赖
+- 用途: 图片缩放与压缩（PNG/JPG/WebP/BMP/GIF/TIFF），纯 Rust 实现，无网络依赖
 - 版本: 0.2.0
 - 语言: Rust
+- 类型: CLI 二进制
+- 支持格式: PNG, JPEG, WebP, BMP, GIF, TIFF（输入）；PNG, JPEG（输出）
 
 ## 命令格式
 
 ```
-img_resize [--json] r_resize <PATH> [-m <SIZE>] [--rw <WIDTH> --rh <HEIGHT>] [-c <FILE>] [-j]
+img_resize [--json] r_resize <PATH> [选项]
 ```
 
 ## 参数
 
-- `<PATH>`: 图片文件或目录路径 (PNG/JPG)
-- `-m <SIZE>`: 最大像素值，等比缩放 (保持宽高比)
-- `--rw <WIDTH>` + `--rh <HEIGHT>`: 精确尺寸 (必须同时使用)
-- `-c <FILE>`: YAML 配置文件，批量生成多尺寸
-- `-j`: 强制转为 JPG 格式
-- `--json`: 结构化 JSON 输出
+- `<PATH>`: 图片文件或目录路径（必填）
+- `-m, --max-pixel <SIZE>`: 最大边像素值，等比缩放（保持宽高比）
+- `--rw <WIDTH>`: 精确宽度（必须配合 --rh）
+- `--rh <HEIGHT>`: 精确高度（必须配合 --rw）
+- `-c, --config <FILE>`: YAML 配置文件，批量生成多尺寸
+- `-j`: 强制输出为 JPG
+- `--json`: 结构化 JSON 输出（全局标志）
 
-## 缩放模式 (互斥)
+## 缩放模式（互斥）
 
-1. 等比缩放: `-m 800` — 最大边 <= 800px
+1. 等比缩放: `-m 800` — max(宽, 高) <= 800px
 2. 精确调整: `--rw 1920 --rh 1080` — 指定宽高
 3. 配置文件: `-c config.yaml` — 按 YAML 规格生成多尺寸
 
@@ -40,20 +43,34 @@ base_f: "/output/base/path"
 ## 示例
 
 ```bash
+# 等比缩放，单文件
 img_resize r_resize -m 800 image.jpg
+
+# 精确尺寸
 img_resize r_resize --rw 1920 --rh 1080 image.jpg
+
+# 目录批量处理
 img_resize r_resize -m 1024 images/
+
+# JSON 输出
 img_resize --json r_resize -m 800 image.jpg
+
+# 转 JPG
+img_resize r_resize -m 800 -j image.png
+
+# 多尺寸配置
+img_resize r_resize -c sizes.yaml image.png
 ```
 
 ## 备注
 
-- `tinyfy` 子命令已禁用 (OpenSSL/musl 不兼容)
-- 支持目录批量处理
-- 错误时退出码 1，使用 `--json` 时返回 JSON 错误信封
+- 目录处理: 递归查找图片文件，跳过隐藏目录
+- 输出: 默认覆盖原文件（等比/精确模式）
+- `tinyfy` 子命令已禁用（OpenSSL/musl 不兼容）
+- 退出码: 0 成功，1 错误
 
-## 安装
+## 构建
 
 ```bash
-cargo build --release
+cd img_resize && cargo build --release
 ```
