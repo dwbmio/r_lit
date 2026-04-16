@@ -1,0 +1,214 @@
+# tex_packer — Game-Ready Texture Atlas Packer
+
+- purpose: Pack sprite images into optimized texture atlases with metadata for game engines
+- version: 0.1.0
+- language: Rust
+- binary: tex_packer
+- license: MIT (imagequant/quantize feature is GPL-3.0)
+- platforms: macOS (arm64/x86_64), Linux (x86_64/aarch64), Windows (x86_64)
+- packing-engine: crunch (tree-split bin packer with rotation support)
+- triangulation: earcut (polygon mesh generation)
+- parallelism: rayon (multi-core image loading, trim, dedup, preprocessing)
+- gui-backend: egui + eframe + wgpu (optional, --features gui)
+- output-formats: json, json-array, godot-tpsheet, godot-tres
+- godot-sdk: sdk/godot/addons/tex_packer/ (GDScript MeshInstance2D loader)
+
+## Build
+
+```
+cd tex_packer && cargo build --release                # CLI only
+cd tex_packer && cargo build --release --features gui  # CLI + GUI
+```
+
+## Global Flags
+
+- `--json`: Machine-readable JSON output on stdout (all subcommands)
+
+## Subcommands
+
+### pack
+
+Pack a directory of sprite images into texture atlas(es).
+
+```
+tex_packer pack <INPUT_DIR> [OPTIONS]
+```
+
+#### Positional Arguments
+
+- `<INPUT_DIR>`: Directory containing sprite images (PNG, JPG, BMP, GIF, TGA, WebP). Scanned recursively by default.
+
+#### Output Options
+
+- `-o, --output <NAME>`: Atlas base filename without extension (default: "atlas")
+- `-d, --output-dir <DIR>`: Output directory (default: same as INPUT_DIR)
+- `--format <FORMAT>`: Metadata format (default: json). Values: json, json-array, godot-tpsheet, godot-tres
+- `--recursive <BOOL>`: Scan subdirectories (default: true)
+
+#### Packing Options
+
+- `--max-size <PX>`: Maximum atlas dimension in pixels (default: 4096). Atlas auto-splits into multiple files if sprites exceed this.
+- `--spacing <PX>`: Gap between sprites in pixels (default: 0)
+- `--padding <PX>`: Inner padding per sprite in pixels (default: 0)
+- `--extrude <PX>`: Repeat edge pixels outward to prevent texture bleeding (default: 0). Recommended: 1-2 for tiled sprites.
+- `--trim`: Remove transparent border pixels. Reduces atlas size. Original dimensions preserved in metadata.
+- `--trim-threshold <0-255>`: Alpha value at or below which pixels are considered transparent (default: 0)
+- `--rotate`: Allow 90-degree rotation for tighter packing. Metadata includes "rotated" flag.
+- `--pot`: Force atlas size to power-of-2 (e.g., 256, 512, 1024). Required by some GPU hardware.
+
+#### Advanced Options
+
+- `--polygon`: Enable polygon mesh mode. Outputs vertices/verticesUV/triangles per sprite. Reduces GPU overdraw 30%+ by skipping transparent regions.
+- `--tolerance <FLOAT>`: Polygon simplification tolerance (default: 2.0). Lower = tighter contour, more vertices.
+- `--quantize`: Lossy PNG compression via imagequant. Reduces file size ~60-70%.
+- `--quantize-quality <1-100>`: Quantization quality (default: 85). Lower = smaller, more artifacts.
+- `--incremental`: Reserved for future incremental packing.
+
+#### JSON Output (--json)
+
+```json
+{
+  "status": "ok",
+  "atlases": 1,
+  "total_sprites": 16,
+  "duplicates_removed": 3,
+  "files": [
+    {
+      "image": "/path/to/atlas.png",
+      "data": "/path/to/atlas.json",
+      "size": {"w": 1024, "h": 512},
+      "sprites": 16
+    }
+  ]
+}
+```
+
+#### Error Output (--json)
+
+```json
+{"status": "error", "error": "No images found in: ./empty_dir"}
+```
+
+### formats
+
+List all supported output formats.
+
+```
+tex_packer formats [--json]
+```
+
+### gui (requires --features gui)
+
+Launch interactive GUI application with project management, drag-drop, and inline preview.
+
+```
+tex_packer gui
+```
+
+### preview (requires --features gui)
+
+Preview an existing atlas JSON or tpsheet file.
+
+```
+tex_packer preview <ATLAS_FILE>
+```
+
+- `<ATLAS_FILE>`: Path to .json (TexturePacker hash format) or .tpsheet file
+
+## Output Format Details
+
+### json (TexturePacker JSON Hash)
+
+```json
+{
+  "frames": {
+    "sprite_name.png": {
+      "frame": {"x": 10, "y": 20, "w": 64, "h": 48},
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {"x": 2, "y": 3, "w": 64, "h": 48},
+      "sourceSize": {"w": 68, "h": 54},
+      "vertices": [[5,0],[60,0],[63,48],[0,45]],
+      "verticesUV": [[15,20],[70,20],[73,68],[10,65]],
+      "triangles": [[0,1,2],[0,2,3]],
+      "alias": null
+    }
+  },
+  "animations": {"walk": ["walk_01.png","walk_02.png"]},
+  "meta": {
+    "app": "tex_packer", "version": "0.1.0",
+    "image": "atlas.png", "format": "RGBA8888",
+    "size": {"w": 1024, "h": 512}, "scale": 1
+  }
+}
+```
+
+Notes:
+- `vertices`/`verticesUV`/`triangles` only present when --polygon is used
+- `alias` is set when sprite is a duplicate of another (dedup)
+- `animations` auto-detected from naming pattern: name_01.png, name_02.png
+
+### godot-tpsheet
+
+JSON file compatible with TexturePacker Godot plugin. Extension: .tpsheet
+
+### godot-tres
+
+Native Godot 4 .tres resources. Generates:
+- One AtlasTexture .tres per sprite (region + margin)
+- One SpriteFrames .tres per detected animation group
+- Zero plugin needed in Godot — drag and use directly
+
+## Features
+
+- Duplicate sprite detection: SHA256 pixel hash with fast pre-rejection (size+sampling)
+- Animation auto-detection: Groups sprites by name_NN.ext pattern
+- Multi-atlas auto-split: When sprites exceed max-size, automatically creates multiple atlases
+- Polygon mesh: Contour extraction → Douglas-Peucker simplification → earcut triangulation
+- PNG quantization: imagequant + lodepng for lossy compression
+
+## Common Usage Patterns
+
+```bash
+# Basic game atlas
+tex_packer pack ./sprites -o game_atlas --trim --pot
+
+# Godot project — native .tres, no plugin needed
+tex_packer pack ./sprites -o atlas --trim --pot --format godot-tres
+
+# Maximum compression for mobile
+tex_packer pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
+
+# Polygon mesh for reduced overdraw
+tex_packer pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
+
+# CI pipeline with JSON output
+tex_packer pack ./sprites -o atlas --trim --pot --json
+
+# GUI application
+tex_packer gui
+```
+
+## Project File (.tpproj)
+
+The GUI saves/loads project files in JSON format:
+
+```json
+{
+  "version": 1,
+  "output_name": "atlas",
+  "output_dir": "/path/to/output",
+  "sprites": ["/abs/path/to/sprite1.png"],
+  "settings": {
+    "max_size": 4096, "spacing": 0, "padding": 0, "extrude": 0,
+    "trim": true, "trim_threshold": 0, "rotate": true, "pot": true,
+    "polygon": false, "tolerance": 2.0,
+    "quantize": false, "quantize_quality": 85, "format_idx": 0
+  }
+}
+```
+
+## Exit Codes
+
+- 0: Success
+- 1: Error (message on stderr, or JSON on stderr with --json)

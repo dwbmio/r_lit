@@ -1,0 +1,214 @@
+# tex_packer — 游戏级纹理图集打包工具
+
+- 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据
+- 版本: 0.1.0
+- 语言: Rust
+- 二进制名: tex_packer
+- 许可证: MIT（imagequant/quantize 功能为 GPL-3.0）
+- 平台: macOS (arm64/x86_64), Linux (x86_64/aarch64), Windows (x86_64)
+- 打包引擎: crunch（树分裂 bin packer，支持旋转）
+- 三角化: earcut（多边形 mesh 生成）
+- 并行: rayon（多核图片加载、裁剪、去重、预处理）
+- GUI 后端: egui + eframe + wgpu（可选，--features gui）
+- 输出格式: json, json-array, godot-tpsheet, godot-tres
+- Godot SDK: sdk/godot/addons/tex_packer/（GDScript MeshInstance2D 加载器）
+
+## 构建
+
+```
+cd tex_packer && cargo build --release                # 仅 CLI
+cd tex_packer && cargo build --release --features gui  # CLI + GUI
+```
+
+## 全局参数
+
+- `--json`: 所有子命令以机器可读 JSON 格式输出到 stdout
+
+## 子命令
+
+### pack
+
+将目录中的精灵图打包为纹理图集。
+
+```
+tex_packer pack <输入目录> [选项]
+```
+
+#### 位置参数
+
+- `<输入目录>`: 包含精灵图的目录（PNG, JPG, BMP, GIF, TGA, WebP）。默认递归扫描。
+
+#### 输出选项
+
+- `-o, --output <名称>`: 图集基础文件名，不含扩展名（默认: "atlas"）
+- `-d, --output-dir <目录>`: 输出目录（默认: 与输入目录相同）
+- `--format <格式>`: 元数据格式（默认: json）。可选: json, json-array, godot-tpsheet, godot-tres
+- `--recursive <布尔>`: 递归扫描子目录（默认: true）
+
+#### 打包选项
+
+- `--max-size <像素>`: 图集最大尺寸（默认: 4096）。超出时自动拆分为多个图集。
+- `--spacing <像素>`: 精灵间距（默认: 0）
+- `--padding <像素>`: 精灵内边距（默认: 0）
+- `--extrude <像素>`: 边缘像素向外复制，防止纹理出血（默认: 0）。瓦片纹理建议 1-2。
+- `--trim`: 裁剪透明边框像素。减小图集尺寸。原始尺寸保留在元数据中。
+- `--trim-threshold <0-255>`: 透明度阈值，小于等于此值视为透明（默认: 0）
+- `--rotate`: 允许 90° 旋转以获得更紧凑的打包。元数据包含 "rotated" 标志。
+- `--pot`: 强制图集尺寸为 2 的幂（如 256, 512, 1024）。部分 GPU 硬件必需。
+
+#### 高级选项
+
+- `--polygon`: 启用多边形 mesh 模式。输出每个精灵的 vertices/verticesUV/triangles。跳过透明区域，GPU overdraw 减少 30%+。
+- `--tolerance <浮点>`: 多边形简化容差（默认: 2.0）。越小 = 轮廓越紧，顶点越多。
+- `--quantize`: 有损 PNG 压缩（imagequant）。文件大小减少约 60-70%。
+- `--quantize-quality <1-100>`: 量化质量（默认: 85）。越低 = 越小，伪影越多。
+- `--incremental`: 增量打包（预留功能）。
+
+#### JSON 输出 (--json)
+
+```json
+{
+  "status": "ok",
+  "atlases": 1,
+  "total_sprites": 16,
+  "duplicates_removed": 3,
+  "files": [
+    {
+      "image": "/path/to/atlas.png",
+      "data": "/path/to/atlas.json",
+      "size": {"w": 1024, "h": 512},
+      "sprites": 16
+    }
+  ]
+}
+```
+
+#### 错误输出 (--json)
+
+```json
+{"status": "error", "error": "No images found in: ./empty_dir"}
+```
+
+### formats
+
+列出所有支持的输出格式。
+
+```
+tex_packer formats [--json]
+```
+
+### gui（需要 --features gui）
+
+启动带项目管理、拖拽、内联预览的交互式 GUI 应用。
+
+```
+tex_packer gui
+```
+
+### preview（需要 --features gui）
+
+预览已有的图集 JSON 或 tpsheet 文件。
+
+```
+tex_packer preview <图集文件>
+```
+
+- `<图集文件>`: .json（TexturePacker Hash 格式）或 .tpsheet 文件路径
+
+## 输出格式详情
+
+### json（TexturePacker JSON Hash）
+
+```json
+{
+  "frames": {
+    "sprite_name.png": {
+      "frame": {"x": 10, "y": 20, "w": 64, "h": 48},
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {"x": 2, "y": 3, "w": 64, "h": 48},
+      "sourceSize": {"w": 68, "h": 54},
+      "vertices": [[5,0],[60,0],[63,48],[0,45]],
+      "verticesUV": [[15,20],[70,20],[73,68],[10,65]],
+      "triangles": [[0,1,2],[0,2,3]],
+      "alias": null
+    }
+  },
+  "animations": {"walk": ["walk_01.png","walk_02.png"]},
+  "meta": {
+    "app": "tex_packer", "version": "0.1.0",
+    "image": "atlas.png", "format": "RGBA8888",
+    "size": {"w": 1024, "h": 512}, "scale": 1
+  }
+}
+```
+
+说明:
+- `vertices`/`verticesUV`/`triangles` 仅在 --polygon 模式下输出
+- `alias` 在精灵为重复项时指向原始精灵名（去重）
+- `animations` 按命名规则自动检测: name_01.png, name_02.png
+
+### godot-tpsheet
+
+兼容 TexturePacker Godot 插件的 JSON 文件。扩展名: .tpsheet
+
+### godot-tres
+
+Godot 4 原生 .tres 资源文件。生成:
+- 每个精灵一个 AtlasTexture .tres（region + margin）
+- 每个动画组一个 SpriteFrames .tres
+- Godot 中零插件，直接拖入使用
+
+## 功能特性
+
+- 重复精灵检测: SHA256 像素哈希 + 快速预拒绝（尺寸+采样）
+- 动画自动检测: 按 name_NN.ext 命名规则分组
+- 多图集自动拆分: 超出 max-size 时自动创建多个图集
+- 多边形 mesh: 轮廓提取 → Douglas-Peucker 简化 → earcut 三角化
+- PNG 量化: imagequant + lodepng 有损压缩
+
+## 常见用法
+
+```bash
+# 基础游戏图集
+tex_packer pack ./sprites -o game_atlas --trim --pot
+
+# Godot 项目 — 原生 .tres，无需插件
+tex_packer pack ./sprites -o atlas --trim --pot --format godot-tres
+
+# 移动端最大压缩
+tex_packer pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
+
+# 多边形 mesh 减少 overdraw
+tex_packer pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
+
+# CI 流水线 JSON 输出
+tex_packer pack ./sprites -o atlas --trim --pot --json
+
+# GUI 应用
+tex_packer gui
+```
+
+## 项目文件 (.tpproj)
+
+GUI 保存/加载的项目文件为 JSON 格式:
+
+```json
+{
+  "version": 1,
+  "output_name": "atlas",
+  "output_dir": "/path/to/output",
+  "sprites": ["/abs/path/to/sprite1.png"],
+  "settings": {
+    "max_size": 4096, "spacing": 0, "padding": 0, "extrude": 0,
+    "trim": true, "trim_threshold": 0, "rotate": true, "pot": true,
+    "polygon": false, "tolerance": 2.0,
+    "quantize": false, "quantize_quality": 85, "format_idx": 0
+  }
+}
+```
+
+## 退出码
+
+- 0: 成功
+- 1: 错误（stderr 输出消息，或 --json 时 stderr 输出 JSON）

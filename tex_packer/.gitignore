@@ -1,0 +1,6 @@
+# Build artifacts
+/target/
+/test_sprites/
+
+# OS files
+.DS_Store

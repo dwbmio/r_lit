@@ -1,0 +1,39 @@
+[package]
+name = "tex_packer"
+version = "0.1.0"
+edition = "2021"
+description = "Game-ready texture atlas packer CLI — trim, extrude, rotate, multi-bin, Godot native output, GUI preview"
+
+[features]
+default = []
+gui = ["dep:eframe", "dep:egui", "dep:rfd"]
+
+[dependencies]
+clap = { version = "^4", features = ["cargo", "derive"] }
+thiserror = "^2"
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+log = "0.4"
+fern = "0.7"
+humantime = "2"
+tokio = { version = "^1", features = ["macros", "rt-multi-thread"] }
+image = "0.25"
+crunch = "0.5"
+walkdir = "2"
+sha2 = "0.10"
+regex = "1"
+imagequant = "4"
+lodepng = "3"
+earcut = "0.4"
+rayon = "1"
+
+# GUI preview (optional) — egui + eframe with wgpu backend
+eframe = { version = "0.31", optional = true, default-features = false, features = ["default_fonts", "wgpu"] }
+egui = { version = "0.31", optional = true }
+rfd = { version = "0.15", optional = true }
+
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"
