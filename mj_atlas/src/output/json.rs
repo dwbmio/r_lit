@@ -54,7 +54,7 @@ pub fn to_json_hash(atlas: &AtlasResult, _opts: &PackOptions) -> Result<String> 
     let mut root = json!({
         "frames": Value::Object(frames),
         "meta": {
-            "app": "tex_packer",
+            "app": "mj_atlas",
             "version": env!("CARGO_PKG_VERSION"),
             "image": image_name,
             "format": "RGBA8888",
@@ -125,7 +125,7 @@ pub fn to_json_array(atlas: &AtlasResult, _opts: &PackOptions) -> Result<String>
     let mut root = json!({
         "frames": frames,
         "meta": {
-            "app": "tex_packer",
+            "app": "mj_atlas",
             "version": env!("CARGO_PKG_VERSION"),
             "image": image_name,
             "format": "RGBA8888",

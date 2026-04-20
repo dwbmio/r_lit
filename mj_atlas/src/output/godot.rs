@@ -50,7 +50,7 @@ pub fn to_tpsheet(atlas: &AtlasResult, _opts: &PackOptions) -> Result<String> {
             "sprites": sprites
         }],
         "meta": {
-            "app": "tex_packer",
+            "app": "mj_atlas",
             "version": env!("CARGO_PKG_VERSION")
         }
     });

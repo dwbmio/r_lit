@@ -10,11 +10,11 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "tex_packer",
+    name = "mj_atlas",
     version,
-    author = "tex_packer contributors",
-    about = "Game-ready texture atlas packer — pack sprites into optimized atlases with metadata for game engines",
-    long_about = "tex_packer packs sprite images into optimized texture atlases.\n\n\
+    author = "mj_atlas contributors",
+    about = "MJAtlas — game-ready texture atlas packer (pack sprites into optimized atlases with metadata for game engines)",
+    long_about = "mj_atlas packs sprite images into optimized texture atlases.\n\n\
         Core features:\n  \
         - MaxRects bin packing (crunch engine) with rotation support\n  \
         - Transparent pixel trimming with configurable threshold\n  \
@@ -31,14 +31,14 @@ use std::path::PathBuf;
         - godot-tpsheet: Godot .tpsheet (TexturePacker Godot plugin)\n  \
         - godot-tres: Godot native .tres AtlasTexture + SpriteFrames (zero plugin)\n\n\
         Examples:\n  \
-        tex_packer pack ./sprites -o atlas --trim --pot\n  \
-        tex_packer pack ./sprites -o atlas --trim --rotate --pot --extrude 1\n  \
-        tex_packer pack ./sprites -o atlas --format godot-tres --trim --pot\n  \
-        tex_packer pack ./sprites -o atlas --polygon --tolerance 1.5 --trim\n  \
-        tex_packer pack ./sprites -o atlas --quantize --quantize-quality 70 --json\n  \
-        tex_packer gui                    # interactive GUI (--features gui)\n  \
-        tex_packer preview atlas.json     # preview atlas (--features gui)\n  \
-        tex_packer formats --json         # list formats as JSON",
+        mj_atlas pack ./sprites -o atlas --trim --pot\n  \
+        mj_atlas pack ./sprites -o atlas --trim --rotate --pot --extrude 1\n  \
+        mj_atlas pack ./sprites -o atlas --format godot-tres --trim --pot\n  \
+        mj_atlas pack ./sprites -o atlas --polygon --tolerance 1.5 --trim\n  \
+        mj_atlas pack ./sprites -o atlas --quantize --quantize-quality 70 --json\n  \
+        mj_atlas gui                    # interactive GUI (--features gui)\n  \
+        mj_atlas preview atlas.json     # preview atlas (--features gui)\n  \
+        mj_atlas formats --json         # list formats as JSON",
     after_help = "Machine-readable output:\n  \
         All subcommands support --json for structured JSON output on stdout.\n  \
         Errors output JSON on stderr: {\"status\": \"error\", \"error\": \"...\"}\n\n\
@@ -190,7 +190,7 @@ enum Commands {
     /// - Save/load .tpproj project files
     /// Requires: cargo build --features gui
     #[cfg(feature = "gui")]
-    #[command(long_about = "Launch the tex_packer GUI application.\n\n\
+    #[command(long_about = "Launch the mj_atlas GUI application.\n\n\
         The GUI provides a complete visual workflow:\n  \
         1. Drag & drop sprites (or File > Add Sprites)\n  \
         2. Configure packing options in the right panel\n  \

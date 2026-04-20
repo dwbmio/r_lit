@@ -1,10 +1,33 @@
-class_name TexPackerLoader
-## Loads tex_packer JSON atlas data and creates meshes or AtlasTextures.
+class_name MJAtlasLoader
+## MJAtlas runtime loader — parses mj_atlas JSON hash schema into meshes / AtlasTextures.
+##
+## ⚠️ SCHEMA DEPENDENCY ⚠️
+## This loader consumes the exact JSON schema produced by the `mj_atlas` CLI
+## (r_lit/mj_atlas). Any schema change on the producer side must be mirrored here
+## AND in the Rust loader (rlib/gd-main-extension/src/fac/mj_atlas.rs).
+##
+## Schema (hash format):
+##   {
+##     "frames": {
+##       "<name>": {
+##         "frame": { x, y, w, h },                  # packed rect in atlas
+##         "rotated": bool, "trimmed": bool,
+##         "spriteSourceSize": { x, y, w, h },       # original sprite rect
+##         "sourceSize": { w, h },                   # original image size
+##         "vertices":    [[x,y], ...]?,             # --polygon only (local px)
+##         "verticesUV":  [[u,v], ...]?,             # --polygon only (atlas px)
+##         "triangles":   [[i,i,i], ...]?,           # --polygon only
+##         "alias": "<other_name>"?                  # duplicate pointer
+##       }
+##     },
+##     "animations": { "<anim>": ["frame_a", ...] },
+##     "meta": { "app": "mj_atlas", "image", "size": {w,h}, ... }
+##   }
 ##
 ## Usage:
-##   var atlas = TexPackerLoader.load_atlas("res://atlas.json")
-##   var mesh = atlas.get_mesh("sprite_name.png")
-##   var tex = atlas.get_atlas_texture("sprite_name.png")
+##   var atlas = MJAtlasLoader.load_atlas("res://atlas_balls.json")
+##   var mesh = atlas.get_mesh("0.png")            # polygon mesh (MeshInstance2D)
+##   var tex  = atlas.get_atlas_texture("0.png")   # AtlasTexture (TextureButton/TextureRect)
 
 ## Parsed atlas data
 var atlas_texture: Texture2D
@@ -12,27 +35,25 @@ var frames: Dictionary = {}      # name -> frame data dict
 var animations: Dictionary = {}  # name -> [frame_names]
 var atlas_size: Vector2i
 
-## Load a tex_packer JSON (hash format) or .tpsheet file.
-static func load_atlas(path: String) -> TexPackerLoader:
-	var loader = TexPackerLoader.new()
+## Load an mj_atlas JSON (hash format) or .tpsheet file.
+static func load_atlas(path: String) -> MJAtlasLoader:
+	var loader = MJAtlasLoader.new()
 	var file = FileAccess.open(path, FileAccess.READ)
 	if not file:
-		push_error("TexPackerLoader: Cannot open %s" % path)
+		push_error("MJAtlasLoader: Cannot open %s" % path)
 		return loader
 
 	var json = JSON.new()
 	var err = json.parse(file.get_as_text())
 	file.close()
 	if err != OK:
-		push_error("TexPackerLoader: JSON parse error in %s" % path)
+		push_error("MJAtlasLoader: JSON parse error in %s" % path)
 		return loader
 
 	var data: Dictionary = json.data
 	var base_dir = path.get_base_dir()
 
-	# Detect format
 	if data.has("textures"):
-		# .tpsheet format
 		var tex_info = data["textures"][0]
 		var image_path = base_dir.path_join(tex_info["image"])
 		loader.atlas_texture = load(image_path)
@@ -40,7 +61,6 @@ static func load_atlas(path: String) -> TexPackerLoader:
 		for sprite in tex_info["sprites"]:
 			loader.frames[sprite["filename"]] = sprite
 	elif data.has("frames"):
-		# JSON hash format
 		var image_path = base_dir.path_join(data["meta"]["image"])
 		loader.atlas_texture = load(image_path)
 		var sz = data["meta"]["size"]
@@ -60,12 +80,11 @@ static func load_atlas(path: String) -> TexPackerLoader:
 ## The mesh has UVs mapped to the atlas texture.
 func get_mesh(sprite_name: String) -> ArrayMesh:
 	if not frames.has(sprite_name):
-		push_error("TexPackerLoader: sprite '%s' not found" % sprite_name)
+		push_error("MJAtlasLoader: sprite '%s' not found" % sprite_name)
 		return ArrayMesh.new()
 
 	var f = frames[sprite_name]
 
-	# If this is an alias, redirect
 	if f.has("alias"):
 		return get_mesh(f["alias"])
 
@@ -76,7 +95,6 @@ func get_mesh(sprite_name: String) -> ArrayMesh:
 	var has_polygon = f.has("vertices") and f.has("verticesUV") and f.has("triangles")
 
 	if has_polygon:
-		# Polygon mesh — reduced overdraw
 		var verts = PackedVector2Array()
 		var uvs = PackedVector2Array()
 		var indices = PackedInt32Array()
@@ -84,7 +102,6 @@ func get_mesh(sprite_name: String) -> ArrayMesh:
 		for v in f["vertices"]:
 			verts.append(Vector2(v[0], v[1]))
 
-		# Convert atlas-space UVs to normalized 0-1 range
 		for uv in f["verticesUV"]:
 			uvs.append(Vector2(uv[0] / atlas_size.x, uv[1] / atlas_size.y))
 
@@ -97,7 +114,6 @@ func get_mesh(sprite_name: String) -> ArrayMesh:
 		arrays[Mesh.ARRAY_TEX_UV] = uvs
 		arrays[Mesh.ARRAY_INDEX] = indices
 	else:
-		# Fallback: full quad
 		var frame = f["frame"]
 		var x = float(frame["x"])
 		var y = float(frame["y"])
@@ -122,10 +138,11 @@ func get_mesh(sprite_name: String) -> ArrayMesh:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
-## Get a classic AtlasTexture for a sprite (no polygon mesh, just rect).
+## Get a classic AtlasTexture for a sprite (rect only, no polygon).
+## Use this for TextureButton / TextureRect cases where MeshInstance2D is not applicable.
 func get_atlas_texture(sprite_name: String) -> AtlasTexture:
 	if not frames.has(sprite_name):
-		push_error("TexPackerLoader: sprite '%s' not found" % sprite_name)
+		push_error("MJAtlasLoader: sprite '%s' not found" % sprite_name)
 		return AtlasTexture.new()
 
 	var f = frames[sprite_name]
@@ -148,16 +165,13 @@ func get_atlas_texture(sprite_name: String) -> AtlasTexture:
 
 	return at
 
-## Get all sprite names.
 func get_sprite_names() -> Array[String]:
 	return frames.keys()
 
-## Get animation frame names.
 func get_animation_frames(anim_name: String) -> Array:
 	if animations.has(anim_name):
 		return animations[anim_name]
 	return []
 
-## Get all animation names.
 func get_animation_names() -> Array[String]:
 	return animations.keys()

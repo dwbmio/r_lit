@@ -1,9 +1,9 @@
-# tex_packer — Game-Ready Texture Atlas Packer
+# mj_atlas — Game-Ready Texture Atlas Packer
 
 - purpose: Pack sprite images into optimized texture atlases with metadata for game engines
 - version: 0.1.0
 - language: Rust
-- binary: tex_packer
+- binary: mj_atlas
 - license: MIT (imagequant/quantize feature is GPL-3.0)
 - platforms: macOS (arm64/x86_64), Linux (x86_64/aarch64), Windows (x86_64)
 - packing-engine: crunch (tree-split bin packer with rotation support)
@@ -11,13 +11,13 @@
 - parallelism: rayon (multi-core image loading, trim, dedup, preprocessing)
 - gui-backend: egui + eframe + wgpu (optional, --features gui)
 - output-formats: json, json-array, godot-tpsheet, godot-tres
-- godot-sdk: sdk/godot/addons/tex_packer/ (GDScript MeshInstance2D loader)
+- godot-sdk: sdk/godot/addons/mj_atlas/ (GDScript MeshInstance2D loader)
 
 ## Build
 
 ```
-cd tex_packer && cargo build --release                # CLI only
-cd tex_packer && cargo build --release --features gui  # CLI + GUI
+cd mj_atlas && cargo build --release                # CLI only
+cd mj_atlas && cargo build --release --features gui  # CLI + GUI
 ```
 
 ## Global Flags
@@ -31,7 +31,7 @@ cd tex_packer && cargo build --release --features gui  # CLI + GUI
 Pack a directory of sprite images into texture atlas(es).
 
 ```
-tex_packer pack <INPUT_DIR> [OPTIONS]
+mj_atlas pack <INPUT_DIR> [OPTIONS]
 ```
 
 #### Positional Arguments
@@ -94,7 +94,7 @@ tex_packer pack <INPUT_DIR> [OPTIONS]
 List all supported output formats.
 
 ```
-tex_packer formats [--json]
+mj_atlas formats [--json]
 ```
 
 ### gui (requires --features gui)
@@ -102,7 +102,7 @@ tex_packer formats [--json]
 Launch interactive GUI application with project management, drag-drop, and inline preview.
 
 ```
-tex_packer gui
+mj_atlas gui
 ```
 
 ### preview (requires --features gui)
@@ -110,7 +110,7 @@ tex_packer gui
 Preview an existing atlas JSON or tpsheet file.
 
 ```
-tex_packer preview <ATLAS_FILE>
+mj_atlas preview <ATLAS_FILE>
 ```
 
 - `<ATLAS_FILE>`: Path to .json (TexturePacker hash format) or .tpsheet file
@@ -136,7 +136,7 @@ tex_packer preview <ATLAS_FILE>
   },
   "animations": {"walk": ["walk_01.png","walk_02.png"]},
   "meta": {
-    "app": "tex_packer", "version": "0.1.0",
+    "app": "mj_atlas", "version": "0.1.0",
     "image": "atlas.png", "format": "RGBA8888",
     "size": {"w": 1024, "h": 512}, "scale": 1
   }
@@ -171,22 +171,22 @@ Native Godot 4 .tres resources. Generates:
 
 ```bash
 # Basic game atlas
-tex_packer pack ./sprites -o game_atlas --trim --pot
+mj_atlas pack ./sprites -o game_atlas --trim --pot
 
 # Godot project — native .tres, no plugin needed
-tex_packer pack ./sprites -o atlas --trim --pot --format godot-tres
+mj_atlas pack ./sprites -o atlas --trim --pot --format godot-tres
 
 # Maximum compression for mobile
-tex_packer pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
+mj_atlas pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
 
 # Polygon mesh for reduced overdraw
-tex_packer pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
+mj_atlas pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
 
 # CI pipeline with JSON output
-tex_packer pack ./sprites -o atlas --trim --pot --json
+mj_atlas pack ./sprites -o atlas --trim --pot --json
 
 # GUI application
-tex_packer gui
+mj_atlas gui
 ```
 
 ## Project File (.tpproj)

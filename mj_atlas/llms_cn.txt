@@ -1,9 +1,9 @@
-# tex_packer — 游戏级纹理图集打包工具
+# mj_atlas — 游戏级纹理图集打包工具
 
 - 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据
 - 版本: 0.1.0
 - 语言: Rust
-- 二进制名: tex_packer
+- 二进制名: mj_atlas
 - 许可证: MIT（imagequant/quantize 功能为 GPL-3.0）
 - 平台: macOS (arm64/x86_64), Linux (x86_64/aarch64), Windows (x86_64)
 - 打包引擎: crunch（树分裂 bin packer，支持旋转）
@@ -11,13 +11,13 @@
 - 并行: rayon（多核图片加载、裁剪、去重、预处理）
 - GUI 后端: egui + eframe + wgpu（可选，--features gui）
 - 输出格式: json, json-array, godot-tpsheet, godot-tres
-- Godot SDK: sdk/godot/addons/tex_packer/（GDScript MeshInstance2D 加载器）
+- Godot SDK: sdk/godot/addons/mj_atlas/（GDScript MeshInstance2D 加载器）
 
 ## 构建
 
 ```
-cd tex_packer && cargo build --release                # 仅 CLI
-cd tex_packer && cargo build --release --features gui  # CLI + GUI
+cd mj_atlas && cargo build --release                # 仅 CLI
+cd mj_atlas && cargo build --release --features gui  # CLI + GUI
 ```
 
 ## 全局参数
@@ -31,7 +31,7 @@ cd tex_packer && cargo build --release --features gui  # CLI + GUI
 将目录中的精灵图打包为纹理图集。
 
 ```
-tex_packer pack <输入目录> [选项]
+mj_atlas pack <输入目录> [选项]
 ```
 
 #### 位置参数
@@ -94,7 +94,7 @@ tex_packer pack <输入目录> [选项]
 列出所有支持的输出格式。
 
 ```
-tex_packer formats [--json]
+mj_atlas formats [--json]
 ```
 
 ### gui（需要 --features gui）
@@ -102,7 +102,7 @@ tex_packer formats [--json]
 启动带项目管理、拖拽、内联预览的交互式 GUI 应用。
 
 ```
-tex_packer gui
+mj_atlas gui
 ```
 
 ### preview（需要 --features gui）
@@ -110,7 +110,7 @@ tex_packer gui
 预览已有的图集 JSON 或 tpsheet 文件。
 
 ```
-tex_packer preview <图集文件>
+mj_atlas preview <图集文件>
 ```
 
 - `<图集文件>`: .json（TexturePacker Hash 格式）或 .tpsheet 文件路径
@@ -136,7 +136,7 @@ tex_packer preview <图集文件>
   },
   "animations": {"walk": ["walk_01.png","walk_02.png"]},
   "meta": {
-    "app": "tex_packer", "version": "0.1.0",
+    "app": "mj_atlas", "version": "0.1.0",
     "image": "atlas.png", "format": "RGBA8888",
     "size": {"w": 1024, "h": 512}, "scale": 1
   }
@@ -171,22 +171,22 @@ Godot 4 原生 .tres 资源文件。生成:
 
 ```bash
 # 基础游戏图集
-tex_packer pack ./sprites -o game_atlas --trim --pot
+mj_atlas pack ./sprites -o game_atlas --trim --pot
 
 # Godot 项目 — 原生 .tres，无需插件
-tex_packer pack ./sprites -o atlas --trim --pot --format godot-tres
+mj_atlas pack ./sprites -o atlas --trim --pot --format godot-tres
 
 # 移动端最大压缩
-tex_packer pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
+mj_atlas pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-quality 70
 
 # 多边形 mesh 减少 overdraw
-tex_packer pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
+mj_atlas pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
 
 # CI 流水线 JSON 输出
-tex_packer pack ./sprites -o atlas --trim --pot --json
+mj_atlas pack ./sprites -o atlas --trim --pot --json
 
 # GUI 应用
-tex_packer gui
+mj_atlas gui
 ```
 
 ## 项目文件 (.tpproj)

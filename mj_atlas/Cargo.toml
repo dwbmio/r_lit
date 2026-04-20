@@ -1,8 +1,8 @@
 [package]
-name = "tex_packer"
+name = "mj_atlas"
 version = "0.1.0"
 edition = "2021"
-description = "Game-ready texture atlas packer CLI — trim, extrude, rotate, multi-bin, Godot native output, GUI preview"
+description = "MJAtlas — game-ready texture atlas packer (trim, extrude, rotate, multi-bin, polygon mesh, Godot native output)"
 
 [features]
 default = []

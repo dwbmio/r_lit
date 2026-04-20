@@ -228,7 +228,7 @@ struct ViewerState {
 
 // ─── Main App ───
 
-struct TexPackerApp {
+struct MJAtlasApp {
     mode: AppMode,
     toasts: Vec<Toast>,
     open_dialog: Option<Dialog>,
@@ -246,7 +246,7 @@ const FORMAT_NAMES: &[(&str, &str)] = &[
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-impl Default for TexPackerApp {
+impl Default for MJAtlasApp {
     fn default() -> Self {
         Self {
             mode: AppMode::Packer(PackerState::new_empty()),
@@ -519,7 +519,7 @@ fn apply_dark_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-impl TexPackerApp {
+impl MJAtlasApp {
     fn with_viewer(viewer: ViewerState) -> Self {
         let mut app = Self::default();
         app.mode = AppMode::Viewer(viewer);
@@ -634,7 +634,7 @@ impl TexPackerApp {
                 });
 
                 ui.menu_button("Help", |ui| {
-                    if ui.button("About tex_packer").clicked() {
+                    if ui.button("About mj_atlas").clicked() {
                         action = Some(MenuAction::ShowAbout);
                         ui.close_menu();
                     }
@@ -652,7 +652,7 @@ impl TexPackerApp {
                         AppMode::Viewer(_) => "Preview".to_string(),
                     };
                     ui.label(
-                        egui::RichText::new(format!("tex_packer v{} | {}", VERSION, status))
+                        egui::RichText::new(format!("mj_atlas v{} | {}", VERSION, status))
                             .small()
                             .color(egui::Color32::GRAY),
                     );
@@ -677,7 +677,7 @@ impl TexPackerApp {
             }
             MenuAction::OpenProject => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("tex_packer project", &["tpproj"])
+                    .add_filter("mj_atlas project", &["tpproj"])
                     .pick_file()
                 {
                     match Project::load(&path) {
@@ -756,7 +756,7 @@ impl TexPackerApp {
         if let AppMode::Packer(state) = &mut self.mode {
             let path = if save_as || state.project_path.is_none() {
                 rfd::FileDialog::new()
-                    .add_filter("tex_packer project", &["tpproj"])
+                    .add_filter("mj_atlas project", &["tpproj"])
                     .set_file_name(&format!("{}.tpproj", state.project.output_name))
                     .save_file()
             } else {
@@ -880,7 +880,7 @@ impl TexPackerApp {
         if let Some(dialog) = &self.open_dialog {
             match dialog {
                 Dialog::About => {
-                    egui::Window::new("About tex_packer")
+                    egui::Window::new("About mj_atlas")
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -888,7 +888,7 @@ impl TexPackerApp {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
                                 ui.heading(
-                                    egui::RichText::new("tex_packer")
+                                    egui::RichText::new("mj_atlas")
                                         .size(28.0)
                                         .strong(),
                                 );
@@ -923,7 +923,7 @@ impl TexPackerApp {
                         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                         .show(ctx, |ui| {
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                                ui.label(egui::RichText::new("tex_packer").strong().size(16.0));
+                                ui.label(egui::RichText::new("mj_atlas").strong().size(16.0));
                                 ui.add_space(4.0);
                                 ui.label(format!("Version: {}", VERSION));
                                 ui.label("License: MIT");
@@ -1067,7 +1067,7 @@ impl TexPackerApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(50.0);
-                ui.heading(egui::RichText::new("tex_packer").size(40.0).strong());
+                ui.heading(egui::RichText::new("mj_atlas").size(40.0).strong());
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("Game-ready Texture Atlas Packer").size(16.0).color(egui::Color32::GRAY));
                 ui.label(egui::RichText::new(format!("v{}", VERSION)).size(12.0).color(egui::Color32::DARK_GRAY));
@@ -1795,7 +1795,7 @@ enum MenuAction {
     ShowLicense,
 }
 
-impl eframe::App for TexPackerApp {
+impl eframe::App for MJAtlasApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Load fonts once
         if !self.fonts_loaded {
@@ -1835,14 +1835,14 @@ impl eframe::App for TexPackerApp {
 pub fn run_gui() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!("tex_packer v{}", VERSION))
+            .with_title(format!("mj_atlas v{}", VERSION))
             .with_inner_size([1100.0, 750.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "tex_packer",
+        "mj_atlas",
         options,
-        Box::new(|_cc| Ok(Box::new(TexPackerApp::default()))),
+        Box::new(|_cc| Ok(Box::new(MJAtlasApp::default()))),
     )
     .map_err(|e| AppError::Custom(format!("GUI error: {}", e)))?;
     Ok(())
@@ -1852,14 +1852,14 @@ pub fn run_preview(file: &Path) -> Result<()> {
     let viewer = load_atlas_for_viewer(file)?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!("tex_packer v{} — {}", VERSION, file.display()))
+            .with_title(format!("mj_atlas v{} — {}", VERSION, file.display()))
             .with_inner_size([1200.0, 800.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "tex_packer",
+        "mj_atlas",
         options,
-        Box::new(|_cc| Ok(Box::new(TexPackerApp::with_viewer(viewer)))),
+        Box::new(|_cc| Ok(Box::new(MJAtlasApp::with_viewer(viewer)))),
     )
     .map_err(|e| AppError::Custom(format!("GUI error: {}", e)))?;
     Ok(())
