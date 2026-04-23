@@ -8,7 +8,7 @@ dock-to-float preview window, empty-state onboarding, Fit-to-Model,
 and a discoverable preview toolbar. See `v0.8-complete.md`.
 
 Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
-· `v0.7-complete.md` · `v0.8-complete.md`.
+· `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md`.
 
 ## Roadmap snapshot
 
@@ -58,15 +58,15 @@ detailed rationale behind each post-v0.8 version theme.
 
 ## v0.9 sub-tasks (ordered)
 
-- [ ] **A** Autosave + crash recovery. Write a sidecar
-      `<path>.maq.swap` whenever a stroke closes (not on every
-      paint op — greedy coalescing). On launch, if a swap exists
-      whose parent `.maq` is older or missing, offer to recover via
-      an egui modal. The swap format is the same as `.maq` and
-      lives in the lib (`project::write_swap`, `project::read_swap`);
-      the *policy* for when to flush is GUI-only (`session.rs`).
-      Integration test in `tests/cli.rs`: CLI should ignore swap
-      files (no new verb needed yet).
+- [x] **A** Autosave + crash recovery **(shipped 2026-04-23, see
+      `v0.9a-complete.md`)**. Sidecar `<path>.maq.swap` flushed on
+      stroke-committed + window-blur; recovery modal on File → Open
+      when swap mtime > project mtime; lib gains `swap_path` /
+      `swap_is_newer` / `write_swap` / `remove_swap` +
+      `EditHistory::strokes_committed` monotonic counter. 11 new
+      tests (project + history + cli). **Deferred to v0.9 C**:
+      untitled-project autosave (needs prefs dir) and startup
+      auto-recovery (needs last-opened-path persistence).
 - [ ] **B** Bevy feature trim. v0.7 gated the five extra GUI crates;
       Bevy itself still compiles with its default feature set.
       Audit `render / pbr / winit / animation / audio / gizmos /
@@ -285,4 +285,17 @@ detailed rationale behind each post-v0.8 version theme.
   `notify.rs` that translates it into `Toasts::{success, info,
   warning, error}`. Do **not** take `ResMut<Toasts>` from lib code
   — breaks the Headless Invariant. For GUI-only modules
-  (`session.rs`, future autosave), direct `ResMut<Toasts>` is fine.
+  (`session.rs`, `autosave.rs`), direct `ResMut<Toasts>` is fine.
+- **Autosave** (`src/autosave.rs`, v0.9 A). If any future feature
+  mutates `Grid` or `Palette` outside the normal paint flow, make
+  sure `EditHistory::record` is still called — autosave's trigger
+  is the stroke counter, not dirty-bit observation. Anything that
+  sets `CurrentProject::unsaved = true` without pushing a history
+  stroke will get saved on next window-blur but not on the
+  committing-tick, which is usually fine but worth knowing.
+- **Swap format** (`project.rs`, v0.9 A). The swap file is a plain
+  `.maq` under the hood — not compressed, not a journal, not a
+  binary diff. This is the contract the CLI tests pin. If a future
+  version needs a compact swap (larger projects, faster writes),
+  bump the constant or add a sibling `.maq.swap.v2` — don't silently
+  change the on-disk shape behind existing `read_project` readers.

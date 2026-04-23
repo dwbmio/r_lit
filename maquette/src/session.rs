@@ -16,6 +16,7 @@ use bevy::window::PrimaryWindow;
 use maquette::grid::{Grid, Palette};
 use maquette::project::{self, FILE_EXT};
 
+use crate::autosave::{self, RecoveryPrompt};
 use crate::history::EditHistory;
 use crate::notify::Toasts;
 
@@ -78,6 +79,7 @@ fn handle_project_action(
     mut current: ResMut<CurrentProject>,
     mut history: ResMut<EditHistory>,
     mut toasts: ResMut<Toasts>,
+    mut recovery: ResMut<RecoveryPrompt>,
 ) {
     for action in events.read() {
         match action {
@@ -100,13 +102,25 @@ fn handle_project_action(
                 else {
                     continue;
                 };
+                // Look for a newer autosave sidecar BEFORE the
+                // load. The normal load proceeds either way — if the
+                // user chooses Recover, the modal overwrites the
+                // grid / palette with the swap's contents. Loading
+                // the `.maq` first keeps the in-between frame
+                // showing a valid project instead of a blank canvas.
+                let has_recovery = project::swap_is_newer(&path) == Some(true);
+
                 match project::apply_to_grid_and_palette(&path, &mut grid, &mut palette) {
                     Ok(()) => {
                         let name = file_name_or(&path, "project").to_string();
+                        let path_clone = path.clone();
                         current.path = Some(path);
                         current.unsaved = false;
                         history.clear();
                         toasts.success(format!("Opened {name}"));
+                        if has_recovery {
+                            autosave::arm_recovery_prompt(&mut recovery, path_clone);
+                        }
                     }
                     Err(e) => {
                         log::error!("open failed: {e}");

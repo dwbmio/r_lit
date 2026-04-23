@@ -133,9 +133,14 @@ Agent 一直在跑的 76 项自动化测试 + clippy + headless CLI 构建在每
 
 Agent 交付 `v0.9-complete.md` 后再走这些。
 
-- [ ] **#21**（3 min）Autosave 恢复（到手时）
-  - 画几笔 → 别保存 → 从终端 `kill -9 <maquette_pid>`。
-  - 重开 maquette → 弹出恢复 modal → 点 Recover → 内容回来。
+- [ ] **#21**（5 min）Autosave 恢复 ✅ **已到手（v0.9 A, 2026-04-23）**
+  - **前置**：先随便保存一个 `.maq` 文件（autosave 需要文件路径；untitled 项目要等 v0.9 C）
+  - 画几笔（几次 stroke 都行）→ 别手动 Save → 从终端 `kill -9 <maquette_pid>`
+  - 确认 `ls <那个 maq 的目录>` 能看到 `foo.maq.swap` 旁生文件
+  - 重开 maquette → File → Open → 选同一个 `.maq` → 弹出恢复 modal
+  - 点 **Recover unsaved edits** → 内容回来，标题栏有 `•` 未保存标记 → Cmd+S 确认保存
+  - 重新测一遍，这次点 **Discard swap and open saved file** → 打开的是 kill 之前保存的版本，swap 文件被删掉（`ls` 没有了）
+  - 正常 Save 一次完整项目 → 确认目录里**没有**遗留 `.maq.swap`（干净保存后 swap 必须清理）
 
 - [ ] **#22**（2 min）Prefs 持久化（到手时）
   - 开 `Multi`，开 `Float`，把 Brush Height 调到 5 → 退出。

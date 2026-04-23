@@ -65,6 +65,19 @@ pub struct EditHistory {
     /// Currently-open stroke, if any. `record` appends here while
     /// this is `Some`, falls back to a single-op stroke otherwise.
     open: Option<Stroke>,
+    /// Monotonically increments each time a non-empty stroke is
+    /// committed to the undo stack (including single-op strokes from
+    /// a bare `record` call). The autosave plugin polls this
+    /// counter; a delta since the last flush is its "stroke closed"
+    /// signal. Kept as a plain counter (not a Bevy `Message`) so the
+    /// history data structure stays window-free — `autosave.rs`
+    /// observes it from the outside.
+    ///
+    /// A `u64` is absurd headroom (≈ 585 years at 10⁹ strokes/sec)
+    /// but keeps the counter additive across `clear()` calls, so
+    /// File → New doesn't trick autosave into re-flushing a stale
+    /// snapshot.
+    strokes_committed: u64,
 }
 
 impl EditHistory {
@@ -109,12 +122,27 @@ impl EditHistory {
             self.undo.pop_front();
         }
         self.undo.push_back(stroke);
+        // Any committed stroke — stroke-group OR bare `record` — is
+        // a potential autosave trigger. Ticking here (rather than in
+        // `end_stroke`) covers the single-op-stroke path too.
+        self.strokes_committed = self.strokes_committed.saturating_add(1);
+    }
+
+    /// Monotonic count of strokes that have been committed to the
+    /// undo stack over the lifetime of this `EditHistory`. Used by
+    /// the GUI's autosave plugin as a "did anything change?" probe.
+    pub fn strokes_committed(&self) -> u64 {
+        self.strokes_committed
     }
 
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.open = None;
+        // Intentionally do NOT reset `strokes_committed`: autosave
+        // tracks its own baseline independently, and resetting here
+        // could cause a pending-autosave race on File → New where
+        // the counter "rolls back" past an already-seen value.
     }
 
     pub fn can_undo(&self) -> bool {
@@ -338,5 +366,42 @@ mod tests {
         assert!(h.is_stroke_open());
         h.end_stroke();
         assert!(!h.is_stroke_open());
+    }
+
+    #[test]
+    fn strokes_committed_counts_both_grouped_and_bare_commits() {
+        let mut h = EditHistory::default();
+        assert_eq!(h.strokes_committed(), 0);
+
+        // Grouped multi-op stroke counts as one.
+        h.begin_stroke();
+        h.record(op(0, 0, None, Some(1)));
+        h.record(op(1, 0, None, Some(1)));
+        h.end_stroke();
+        assert_eq!(h.strokes_committed(), 1);
+
+        // Empty strokes must NOT tick the counter — otherwise a
+        // miss-click would wake the autosave system.
+        h.begin_stroke();
+        h.end_stroke();
+        assert_eq!(h.strokes_committed(), 1);
+
+        // Bare `record` outside a stroke commits a single-op stroke
+        // and ticks the counter.
+        h.record(op(2, 0, None, Some(1)));
+        assert_eq!(h.strokes_committed(), 2);
+    }
+
+    #[test]
+    fn strokes_committed_survives_clear() {
+        let mut h = EditHistory::default();
+        h.record(op(0, 0, None, Some(1)));
+        h.record(op(1, 0, None, Some(2)));
+        let before = h.strokes_committed();
+        assert_eq!(before, 2);
+        h.clear();
+        // Autosave relies on this monotonicity — File → New must
+        // not make the counter appear to go backwards.
+        assert_eq!(h.strokes_committed(), before);
     }
 }

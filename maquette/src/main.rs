@@ -5,6 +5,7 @@
 //! See `docs/handoff/COST_AWARENESS.md` §The Headless Invariant for
 //! why this split exists.
 
+mod autosave;
 mod camera;
 mod float_window;
 mod history;
@@ -54,6 +55,7 @@ fn main() {
         .add_plugins(multiview::MultiViewPlugin)
         .add_plugins(float_window::FloatWindowPlugin)
         .add_plugins(notify::NotifyPlugin)
+        .add_plugins(autosave::AutosavePlugin)
         .add_plugins(ui::UiPlugin)
         .run();
 }

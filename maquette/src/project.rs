@@ -28,7 +28,7 @@
 //!   nulls) still load because `Vec<Option<T>>` happily deserializes
 //!   a no-nulls JSON array. (v0.6)
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::Color;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,13 @@ use crate::grid::{Cell, Grid, Palette};
 
 /// File extension used for Maquette project files.
 pub const FILE_EXT: &str = "maq";
+
+/// Suffix appended to a `.maq` to form its autosave sidecar. Chosen
+/// over an in-place replacement (e.g. `foo.swap`) so that swap files
+/// always sit next to their parent project, are visible to the user
+/// in Finder / ls, and survive `find . -name '*.maq'` unless the user
+/// opts into `*.maq.swap` too.
+pub const SWAP_SUFFIX: &str = ".swap";
 
 /// Schema version the exporter currently writes.
 pub const SCHEMA_VERSION: u32 = 3;
@@ -201,6 +208,61 @@ pub fn write_project(path: &Path, grid: &Grid, palette: &Palette) -> Result<(), 
     Ok(())
 }
 
+// =====================================================================
+// Autosave sidecar (v0.9 A)
+// =====================================================================
+//
+// A `.maq.swap` is a byte-for-byte project file, written beside the
+// parent `.maq` as each stroke closes. On next launch the GUI inspects
+// it through `swap_is_newer` and, if so, offers recovery. The swap
+// format intentionally matches `.maq` so the CLI can be pointed at a
+// swap file directly (`maquette-cli info foo.maq.swap`) without a new
+// verb — recovery tooling for free.
+
+/// Return the autosave sidecar path for `project_path`
+/// (`foo.maq` → `foo.maq.swap`). Works on paths without a `.maq`
+/// extension too — the suffix is simply appended.
+pub fn swap_path(project_path: &Path) -> PathBuf {
+    let mut s = project_path.as_os_str().to_owned();
+    s.push(SWAP_SUFFIX);
+    PathBuf::from(s)
+}
+
+/// `Some(true)` if a swap exists whose mtime is strictly newer than
+/// the parent project; `Some(false)` if the swap is stale; `None` if
+/// there's no swap at all (or any stat call fails — treat as
+/// "nothing to recover" rather than a hard error).
+///
+/// The "parent missing" case is treated as swap-wins: if the user
+/// points Open at a path that no longer exists but whose swap does,
+/// that's a legitimate recovery target.
+pub fn swap_is_newer(project_path: &Path) -> Option<bool> {
+    let swap = swap_path(project_path);
+    let swap_mtime = std::fs::metadata(&swap).and_then(|m| m.modified()).ok()?;
+    match std::fs::metadata(project_path).and_then(|m| m.modified()) {
+        Ok(project_mtime) => Some(swap_mtime > project_mtime),
+        Err(_) => Some(true),
+    }
+}
+
+/// Write the swap sidecar for `project_path`. Equivalent to
+/// `write_project(swap_path(project_path), …)` but names the intent
+/// at the call site. Fails softly if the parent directory is gone —
+/// the autosave system just tries again next stroke.
+pub fn write_swap(project_path: &Path, grid: &Grid, palette: &Palette) -> Result<(), ProjectError> {
+    write_project(&swap_path(project_path), grid, palette)
+}
+
+/// Delete the swap sidecar if it exists. `NotFound` is silently
+/// swallowed — "already gone" is the desired post-condition.
+pub fn remove_swap(project_path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(swap_path(project_path)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,5 +418,99 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    // --- v0.9 A: autosave sidecar ---
+
+    #[test]
+    fn swap_path_appends_suffix() {
+        let base = std::path::Path::new("/tmp/foo.maq");
+        assert_eq!(swap_path(base), std::path::PathBuf::from("/tmp/foo.maq.swap"));
+
+        // Also works on extension-less paths — swap is always a
+        // strict suffix, never an extension replacement.
+        let no_ext = std::path::Path::new("/tmp/untitled");
+        assert_eq!(
+            swap_path(no_ext),
+            std::path::PathBuf::from("/tmp/untitled.swap")
+        );
+    }
+
+    #[test]
+    fn swap_is_newer_reports_none_when_swap_missing() {
+        let dir = tempdir();
+        let path = dir.join("no_swap.maq");
+        let (grid, palette) = (Grid::with_size(2, 2), Palette::default());
+        write_project(&path, &grid, &palette).unwrap();
+        assert_eq!(swap_is_newer(&path), None);
+    }
+
+    #[test]
+    fn swap_is_newer_detects_fresh_swap() {
+        let dir = tempdir();
+        let path = dir.join("stale_parent.maq");
+        let (grid, palette) = (Grid::with_size(2, 2), Palette::default());
+        write_project(&path, &grid, &palette).unwrap();
+
+        // Give the filesystem some mtime headroom. Most filesystems
+        // have millisecond or better resolution; a 50ms sleep is
+        // generous but cheap.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        write_swap(&path, &grid, &palette).unwrap();
+
+        assert_eq!(
+            swap_is_newer(&path),
+            Some(true),
+            "swap written after the project should be flagged as recoverable"
+        );
+    }
+
+    #[test]
+    fn swap_is_newer_reports_false_when_swap_older_than_project() {
+        let dir = tempdir();
+        let path = dir.join("fresh_parent.maq");
+        let (grid, palette) = (Grid::with_size(2, 2), Palette::default());
+
+        write_swap(&path, &grid, &palette).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        write_project(&path, &grid, &palette).unwrap();
+
+        assert_eq!(swap_is_newer(&path), Some(false));
+    }
+
+    #[test]
+    fn remove_swap_is_idempotent_on_missing() {
+        let dir = tempdir();
+        let path = dir.join("nothing_to_remove.maq");
+        // File never existed — removal should not error.
+        remove_swap(&path).unwrap();
+    }
+
+    #[test]
+    fn remove_swap_deletes_sidecar() {
+        let dir = tempdir();
+        let path = dir.join("with_sidecar.maq");
+        let (grid, palette) = (Grid::with_size(2, 2), Palette::default());
+        write_swap(&path, &grid, &palette).unwrap();
+        assert!(swap_path(&path).exists());
+
+        remove_swap(&path).unwrap();
+        assert!(!swap_path(&path).exists());
+    }
+
+    #[test]
+    fn swap_is_readable_as_a_normal_project() {
+        // The swap format equals the project format. This is what
+        // lets the CLI inspect a swap without any new verb, and it's
+        // what makes recovery a pure load call.
+        let dir = tempdir();
+        let path = dir.join("same_format.maq");
+        let mut grid = Grid::with_size(4, 4);
+        grid.paint(1, 1, 0, 2);
+        let palette = Palette::default();
+
+        write_swap(&path, &grid, &palette).unwrap();
+        let (g2, _) = read_project(&swap_path(&path)).unwrap();
+        assert_eq!(g2.cells, grid.cells);
     }
 }

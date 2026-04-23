@@ -385,3 +385,121 @@ where
     let status = Command::new(cli_bin()).args(args).status().unwrap();
     assert!(status.success(), "cli call failed: {status}");
 }
+
+// =====================================================================
+// v0.9 A — autosave sidecar behaviour from the CLI side
+// =====================================================================
+
+/// The CLI treats a `.maq.swap` path exactly like any other project
+/// file — pass it in, it runs. This is intentional: recovery tooling
+/// should not need a dedicated verb.
+#[test]
+fn cli_reads_swap_file_like_a_regular_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_path = fixture_project(tmp.path(), "swap_read");
+    // Promote the fixture's grid into the swap sidecar by copying
+    // the bytes verbatim — same format.
+    let swap_path = project::swap_path(&project_path);
+    std::fs::copy(&project_path, &swap_path).unwrap();
+
+    let out = tmp.path().join("from_swap.glb");
+    let status = Command::new(cli_bin())
+        .arg("export")
+        .arg(&swap_path)
+        .arg("--out")
+        .arg(&out)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "CLI should export from a .maq.swap file the same as from a .maq"
+    );
+    assert!(out.exists(), "export target should be written");
+}
+
+/// When the CLI is given a `.maq`, it must read **that file** — never
+/// silently redirect to a newer sibling `.maq.swap`. This matters for
+/// repeatable CI builds: a stale editor swap on a developer's machine
+/// must not alter what `maquette-cli export foo.maq` produces.
+#[test]
+fn cli_export_ignores_sibling_swap_file() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // The `.maq` has one painted cell.
+    let project_path = tmp.path().join("quiet.maq");
+    let mut project_grid = Grid::with_size(4, 4);
+    project_grid.paint(0, 0, 0, 1);
+    project::write_project(&project_path, &project_grid, &Palette::default()).unwrap();
+
+    // The `.maq.swap` has *many* painted cells — distinguishable in
+    // the exported geometry. If the CLI mis-reads the swap, the
+    // exported glTF's mesh count will be larger than expected.
+    let mut swap_grid = Grid::with_size(4, 4);
+    for x in 0..4 {
+        for y in 0..4 {
+            swap_grid.paint(x, y, 0, 1);
+        }
+    }
+    project::write_swap(&project_path, &swap_grid, &Palette::default()).unwrap();
+    assert_eq!(
+        project::swap_is_newer(&project_path),
+        Some(true),
+        "swap should be newer than the .maq we just wrote earlier"
+    );
+
+    let out_path = tmp.path().join("quiet.glb");
+    let status = Command::new(cli_bin())
+        .arg("export")
+        .arg(&project_path)
+        .arg("--out")
+        .arg(&out_path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "export failed: status = {status}");
+
+    // The expected cell count for the `.maq` path (1 painted cell)
+    // yields exactly one color bucket after greedy meshing. The swap
+    // (16 painted cells) would also be one bucket at the same color,
+    // so a bucket-count assertion isn't enough — compare vertex
+    // counts instead: one cell → 8 unique vertices for a culled
+    // single cube; 16 cells packed flat → many more.
+    // Lower-bounding instead of equality: the export includes an
+    // inverted-hull outline, so the glTF's vertex count is a
+    // multiple of the raw mesh vertex count. What distinguishes the
+    // two inputs cleanly is scale — the 16-cell swap produces way
+    // more geometry than the 1-cell .maq under any meshing or
+    // outline choice.
+    let one_cell_vertices: usize = build_color_buckets(&project_grid)
+        .iter()
+        .map(|(_, b)| b.positions.len())
+        .sum();
+    let sixteen_cell_vertices: usize = build_color_buckets_culled(&swap_grid)
+        .iter()
+        .map(|(_, b)| b.positions.len())
+        .sum();
+    assert!(
+        sixteen_cell_vertices > one_cell_vertices * 4,
+        "test fixtures should be far apart in size: one={one_cell_vertices}, \
+         swap={sixteen_cell_vertices}"
+    );
+
+    let bytes = std::fs::read(&out_path).unwrap();
+    let gltf = gltf::Gltf::from_slice(&bytes).unwrap();
+    let actual_vertices: usize = gltf
+        .meshes()
+        .flat_map(|m| m.primitives())
+        .filter_map(|p| p.get(&gltf::Semantic::Positions).map(|a| a.count()))
+        .sum();
+
+    // Exported vertices track the `.maq`'s scale (with a small
+    // constant factor for outline extrusion), not the swap's. Any
+    // value within 3× of the one-cell baseline is "clearly not the
+    // swap"; the swap would be an order of magnitude larger.
+    let ceiling = one_cell_vertices * 3;
+    assert!(
+        actual_vertices <= ceiling,
+        "CLI appears to have read the swap instead of the .maq: \
+         actual_vertices={actual_vertices}, ceiling (3× one-cell baseline)={ceiling}, \
+         swap's raw vertex count would be {sixteen_cell_vertices}"
+    );
+}
