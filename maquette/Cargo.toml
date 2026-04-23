@@ -1,0 +1,98 @@
+[package]
+name = "maquette"
+version = "0.1.0"
+edition = "2021"
+description = "Kit-based low-poly asset forge — stack blocks, export 3D models and 2D sprites"
+license = "MIT"
+repository = "https://github.com/nicholasgasior/r_lit"
+default-run = "maquette"
+
+# Layout: `lib.rs` holds the headless core (Headless Invariant —
+# see docs/handoff/COST_AWARENESS.md). The GUI binary (`maquette`)
+# depends on the lib plus egui/panorbit/etc; the CLI binary
+# (`maquette-cli`) depends on the lib only.
+
+[[bin]]
+name = "maquette"
+path = "src/main.rs"
+# Only build the GUI binary when the `gui` feature is active. With
+# `--no-default-features --bin maquette-cli`, Cargo skips this target
+# entirely, which is what lets the CLI build skip `bevy_egui` &
+# friends — an order-of-magnitude cold-build win for CI.
+required-features = ["gui"]
+
+[[bin]]
+name = "maquette-cli"
+path = "src/bin/maquette_cli.rs"
+
+[features]
+# Default on: casual `cargo build` / `cargo run` behaves exactly like
+# before — both binaries, full GUI stack.
+default = ["gui"]
+# The `gui` feature pulls in every crate the GUI binary needs. The
+# lib and the CLI binary both build without it.
+gui = [
+    "dep:bevy_egui",
+    "dep:bevy_panorbit_camera",
+    "dep:bevy_infinite_grid",
+    "dep:bevy_mod_outline",
+    "dep:rfd",
+]
+
+[dependencies]
+# Core engine + ECS. Used by the lib (`Grid` derives `Resource`,
+# `ExportRequest` derives `Message`, palette colors are
+# `bevy::prelude::Color`) and by both binaries. Kept on full default
+# features for now — trimming Bevy's own feature set to just
+# `bevy_ecs` + `bevy_color` for the CLI is a bigger refactor and
+# slotted into v0.8.
+bevy = "0.18"
+
+# GUI-only crates. Optional + gated behind the `gui` feature so a CLI
+# build (`cargo build --no-default-features --bin maquette-cli`) does
+# not compile them. The lib must not reference these; the GUI binary
+# is the only consumer.
+bevy_egui = { version = "0.39", optional = true }
+bevy_panorbit_camera = { version = "0.34", optional = true }
+bevy_infinite_grid = { version = "0.18", optional = true }
+bevy_mod_outline = { version = "0.12", optional = true }
+rfd = { version = "0.17", optional = true }
+
+# Shared utilities.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+
+# CLI frontend.
+clap = { version = "4", features = ["derive"] }
+
+# Pure-CPU rasterizer output. `png` is the de-facto Rust PNG codec
+# (used by `image`, `plotters`, etc). Small surface area — we only
+# call the encoder and a decoder in tests.
+png = "0.18"
+
+[dev-dependencies]
+# Real glTF parser, used only in tests to make sure the files we emit
+# survive a round trip through a canonical reader. Catches spec
+# violations our structural tests miss (buffer alignment, accessor
+# bounds, unknown extensions, etc.).
+gltf = "1"
+
+# CLI integration test support. We drive the binary via
+# `std::process::Command` rather than `assert_cmd` so the CLI tests
+# have no extra dependencies beyond the stdlib + `tempfile` for
+# disposable working directories.
+tempfile = "3"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3

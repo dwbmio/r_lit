@@ -1,0 +1,7 @@
+# Keep the handoff / export / icons docs under git. The repo-root
+# `.gitignore` has `*.md` + `!docs/**/*.md`, but the un-ignore
+# pattern is anchored to the repo root and does not propagate into
+# nested crates. Re-enable it explicitly here.
+!docs/handoff/*.md
+!docs/export/*.md
+!docs/icons/*.md

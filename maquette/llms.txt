@@ -1,0 +1,90 @@
+name: maquette
+kind: desktop-gui-app
+category: game-asset-tool
+language: rust
+edition: 2021
+version: 0.1.0
+license: MIT
+status: mvp
+
+purpose: |
+  Kit-based low-poly 3D asset forge for indie game developers.
+  Users stack primitive blocks in a 3D viewport, arrange and paint them,
+  then export glTF/OBJ models and batch-render 2D sprite sheets from
+  multiple angles. Inspired by Kenney's Asset Forge.
+
+binary_name: maquette
+entry_point: src/main.rs
+build: cargo build --release
+run: cargo run
+
+engine: bevy
+engine_version: "0.18"
+ui_library: bevy_egui
+ui_library_version: "0.39"
+ui_paradigm: immediate-mode
+renderer: wgpu (via bevy)
+
+dependencies:
+  - bevy 0.18 (game engine, 3D rendering, ECS)
+  - bevy_egui 0.39 (egui UI panels inside Bevy apps)
+  - bevy_panorbit_camera 0.34 (orbit/pan camera for viewport)
+  - bevy_infinite_grid 0.18 (ground grid with world axes)
+  - serde 1 + serde_json 1 (future project file format)
+  - thiserror 2 (error enum)
+  - log 0.4 (logging interface)
+
+api_conventions:
+  event_system: bevy 0.17+ renamed Event -> Message; uses #[derive(Message)],
+    MessageReader<T>, MessageWriter<T>, app.add_message::<T>().
+  egui_schedule: EguiPrimaryContextPass (multi-pass mode).
+  egui_plugin_init: EguiPlugin::default()
+  egui_context_access: EguiContexts::ctx_mut() returns Result; use `?` in
+    systems that return bevy::prelude::Result.
+  ambient_light: insert_resource(GlobalAmbientLight { ... }) — not the older
+    AmbientLight which is now a per-camera component.
+  window_resolution: WindowResolution::new(width_u32, height_u32)
+  mesh_material: spawn with (Mesh3d(handle), MeshMaterial3d(handle))
+  camera_3d: spawn with Camera3d::default() + Transform (no bundle type).
+
+module_layout:
+  src/main.rs: app setup, plugin wiring
+  src/camera.rs: pan-orbit camera spawn (Startup system)
+  src/scene.rs: clear color, GlobalAmbientLight, directional light, infinite grid
+  src/block.rs: BlockKind component/enum, SpawnBlockEvent, ClearSceneEvent,
+    SelectedBlock resource, handle_spawn and handle_clear systems
+  src/ui.rs: egui panels (top menu, left library, right properties, bottom status)
+
+runtime_behavior:
+  spawn_placement: staggered grid at y=0.5; col=(n%5)*1.4-2.8, row=(n/5)*1.4-2.0
+  block_colors: round-robin through 6-color palette
+  selected_block: resource holding Option<Entity>; set to latest spawn
+
+implemented_features:
+  - spawn primitives: Cube, Sphere, Cylinder, Cone, Plane, Torus
+  - clear scene
+  - orbit/pan/zoom camera
+  - properties readout (position, rotation, scale) for selected block
+  - block count status
+
+unimplemented_features:
+  - viewport pick/selection
+  - transform gizmo
+  - custom block import (user glTF/OBJ)
+  - project save/load (.maq JSON)
+  - glTF export
+  - sprite sheet baking (multi-angle PNG)
+  - procedural scripting (rhai or mlua)
+  - undo/redo
+  - reset camera action
+  - grid toggle action
+
+repo_position:
+  monorepo: r_lit
+  convention_exception: r_lit is for short-running CLI tools; maquette is
+    a long-running desktop app, included here for shared build tooling.
+  doc_files: README.md, README_CN.md, llms.txt, llms_cn.txt (per r_lit standard)
+
+build_profiles:
+  dev: opt-level=1 self, opt-level=3 deps (standard Bevy dev setup)
+  release: lto=thin, codegen-units=1, strip=true, opt-level=3

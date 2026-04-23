@@ -1,0 +1,90 @@
+name: maquette
+kind: desktop-gui-app
+category: game-asset-tool
+language: rust
+edition: 2021
+version: 0.1.0
+license: MIT
+status: mvp
+
+purpose: |
+  面向独立游戏开发者的积木式低模资产生成器。
+  用户在 3D 视口里用基础几何体拼模型、摆位置、上色，
+  然后导出 glTF/OBJ 或批量烘焙多方向 2D sprite。
+  参考 Kenney 的 Asset Forge。
+
+binary_name: maquette
+entry_point: src/main.rs
+build: cargo build --release
+run: cargo run
+
+engine: bevy
+engine_version: "0.18"
+ui_library: bevy_egui
+ui_library_version: "0.39"
+ui_paradigm: 即时模式 (immediate-mode)
+renderer: wgpu (bevy 间接使用)
+
+dependencies:
+  - bevy 0.18 (游戏引擎、3D 渲染、ECS)
+  - bevy_egui 0.39 (在 Bevy app 里嵌 egui 面板)
+  - bevy_panorbit_camera 0.34 (视口轨道/平移相机)
+  - bevy_infinite_grid 0.18 (带世界轴的无限地面网格)
+  - serde 1 + serde_json 1 (未来的工程文件格式)
+  - thiserror 2 (错误枚举)
+  - log 0.4 (日志接口)
+
+api_conventions:
+  event_system: bevy 0.17+ 把 Event 改名为 Message；用 #[derive(Message)]、
+    MessageReader<T>、MessageWriter<T>、app.add_message::<T>()。
+  egui_schedule: EguiPrimaryContextPass（多 pass 模式）。
+  egui_plugin_init: EguiPlugin::default()
+  egui_context_access: EguiContexts::ctx_mut() 返回 Result；在返回
+    bevy::prelude::Result 的 system 里用 `?` 解开。
+  ambient_light: insert_resource(GlobalAmbientLight { ... }) —— 老的
+    AmbientLight 现在是挂在相机上的组件，不是资源。
+  window_resolution: WindowResolution::new(width_u32, height_u32)
+  mesh_material: 生成时用 (Mesh3d(handle), MeshMaterial3d(handle)) 组件对
+  camera_3d: 生成时用 Camera3d::default() + Transform（没有 Bundle 类型了）
+
+module_layout:
+  src/main.rs: App 初始化和插件装配
+  src/camera.rs: 轨道相机 Startup system
+  src/scene.rs: 背景色、GlobalAmbientLight、方向光、无限网格
+  src/block.rs: BlockKind 组件/枚举、SpawnBlockEvent、ClearSceneEvent、
+    SelectedBlock 资源、handle_spawn / handle_clear system
+  src/ui.rs: egui 面板（顶栏菜单 / 左栏库 / 右栏属性 / 底栏状态）
+
+runtime_behavior:
+  spawn_placement: y=0.5 处交错网格放置；col=(n%5)*1.4-2.8, row=(n/5)*1.4-2.0
+  block_colors: 6 色调色板轮询
+  selected_block: 资源持有 Option<Entity>；默认指向最新 spawn 的方块
+
+implemented_features:
+  - 生成基础形状：Cube / Sphere / Cylinder / Cone / Plane / Torus
+  - 清空场景
+  - 相机轨道/平移/缩放
+  - 选中方块的属性（位置 / 旋转 / 缩放）显示
+  - 方块计数状态栏
+
+unimplemented_features:
+  - 视口内拾取/选择
+  - 变换 gizmo
+  - 自定义方块导入（用户 glTF/OBJ）
+  - 工程存档（.maq JSON）
+  - 整场景 glTF 导出
+  - sprite 多方向烘焙（PNG 批导）
+  - 程序化脚本（rhai / mlua）
+  - 撤销/重做
+  - 重置相机
+  - 网格开关
+
+repo_position:
+  monorepo: r_lit
+  convention_exception: r_lit 主要收短时运行 CLI 工具；maquette 是长期
+    运行的桌面程序，放在这里是为了共用构建基础设施。
+  doc_files: README.md、README_CN.md、llms.txt、llms_cn.txt（遵循 r_lit 规范）
+
+build_profiles:
+  dev: 自身 opt-level=1，依赖 opt-level=3（Bevy 标准 dev 配置）
+  release: lto=thin、codegen-units=1、strip=true、opt-level=3
