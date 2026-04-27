@@ -28,6 +28,13 @@ pub struct PackOptions {
     pub rotate: bool,
     pub pot: bool,
     pub recursive: bool,
+    /// When `Some`, pack exactly these source files instead of scanning
+    /// `input_dir`. Used by the GUI to honor the user's drag-drop selection
+    /// without picking up unrelated images that happen to live next to them.
+    /// Sprite names (relative-path keys) are computed by stripping
+    /// `input_dir` from each path; if a path doesn't share that prefix the
+    /// file's basename is used as the key.
+    pub explicit_sprites: Option<Vec<PathBuf>>,
     /// Enable incremental packing — read manifest, only repack what changed.
     /// When all inputs match (and the manifest is consistent with the on-disk
     /// atlases) the pack is skipped entirely. Otherwise we attempt a partial
@@ -155,15 +162,19 @@ impl AtlasResult {
 /// [`AtlasResult::save_to_disk`] (a no-op for cached entries) and, in CLI
 /// flows, [`persist_manifest`] afterwards to refresh the manifest sidecar.
 pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
-    let entries = collect_images(&opts.input_dir, opts.recursive)?;
+    let entries = collect_images_for(opts)?;
     if entries.is_empty() {
         return Err(AppError::NoImages(opts.input_dir.display().to_string()));
     }
-    log::info!(
-        "Found {} sprite(s) in {}",
-        entries.len(),
-        opts.input_dir.display()
-    );
+    if opts.explicit_sprites.is_some() {
+        log::info!("Found {} sprite(s) (explicit list)", entries.len());
+    } else {
+        log::info!(
+            "Found {} sprite(s) in {}",
+            entries.len(),
+            opts.input_dir.display()
+        );
+    }
 
     if opts.incremental && !opts.force {
         match try_incremental(opts, &entries)? {
@@ -197,7 +208,9 @@ pub fn persist_manifest(opts: &PackOptions, results: &[AtlasResult]) -> Result<(
         return Ok(());
     }
 
-    let entries = collect_images(&opts.input_dir, opts.recursive)?;
+    // Re-walk the same source set so manifest hashes line up with what was
+    // actually packed (explicit list when GUI-driven, dir scan otherwise).
+    let entries = collect_images_for(opts)?;
     write_manifest(opts, results, &entries)
 }
 
@@ -633,45 +646,102 @@ struct SpriteData {
     polygon_data: Option<PolygonData>,
 }
 
-/// Collect all image files from the input directory.
-fn collect_images(dir: &Path, recursive: bool) -> Result<Vec<(String, PathBuf)>> {
-    let walker = if recursive {
-        WalkDir::new(dir).follow_links(true)
-    } else {
-        WalkDir::new(dir).max_depth(1).follow_links(true)
-    };
-
+/// Collect input sprites for packing.
+///
+/// When `opts.explicit_sprites` is `Some(list)`, pack exactly that list — this
+/// is what the GUI uses so the user's curated selection isn't polluted by
+/// unrelated images that happen to live in the same directory. Otherwise we
+/// fall back to scanning `opts.input_dir` (recursively when `opts.recursive`).
+fn collect_images_for(opts: &PackOptions) -> Result<Vec<(String, PathBuf)>> {
     let image_exts = ["png", "jpg", "jpeg", "bmp", "gif", "tga", "webp"];
-
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
-    for entry in walker {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
+
+    if let Some(list) = &opts.explicit_sprites {
+        // Honor the explicit list verbatim. Skip anything that doesn't exist on
+        // disk or has a non-image extension — better to drop silently than to
+        // crash the whole pack. Duplicates (same path twice) are also dropped.
+        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        for path in list {
+            if !path.is_file() {
+                log::warn!("explicit sprite skipped (not a file): {}", path.display());
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            if !image_exts.contains(&ext.as_str()) {
+                log::warn!(
+                    "explicit sprite skipped (unsupported extension '{}'): {}",
+                    ext,
+                    path.display()
+                );
+                continue;
+            }
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+
+            let rel = match path.strip_prefix(&opts.input_dir) {
+                Ok(stripped) => stripped.to_string_lossy().replace('\\', "/"),
+                Err(_) => path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string()),
+            };
+
+            entries.push((rel, path.clone()));
         }
-        let path = entry.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_default();
+    } else {
+        let walker = if opts.recursive {
+            WalkDir::new(&opts.input_dir).follow_links(true)
+        } else {
+            WalkDir::new(&opts.input_dir).max_depth(1).follow_links(true)
+        };
+        for entry in walker {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
 
-        if !image_exts.contains(&ext.as_str()) {
-            continue;
+            if !image_exts.contains(&ext.as_str()) {
+                continue;
+            }
+
+            let rel = path
+                .strip_prefix(&opts.input_dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            entries.push((rel, path.to_path_buf()));
         }
-
-        let rel = path
-            .strip_prefix(dir)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        entries.push((rel, path.to_path_buf()));
     }
 
+    // De-duplicate by relative name — explicit lists with two files that
+    // resolve to the same basename would otherwise get the same key in
+    // PackedSprite and confuse the consumer.
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(entries)
+    let mut deduped: Vec<(String, PathBuf)> = Vec::with_capacity(entries.len());
+    let mut last_name: Option<String> = None;
+    for (name, path) in entries {
+        if last_name.as_deref() == Some(name.as_str()) {
+            log::warn!("duplicate sprite name '{}' — keeping first occurrence", name);
+            continue;
+        }
+        last_name = Some(name.clone());
+        deduped.push((name, path));
+    }
+    Ok(deduped)
 }
+
 
 /// Detect animation groups from sprite names.
 fn detect_animations_from_names(names: &[String]) -> HashMap<String, Vec<String>> {
@@ -1548,6 +1618,157 @@ fn write_manifest(
     new_manifest.save(&path)?;
     log::info!("Saved manifest: {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn write_png(path: &Path, w: u32, h: u32, color: [u8; 4]) {
+        let mut img = RgbaImage::new(w, h);
+        for px in img.pixels_mut() {
+            *px = image::Rgba(color);
+        }
+        let mut buf = Vec::new();
+        {
+            use image::codecs::png::PngEncoder;
+            use image::ImageEncoder;
+            let enc = PngEncoder::new(Cursor::new(&mut buf));
+            enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
+                .unwrap();
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    fn make_opts(input_dir: &Path, output_dir: &Path, explicit: Option<Vec<PathBuf>>) -> PackOptions {
+        PackOptions {
+            input_dir: input_dir.to_path_buf(),
+            output_name: "atlas".into(),
+            output_dir: output_dir.to_path_buf(),
+            max_size: 1024,
+            spacing: 0,
+            padding: 0,
+            extrude: 0,
+            trim: false,
+            trim_threshold: 0,
+            rotate: false,
+            pot: false,
+            recursive: true,
+            explicit_sprites: explicit,
+            incremental: false,
+            force: false,
+            format: crate::output::Format::JsonHash,
+            quantize: false,
+            quantize_quality: 85,
+            polygon: false,
+            tolerance: 2.0,
+            polygon_shape: PolygonShape::Concave,
+            max_vertices: 0,
+        }
+    }
+
+    /// Regression: when the GUI hands us an explicit sprite list, the packer
+    /// must NOT scan the parent directory and pick up unrelated images. The
+    /// GUI's drag-drop selection drives the pack — deletions in the GUI list
+    /// must propagate to the next pack instead of being silently re-added by
+    /// a directory walk.
+    #[test]
+    fn explicit_sprites_ignores_unselected_sibling_files() {
+        let tmp = std::env::temp_dir().join(format!(
+            "mj_atlas_explicit_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let a = tmp.join("a.png");
+        let b = tmp.join("b.png");
+        let c = tmp.join("c_unrelated.png"); // never selected
+        write_png(&a, 16, 16, [255, 0, 0, 255]);
+        write_png(&b, 16, 16, [0, 255, 0, 255]);
+        write_png(&c, 16, 16, [0, 0, 255, 255]);
+
+        let opts = make_opts(&tmp, &tmp, Some(vec![a.clone(), b.clone()]));
+        let entries = collect_images_for(&opts).unwrap();
+
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["a.png", "b.png"],
+            "explicit list must not include siblings; got {:?}",
+            names
+        );
+
+        // Sanity: directory mode (explicit_sprites = None) still picks up all 3.
+        let opts_dir = make_opts(&tmp, &tmp, None);
+        let dir_entries = collect_images_for(&opts_dir).unwrap();
+        assert_eq!(dir_entries.len(), 3, "dir scan should find all 3 PNGs");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: deleting an explicit sprite between calls must shrink the
+    /// next pack's input set, even though the file is still on disk. This is
+    /// the literal scenario the GUI exercises after `x` is clicked.
+    #[test]
+    fn explicit_sprites_deletion_shrinks_pack_input() {
+        let tmp = std::env::temp_dir().join(format!(
+            "mj_atlas_delete_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let a = tmp.join("a.png");
+        let b = tmp.join("b.png");
+        write_png(&a, 16, 16, [255, 0, 0, 255]);
+        write_png(&b, 16, 16, [0, 255, 0, 255]);
+
+        let opts_full = make_opts(&tmp, &tmp, Some(vec![a.clone(), b.clone()]));
+        assert_eq!(collect_images_for(&opts_full).unwrap().len(), 2);
+
+        // User deletes 'a' from the GUI list — file still on disk.
+        let opts_after_delete = make_opts(&tmp, &tmp, Some(vec![b.clone()]));
+        let entries = collect_images_for(&opts_after_delete).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "b.png");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Sprites picked from disjoint directories (`/foo/x.png` + `/bar/y.png`)
+    /// don't share a meaningful common prefix. Each sprite must still get a
+    /// usable name; we fall back to the basename.
+    #[test]
+    fn explicit_sprites_disjoint_dirs_use_basenames() {
+        let root = std::env::temp_dir().join(format!(
+            "mj_atlas_disjoint_test_{}",
+            std::process::id()
+        ));
+        let foo = root.join("foo");
+        let bar = root.join("bar");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&foo).unwrap();
+        std::fs::create_dir_all(&bar).unwrap();
+
+        let x = foo.join("x.png");
+        let y = bar.join("y.png");
+        write_png(&x, 8, 8, [10, 20, 30, 255]);
+        write_png(&y, 8, 8, [40, 50, 60, 255]);
+
+        // input_dir doesn't contain either sprite — strip_prefix will fail and
+        // we should fall back to the basename for the relative-name key.
+        let opts = make_opts(&root, &root, Some(vec![x.clone(), y.clone()]));
+        let entries = collect_images_for(&opts).unwrap();
+        let mut names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        names.sort();
+        // x.png is under root, so strip_prefix("root") yields "foo/x.png".
+        // y.png same: "bar/y.png".
+        assert_eq!(names, vec!["bar/y.png", "foo/x.png"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 /// Rotate an image 90° clockwise.

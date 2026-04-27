@@ -781,6 +781,7 @@ mod tests {
             rotate: false,
             pot: false,
             recursive: true,
+            explicit_sprites: None,
             incremental: false,
             force: false,
             format: crate::output::Format::JsonHash,

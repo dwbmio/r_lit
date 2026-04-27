@@ -441,6 +441,7 @@ fn run(cli: &Cli) -> Result<()> {
                 rotate: *rotate,
                 pot: *pot,
                 recursive: *recursive,
+                explicit_sprites: None,
                 incremental: *incremental,
                 force: *force,
                 format: fmt,

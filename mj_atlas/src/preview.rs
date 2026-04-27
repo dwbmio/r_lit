@@ -1137,6 +1137,18 @@ impl MJAtlasApp {
 
             let input_dir = find_common_parent(&state.project.sprites);
 
+            // Pack EXACTLY the user's curated list — never the directory at
+            // large. Otherwise the GUI list and the preview diverge as soon
+            // as `find_common_parent` lands on a folder containing files the
+            // user didn't pick (and deletions silently get re-added on the
+            // next scan). Both bugs fixed by routing through explicit_sprites.
+            let explicit: Vec<PathBuf> = state
+                .project
+                .sprites
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+
             let opts = PackOptions {
                 input_dir: PathBuf::from(&input_dir),
                 output_name: state.project.output_name.clone(),
@@ -1150,6 +1162,7 @@ impl MJAtlasApp {
                 rotate: s.rotate,
                 pot: s.pot,
                 recursive: true,
+                explicit_sprites: Some(explicit),
                 incremental: false,
                 force: false,
                 format: output::Format::JsonHash,
