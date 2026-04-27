@@ -8,11 +8,28 @@
 //!
 //! Kept outside the lib so the CLI binary has nothing to do with
 //! file dialogs, `Window`, or project-dirty tracking.
+//!
+//! ## Why the dialogs are split into two phases
+//!
+//! Every native file dialog goes through [`PendingProjectDialog`].
+//! The old implementation called `rfd::FileDialog::pick_file()` /
+//! `save_file()` synchronously from `handle_project_action`. Those
+//! sync paths end in `NSOpenPanel.runModal()` / `NSSavePanel.runModal()`
+//! on macOS, which nests a modal run-loop under winit's own callback
+//! and — on macOS 26+ — wedges the app forever (see the matching
+//! incident in `export_dialog.rs`).
+//!
+//! Replacing them with `rfd::AsyncFileDialog` means the dialog is
+//! a future we poll every frame; Cocoa shows the panel as a sheet
+//! via `beginSheetModalForWindow:completionHandler:`, which is the
+//! integration pattern that actually works from inside winit's
+//! event handler.
 
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::window::{PrimaryWindow, RequestRedraw};
 use maquette::grid::{Grid, Palette};
 use maquette::project::{self, FILE_EXT};
 
@@ -63,13 +80,93 @@ pub struct ProjectPlugin;
 impl Plugin for ProjectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CurrentProject>()
+            .init_resource::<PendingProjectDialog>()
             .add_message::<ProjectAction>()
             .add_systems(
                 Update,
-                (handle_project_action, update_window_title).chain(),
+                (
+                    handle_project_action,
+                    poll_pending_project_dialog,
+                    update_window_title,
+                )
+                    .chain(),
             );
     }
 }
+
+// ---------------------------------------------------------------------
+// Pending-dialog state
+// ---------------------------------------------------------------------
+
+/// Live state for an in-flight native file dialog (Open / Save / Save
+/// As). `Some` for as long as the sheet is on screen (or spawning);
+/// flipped back to `None` the frame its future resolves.
+///
+/// We deliberately allow only one at a time — the UI already disables
+/// File menu items while `is_pending()` is true, so this is the
+/// last-line guard.
+#[derive(Resource, Default)]
+pub struct PendingProjectDialog {
+    inner: Option<Pending>,
+}
+
+enum Pending {
+    /// `File → Open` — pick an existing `.maq` and load it.
+    Open { task: Task<Option<PathBuf>> },
+    /// `File → Save As…` — always prompt for a target path.
+    SaveAs { task: Task<Option<PathBuf>> },
+    /// `File → Save` triggered on an untitled project — same flow as
+    /// Save As, but the toast copy reads "Saved foo.maq" rather than
+    /// treating it as a fresh save-to-new-location.
+    SaveUntitled { task: Task<Option<PathBuf>> },
+}
+
+impl PendingProjectDialog {
+    /// Is a native dialog currently up or spawning? UI uses this to
+    /// disable File menu items to prevent stacking two panels.
+    pub fn is_pending(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    fn spawn_pick(&mut self) {
+        if self.inner.is_some() {
+            log::warn!("project dialog: ignoring Open — a dialog is already pending");
+            return;
+        }
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            rfd::AsyncFileDialog::new()
+                .add_filter("Maquette project", &[FILE_EXT])
+                .pick_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        });
+        self.inner = Some(Pending::Open { task });
+    }
+
+    fn spawn_save(&mut self, default_name: String, untitled: bool) {
+        if self.inner.is_some() {
+            log::warn!("project dialog: ignoring Save/SaveAs — a dialog is already pending");
+            return;
+        }
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            rfd::AsyncFileDialog::new()
+                .add_filter("Maquette project", &[FILE_EXT])
+                .set_file_name(default_name)
+                .save_file()
+                .await
+                .map(|handle| handle.path().to_path_buf())
+        });
+        self.inner = Some(if untitled {
+            Pending::SaveUntitled { task }
+        } else {
+            Pending::SaveAs { task }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// Systems
+// ---------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 fn handle_project_action(
@@ -79,8 +176,19 @@ fn handle_project_action(
     mut current: ResMut<CurrentProject>,
     mut history: ResMut<EditHistory>,
     mut toasts: ResMut<Toasts>,
-    mut recovery: ResMut<RecoveryPrompt>,
+    mut redraw: MessageWriter<RequestRedraw>,
+    mut pending: ResMut<PendingProjectDialog>,
 ) {
+    if events.is_empty() {
+        return;
+    }
+    // Any action either popped a native dialog or wrote a file.
+    // Under `WinitSettings::desktop_app()` the event loop won't
+    // auto-tick after that, so the toast / title update we emit
+    // below would sit invisible until the 5 s heartbeat. One
+    // explicit redraw per batch unclogs the loop.
+    redraw.write(RequestRedraw);
+
     for action in events.read() {
         match action {
             ProjectAction::New { w, h } => {
@@ -96,78 +204,153 @@ fn handle_project_action(
                 history.clear();
             }
             ProjectAction::Open => {
-                let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Maquette project", &[FILE_EXT])
-                    .pick_file()
-                else {
-                    continue;
-                };
-                // Look for a newer autosave sidecar BEFORE the
-                // load. The normal load proceeds either way — if the
-                // user chooses Recover, the modal overwrites the
-                // grid / palette with the swap's contents. Loading
-                // the `.maq` first keeps the in-between frame
-                // showing a valid project instead of a blank canvas.
-                let has_recovery = project::swap_is_newer(&path) == Some(true);
-
-                match project::apply_to_grid_and_palette(&path, &mut grid, &mut palette) {
-                    Ok(()) => {
-                        let name = file_name_or(&path, "project").to_string();
-                        let path_clone = path.clone();
-                        current.path = Some(path);
-                        current.unsaved = false;
-                        history.clear();
-                        toasts.success(format!("Opened {name}"));
-                        if has_recovery {
-                            autosave::arm_recovery_prompt(&mut recovery, path_clone);
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("open failed: {e}");
-                        toasts.error(format!("Open failed — {e}"));
-                    }
-                }
+                pending.spawn_pick();
             }
             ProjectAction::Save => {
-                let path = match current.path.clone() {
-                    Some(p) => p,
-                    None => {
-                        let Some(p) = prompt_save_path(&current) else {
-                            continue;
-                        };
-                        p
-                    }
-                };
-                match project::write_project(&path, &grid, &palette) {
-                    Ok(()) => {
-                        let name = file_name_or(&path, "project").to_string();
-                        current.path = Some(path);
-                        current.unsaved = false;
-                        toasts.success(format!("Saved {name}"));
-                    }
-                    Err(e) => {
-                        log::error!("save failed: {e}");
-                        toasts.error(format!("Save failed — {e}"));
-                    }
+                // Save with a known path is a plain `std::fs::write`
+                // — never pops a dialog, so it stays on the fast
+                // synchronous path.
+                match current.path.clone() {
+                    Some(path) => apply_save(&path, &grid, &palette, &mut current, &mut toasts),
+                    None => pending.spawn_save(default_save_name(&current), /* untitled */ true),
                 }
             }
             ProjectAction::SaveAs => {
-                let Some(path) = prompt_save_path(&current) else {
-                    continue;
-                };
-                match project::write_project(&path, &grid, &palette) {
-                    Ok(()) => {
-                        let name = file_name_or(&path, "project").to_string();
-                        current.path = Some(path);
-                        current.unsaved = false;
-                        toasts.success(format!("Saved {name}"));
-                    }
-                    Err(e) => {
-                        log::error!("save-as failed: {e}");
-                        toasts.error(format!("Save-as failed — {e}"));
-                    }
-                }
+                pending.spawn_save(default_save_name(&current), /* untitled */ false);
             }
+        }
+    }
+}
+
+/// Drain the in-flight file dialog and perform the I/O half once the
+/// user commits. This is the async-flow counterpart to what the old
+/// `handle_project_action` did inline right after `pick_file()` /
+/// `save_file()` returned.
+#[allow(clippy::too_many_arguments)]
+fn poll_pending_project_dialog(
+    mut pending: ResMut<PendingProjectDialog>,
+    mut grid: ResMut<Grid>,
+    mut palette: ResMut<Palette>,
+    mut current: ResMut<CurrentProject>,
+    mut history: ResMut<EditHistory>,
+    mut toasts: ResMut<Toasts>,
+    mut recovery: ResMut<RecoveryPrompt>,
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    let Some(kind) = pending.inner.as_mut() else {
+        return;
+    };
+
+    // Keep the reactive loop awake while the dialog is up, otherwise
+    // the completion handler might fire during a 5 s heartbeat
+    // quiet-period and we'd notice the picked path a frame late.
+    redraw.write(RequestRedraw);
+
+    // Poll the active task without moving `Pending` out of the option.
+    let resolved = match kind {
+        Pending::Open { task } => match block_on(future::poll_once(task)) {
+            Some(result) => Resolved::Open(result),
+            None => return,
+        },
+        Pending::SaveAs { task } => match block_on(future::poll_once(task)) {
+            Some(result) => Resolved::SaveAs(result),
+            None => return,
+        },
+        Pending::SaveUntitled { task } => match block_on(future::poll_once(task)) {
+            Some(result) => Resolved::SaveUntitled(result),
+            None => return,
+        },
+    };
+
+    // Dialog resolved — clear the slot before the I/O runs so a
+    // panic during load/save doesn't leave the state marked
+    // "dialog pending forever" and freeze the File menu.
+    pending.inner = None;
+    // Force one more redraw so the toast / title update below
+    // reaches the screen promptly.
+    redraw.write(RequestRedraw);
+
+    match resolved {
+        Resolved::Open(Some(path)) => apply_open(
+            &path,
+            &mut grid,
+            &mut palette,
+            &mut current,
+            &mut history,
+            &mut toasts,
+            &mut recovery,
+        ),
+        Resolved::SaveAs(Some(path)) | Resolved::SaveUntitled(Some(path)) => {
+            apply_save(&path, &grid, &palette, &mut current, &mut toasts);
+        }
+        Resolved::Open(None) => log::info!("project dialog: Open cancelled"),
+        Resolved::SaveAs(None) => log::info!("project dialog: Save As cancelled"),
+        Resolved::SaveUntitled(None) => log::info!("project dialog: Save (untitled) cancelled"),
+    }
+}
+
+enum Resolved {
+    Open(Option<PathBuf>),
+    SaveAs(Option<PathBuf>),
+    SaveUntitled(Option<PathBuf>),
+}
+
+// ---------------------------------------------------------------------
+// I/O helpers (pure business logic, no dialog)
+// ---------------------------------------------------------------------
+
+fn apply_open(
+    path: &std::path::Path,
+    grid: &mut Grid,
+    palette: &mut Palette,
+    current: &mut CurrentProject,
+    history: &mut EditHistory,
+    toasts: &mut Toasts,
+    recovery: &mut RecoveryPrompt,
+) {
+    // Look for a newer autosave sidecar BEFORE the load. The normal
+    // load proceeds either way — if the user chooses Recover, the
+    // modal overwrites the grid / palette with the swap's contents.
+    // Loading the `.maq` first keeps the in-between frame showing a
+    // valid project instead of a blank canvas.
+    let has_recovery = project::swap_is_newer(path) == Some(true);
+
+    match project::apply_to_grid_and_palette(path, grid, palette) {
+        Ok(()) => {
+            let name = file_name_or(path, "project").to_string();
+            let path_buf = path.to_path_buf();
+            current.path = Some(path_buf.clone());
+            current.unsaved = false;
+            history.clear();
+            toasts.success(format!("Opened {name}"));
+            if has_recovery {
+                autosave::arm_recovery_prompt(recovery, path_buf);
+            }
+        }
+        Err(e) => {
+            log::error!("open failed: {e}");
+            toasts.error(format!("Open failed — {e}"));
+        }
+    }
+}
+
+fn apply_save(
+    path: &std::path::Path,
+    grid: &Grid,
+    palette: &Palette,
+    current: &mut CurrentProject,
+    toasts: &mut Toasts,
+) {
+    match project::write_project(path, grid, palette) {
+        Ok(()) => {
+            let name = file_name_or(path, "project").to_string();
+            current.path = Some(path.to_path_buf());
+            current.unsaved = false;
+            toasts.success(format!("Saved {name}"));
+        }
+        Err(e) => {
+            log::error!("save failed: {e}");
+            toasts.error(format!("Save failed — {e}"));
         }
     }
 }
@@ -178,18 +361,14 @@ fn file_name_or<'a>(path: &'a std::path::Path, fallback: &'a str) -> &'a str {
         .unwrap_or(fallback)
 }
 
-fn prompt_save_path(current: &CurrentProject) -> Option<PathBuf> {
-    let default_name = current
+fn default_save_name(current: &CurrentProject) -> String {
+    current
         .path
         .as_ref()
         .and_then(|p| p.file_name())
         .and_then(|s| s.to_str())
         .map(String::from)
-        .unwrap_or_else(|| format!("untitled.{FILE_EXT}"));
-    rfd::FileDialog::new()
-        .add_filter("Maquette project", &[FILE_EXT])
-        .set_file_name(default_name)
-        .save_file()
+        .unwrap_or_else(|| format!("untitled.{FILE_EXT}"))
 }
 
 fn update_window_title(

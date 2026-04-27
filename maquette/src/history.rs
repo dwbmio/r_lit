@@ -247,10 +247,12 @@ mod tests {
             before: Cell {
                 color_idx: color_before,
                 height: if color_before.is_some() { 1 } else { 0 },
+                ..Cell::default()
             },
             after: Cell {
                 color_idx: color_after,
                 height: if color_after.is_some() { 1 } else { 0 },
+                ..Cell::default()
             },
         }
     }

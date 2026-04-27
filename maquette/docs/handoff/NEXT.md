@@ -1,14 +1,29 @@
 # NEXT · maquette
 
-Current in-flight: **v0.9** — robustness work: autosave + crash
-recovery, Bevy feature trim for a smaller release binary, and a
-preferences file so viewport toggles stick across launches. v0.8
-shipped the T-shape multi-angle preview (Top / Front / Side PIPs),
-dock-to-float preview window, empty-state onboarding, Fit-to-Model,
-and a discoverable preview toolbar. See `v0.8-complete.md`.
+**Status, 2026-04-27.** v0.9 A (autosave + crash recovery) shipped
+2026-04-23. A second wave of v0.9 polish + the v0.10 A/B texture
+pipeline shipped this commit (see `v0.9b-complete.md`). Working tree
+is clean, 112 tests + clippy green.
+
+Active fronts:
+
+* **v0.9 follow-up (B + C)** — Bevy feature trim and the prefs file
+  are still on the v0.9 list. Neither is started.
+* **v0.10 C — schema v4** — *next thing the agent should pick up*.
+  Zero external dependency: we just need to grow the project file
+  format with `model_description`, per-slot `override_hint`,
+  `texture: Option<TextureHandle>`, and a `TexturePrefs` block.
+* **v0.10 B verification (`#TEX-B`)** — blocked on sonargrid Stage 1
+  Echo worker. Producer side is shipped; we cannot prove the wire
+  contract end-to-end until a worker actually answers `texture.gen`.
+* **User-side validation backlog** — see `USER-TODO.md`. A bunch of
+  v0.9 polish items just landed (`#1c-async`, `#17b`, `#17c`, `#18`,
+  `#19b`, `#20b`, all `#TEX-A` / `#TEX-B` plumbing) and need a
+  human-eyes pass on real hardware.
 
 Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
-· `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md`.
+· `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md` ·
+`v0.9b-complete.md`.
 
 ## Roadmap snapshot
 
@@ -19,88 +34,99 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | v0.6 | Palette editor + stroke undo + greedy meshing           | shipped   |
 | v0.7 | Headless render + GUI feature-gate + palette CLI        | shipped   |
 | v0.8 | Multi-angle preview + float window + onboarding + QoL   | shipped   |
-| v0.9 | Robustness: autosave, Bevy feature trim, prefs, perf    | in flight |
+| v0.9 | Robustness: autosave + GUI polish + Bevy trim + prefs   | A + polish shipped; **B + C pending** |
+| v0.10 | AI texture MVP (mock → Fal → schema → preview → bake)  | A + B shipped; **C ready, D blocked on worker** |
 | v1.0 | Release candidate: docs, icon, smoke matrix, tag        | not yet   |
 
-See `v0.8-complete.md` §"What's still needed to reach v1.0" for the
-detailed rationale behind each post-v0.8 version theme.
+### v0.10 phase detail
 
-## Inline patches since v0.8 (not a full version bump)
+| Phase | Scope | Status |
+|---|---|---|
+| **A** | `texgen` lib module (trait, types, disk cache) + `MockProvider` (deterministic, offline) + `maquette-cli texture gen` | **shipped 2026-04-24** |
+| **B** | `RustymeProvider` (LPUSH `texture.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** (Maquette side); **sonargrid worker Stage 1** blocks `#TEX-B` end-to-end verification |
+| **C** | Project schema v4: per-project `model_description: String`; per-palette-slot `override_hint: Option<String>` + `texture: Option<TextureHandle>`; `TexturePrefs { view_mode, ignore_color_hint }`; serde forward / backward compat (`#[serde(default)]` on every new field, old `.maq` still opens); undo/redo covers `model_description` and `override_hint` edits as first-class edit events | **not yet — no worker dep, this is the next agent task** |
+| **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | not yet — **the user-experience milestone**; needs C + worker |
+| **D-2** | Per-slot `[regenerate]` + `[edit hint]` affordances in the palette list; re-uses D-1's single-task path (no group needed). Writes the new `override_hint` through the undo stack | not yet |
+| **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
+| **E** | glTF baking: per-palette material with `pbrMetallicRoughness.baseColorTexture`; single tile per slot, outline mesh kept compatible | not yet |
+| **F** | docs (`docs/texture/`) + `USER-TODO.md` validation block + provider switching guide | partial — protocol + worker roadmap shipped, user guide pending |
 
-- **2026-04-23 · Rust quality audit** — zero `unwrap` / `expect` /
-  `panic!` / `todo!` / `unimplemented!` / `unreachable!` in
-  production code. All I/O modules expose typed `thiserror` error
-  enums (`PaletteIoError`, `ProjectError`, `RenderError`,
-  `ExportError`). CLI `main` returns `ExitCode::from(1)` with a
-  friendly stderr on error. `#[allow(clippy::too_many_arguments)]`
-  usages are all justified (Bevy systems). Gap found & fixed below.
-- **2026-04-23 · Toast / notification system** (`src/notify.rs`).
-  Closed the silent-I/O-failure UX bug: save / open / save-as
-  errors in `session.rs` and export outcomes in `export.rs` now
-  surface as color-coded toasts in the top-right. `Toasts`
-  resource is GUI-only; the lib emits a new `ExportOutcome`
-  message (`maquette::export::ExportOutcome`) that the GUI
-  translates. Headless invariant preserved — CLI never depends on
-  `notify.rs`. `Toasts::{info, warning}` are public but unused;
-  marked `#[allow(dead_code)]` with a `v0.9+` comment (autosave
-  will consume them).
-- **2026-04-23 · App icon proposals** — four candidate PNGs
-  landed under `docs/icons/proposals/`. User picks one in
-  `USER-TODO.md #26`; agent then generates the full size-ladder
-  + `.icns` / `.ico` and wires into `Cargo.toml`.
-- **2026-04-23 · User verification checklist** —
-  `docs/handoff/USER-TODO.md` created. Single-file flat list of
-  every manual step (#1–#28) from v0.4 through v1.0 release,
-  grouped by version, each with time estimate and pass criterion.
-  This supersedes the "verification debt" sections below as the
-  canonical user-facing artifact; NEXT.md's list stays as the
-  agent-facing index.
+After D-1 ships we re-evaluate whether E gets pulled in before v1.0
+or deferred — D-1 alone is enough to *feel* whether AI textures
+speed up the iteration loop, which is the core validation the user
+wants.
 
-## v0.9 sub-tasks (ordered)
+## Outstanding work (agent, priority-ordered)
 
-- [x] **A** Autosave + crash recovery **(shipped 2026-04-23, see
-      `v0.9a-complete.md`)**. Sidecar `<path>.maq.swap` flushed on
-      stroke-committed + window-blur; recovery modal on File → Open
-      when swap mtime > project mtime; lib gains `swap_path` /
-      `swap_is_newer` / `write_swap` / `remove_swap` +
-      `EditHistory::strokes_committed` monotonic counter. 11 new
-      tests (project + history + cli). **Deferred to v0.9 C**:
-      untitled-project autosave (needs prefs dir) and startup
-      auto-recovery (needs last-opened-path persistence).
-- [ ] **B** Bevy feature trim. v0.7 gated the five extra GUI crates;
-      Bevy itself still compiles with its default feature set.
-      Audit `render / pbr / winit / animation / audio / gizmos /
-      scene / text / gltf` and disable what Maquette doesn't use.
-      Target: cold-build time drop ≥ 2 minutes, release binary
-      size < 25 MB. Record before / after in `v0.9-complete.md`.
-      *Risk*: a feature we disable turns out to be transitively
-      required by `bevy_egui` / `bevy_panorbit_camera` /
-      `bevy_mod_outline`. Ship feature-by-feature, CI each step.
-- [ ] **C** Preferences file. `~/.config/maquette/prefs.toml`
-      (platform-appropriate via `dirs`) persists
-      `MultiViewState.enabled`, `FloatPreviewState.floating`,
-      brush height, and the recent-files list. Reads on startup,
-      writes on quit. GUI-only; the CLI never touches it.
-- [ ] **D (stretch)** Perf pass. Profile a 32×32 canvas with
-      column heights up to 8: paint-to-preview latency, mesh
-      rebuild time, PIP render overhead. Budget: 60 fps on an
-      M1 base with multi-view on. Record hot paths. Optimise only
-      what's actually hot.
+### Now — start here next session
 
-## v0.9 decisions (agent to lock unless overruled)
+1. **v0.10 C — schema v4 + project plumbing**. No worker
+   dependency. Land the data model so D-1's GUI can be built on top.
+   Concretely:
+   * `project.rs` — bump schema to v4, add `model_description`,
+     `texture_prefs`, and per-`PaletteSlot` `override_hint` /
+     `texture` fields. Every new field `#[serde(default)]`.
+   * Add at least three regression tests: (a) v3 file loads as v4
+     with defaults, (b) v4 round-trips, (c) `EditHistory` records
+     `model_description` / `override_hint` edits as undoable events.
+   * `TextureHandle` = `{ cache_key: String, generated_at: i64 }` —
+     keep it small; the actual PNG bytes live in `~/.cache/maquette`,
+     resolved through `texgen::cache_get`.
+   * Decide whether to widen `EditEvent` enum or create a sibling
+     `MetaEditEvent` for non-grid edits (lean toward widening — one
+     undo stack is the user's mental model).
 
-- **Swap file location** = beside the `.maq`, suffix `.maq.swap`.
-  Not in a global cache dir — keeps "a project is a directory"
-  property, and the swap is visible to the user.
-- **Swap policy** = flush on stroke close + on window blur. Not
-  on every paint op (wasteful) and not on timer (surprising).
-- **Bevy feature gate** = audit via `cargo tree --features …` +
-  a sample build / click-test per toggle; ship a minimal set
-  named `gui` and a `gui-audio` etc. only if users actually ask.
-- **Prefs file format** = TOML. Small, human-editable, survives
-  a failed deserialise with a logged warning + default values.
-  Not JSON (overkill) and not RON (Bevy-idiomatic but less
-  inspectable by end users).
+### Blocked / external
+
+2. **`#TEX-B` end-to-end verification** — needs sonargrid Stage 1
+   Echo worker. Roadmap is in `docs/texture/rustyme-worker-roadmap.md`;
+   six-line acceptance command is in there too. Until that worker
+   exists, `RustymeProvider` is exercised only by its `--ignored`
+   live test.
+3. **v0.10 D-1** — gated by both #1 (schema) and #2 (worker). When
+   both are green, this is the next big milestone.
+4. **User validation pass** — `USER-TODO.md` has a stack of items
+   freshly to-hand: `#1c` shape cycle / `#1c-async` async export /
+   `#17b` PIP click / `#17c` PIP colour + axes / `#18` float pose
+   memory / `#19b` zoom buttons / `#20b` event-driven render /
+   `#21` autosave recovery / `#TEX-A` mock provider determinism /
+   `#TEX-B` (after worker ships).
+
+### Later — v0.9 closure
+
+5. **v0.9 B — Bevy feature trim**. v0.7 gated the five extra GUI
+   crates; Bevy itself still compiles with its default feature set.
+   Audit `render / pbr / winit / animation / audio / gizmos / scene
+   / text / gltf` and disable what Maquette doesn't use. Target:
+   cold-build time drop ≥ 2 minutes, release binary < 25 MB. Record
+   before / after in `v0.9-complete.md`. Risk: a feature we disable
+   turns out to be transitively required by `bevy_egui` /
+   `bevy_panorbit_camera` / `bevy_mod_outline`. Ship feature-by-
+   feature, CI each step.
+6. **v0.9 C — preferences file**. `~/.config/maquette/prefs.toml`
+   (platform-appropriate via `dirs`) persists
+   `MultiViewState.enabled`, `FloatPreviewState.floating`, brush
+   height, and the recent-files list. Reads on startup, writes on
+   quit. GUI-only; the CLI never touches it. **Also unlocks**:
+   untitled-project autosave (deferred from v0.9 A) and startup
+   auto-recovery via last-opened-path persistence.
+7. **v0.9 D (stretch) — perf pass**. Profile a 32×32 canvas with
+   column heights up to 8: paint-to-preview latency, mesh rebuild
+   time, PIP render overhead. Budget: 60 fps on an M1 base with
+   multi-view on. Record hot paths. Optimise only what's actually
+   hot.
+
+### Pre-v1.0 polish (after v0.9 + v0.10 close)
+
+8. **App icon final size ladder** — user picks one of the four
+   proposals in `docs/icons/proposals/`; agent generates `.icns`,
+   `.ico`, full PNG ladder, wires into `Cargo.toml`. (`USER-TODO.md
+   #26`.)
+9. **README + user-guide pass** (`USER-TODO.md #25`).
+10. **Smoke matrix** (`USER-TODO.md #27`) — macOS + Linux
+    minimum, Windows community.
+11. **Tag + push v1.0** (`USER-TODO.md #28`) — agent writes
+    CHANGELOG, user runs `git tag` / push.
 
 ## Locked decisions (carried forward)
 
@@ -113,189 +139,206 @@ detailed rationale behind each post-v0.8 version theme.
    tests without a window; every shippable operation has a CLI
    verb (or a documented reason why it's GUI-only interactive).
 6. **CLI surface** — `maquette-cli export / info / validate /
-   render / palette {export,import}` shipping. New verbs require an
-   entry in `COST_AWARENESS.md` and a matching integration test in
-   `tests/cli.rs`.
+   render / palette {export,import} / texture {gen,revoke,purge}`
+   shipping. New verbs require an entry in `COST_AWARENESS.md` and
+   a matching integration test in `tests/cli.rs`.
 7. **Palette is sparse** (v0.6) — deleting a color leaves its slot
    as `None` and future `add` reuses the hole. Project files are
-   schema v3; v1 / v2 files load automatically.
+   schema v3; v1 / v2 files load automatically. v4 is the next bump
+   (v0.10 C).
 8. **Meshing is greedy by default** (v0.6). Culled mesher retained
    as `build_color_buckets_culled` for regression tests only.
 9. **Palette portability format** (v0.7) — `colors.json`, schema v1,
    hex-string colors with `null` for deleted slots. See
-   `maquette/src/palette_io.rs` for the canonical shape.
-10. **Render projection** (v0.7) — isometric (yaw −45°, pitch
-    ≈ 35.264°), flat Lambert shading on a fixed camera-space light,
-    sRGB PNG. No outline baked into the preview PNG (engines see the
-    inverted-hull already; the CLI render is a shape sanity-check,
-    not a marketing shot).
+   `maquette/src/palette_io.rs`.
+10. **Render projection** (v0.7) — isometric (yaw −45°, pitch ≈
+    35.264°), flat Lambert shading, sRGB PNG. No outline baked into
+    the preview PNG.
 11. **GUI feature flag** (v0.7) — `gui` is a default feature; CI can
-    build the CLI with `--no-default-features --bin maquette-cli` to
-    skip `bevy_egui` / `bevy_panorbit_camera` / `bevy_infinite_grid`
-    / `bevy_mod_outline` / `rfd`. Trimming Bevy's *own* feature set
-    is the v0.9 follow-up (§A above).
+    build the CLI with `--no-default-features --bin maquette-cli`.
 12. **Multi-view preview = PIPs, not splitters** (v0.8). Three
-    orthographic (Top / Front / Side) picture-in-picture viewports
-    in the bottom-right corner, toggled by `View → Multi-view
-    Preview` or `F2`. Splittable quadrants were considered and
-    deferred — cost/value not justified before v1.0.
+    orthographic (Top / Front / Side) PIPs, toggled by `View →
+    Multi-view Preview` or `F2`.
 13. **Float preview window = parallel, not replacement** (v0.8).
-    Floating the preview *adds* a second OS window with its own
-    `PanOrbitCamera`; the main in-editor preview keeps rendering.
-    Closing the OS window docks. One floating window at a time.
-14. **Fit-to-Model shortcut = `F`** (v0.8). Frames the model
-    AABB without changing the orbit angle. `Cmd+R` still performs
-    a full reset. `F2` toggles multi-view PIPs.
-
-## Verification debt
-
-### Still owed from v0.4 (human)
-
-1. Paint at different brush heights; confirm vertical extrusion
-   matches expectations.
-2. End-to-end export validation: drop a `.glb` into Godot 4 /
-   Unity 6 (glTFast) / Blender 4 and confirm the flow in
-   `docs/export/*.md` is accurate.
-3. Export as `.gltf` (text) and confirm the sibling `.bin` is
-   next to it.
-
-### From v0.5 (install / sanity)
-
-4. `cargo install --path maquette` puts both `maquette` and
-   `maquette-cli` on your `$PATH`.
-5. `maquette-cli export foo.maq --out foo.glb` produces a file
-   that opens cleanly in your engine of choice.
-6. `maquette-cli info foo.maq --json | jq` works.
-7. `cargo test` passes on your machine (76+ tests).
-
-### From v0.6 (palette + stroke + greedy)
-
-8. Palette editor: right-click a swatch, edit the color, click
-   elsewhere → color persists. Restore unchanged via `.maq`
-   round-trip.
-9. Palette delete modal: paint a cell with a color, right-click
-   → Delete → confirm "Erase" mode, cell clears; paint again,
-   Delete → Remap to another color, cell updates.
-10. Palette "+" button adds a hue-shifted swatch and selects it
-    immediately. Shift-click / 1-9 shortcuts still map to the
-    nth *live* color, not the nth slot.
-11. Undo across a multi-cell drag rolls back the whole stroke,
-    not one cell.
-12. Export a moderately-sized fixture (say 16×16 flat slab) with
-    the GUI. File size should be noticeably smaller than a v0.5
-    export of the same canvas — greedy meshing win.
-
-### From v0.7 (render + palette CLI)
-
-13. `maquette-cli render <fixture>.maq --out preview.png --width
-    800 --height 600` produces a PNG that a human can open and
-    visually match against the in-app preview. Shading direction
-    is consistent (top brighter than +Z/-X sides).
-14. `cargo build --no-default-features --bin maquette-cli` succeeds
-    and produces a working CLI without `bevy_egui` / friends in the
-    dep tree.
-15. Cross-engine validation (deferred from v0.7 C): export a `.glb`
-    with the CLI, open in Godot 4 / Unity 6 / Blender 4, compare
-    geometry + colors + outline against the CLI-rendered PNG.
-    Archive screenshots under `docs/export/screenshots/` when done.
-16. Palette CLI: `maquette-cli palette export proj.maq --out
-    colors.json`, hand-edit a hex entry, `palette import proj.maq
-    --from colors.json --out proj2.maq`. Open `proj2.maq` in the
-    GUI; the edited color should be reflected in all painted cells
-    using that slot.
-
-### New in v0.8 (preview UX)
-
-17. **Multi-view preview**. Paint a recognisable column (e.g. a
-    3×3 L-shape) and confirm the Top PIP shows an L, the Front
-    PIP shows the column's height, and the Side PIP shows the
-    other profile. Toggle `F2` off and on; the PIPs hide / reappear
-    and retain their camera pose.
-18. **Float window**. Click `Float`; a second OS window opens at
-    the current camera pose. Orbit in the float window, close it
-    via the OS close button; the `Float` toggle flips off. Re-open
-    it; the new window opens at the last *floating* pose, not the
-    original docked pose (because docking copied it back).
-19. **Fit to Model**. Paint a single cell at one corner of a
-    32×32 canvas; press `F`. The preview reframes on the cell with
-    ~70% viewport fill. Press `Cmd+R`; the view resets to defaults.
-20. **Empty-state hint**. Start a new project; the hint panel is
-    centered on the canvas. Paint one cell; it vanishes. `Edit →
-    Clear Canvas`; it reappears.
+    Floating *adds* a second OS window; the main in-editor preview
+    keeps rendering. Closing the OS window docks. One floating
+    window at a time.
+14. **Fit-to-Model shortcut = `F`** (v0.8). Frames the model AABB
+    without changing orbit angle. `Cmd+R` is full reset. `F2`
+    toggles multi-view PIPs.
+15. **Block shape = enum on `Cell::shape`** (v0.9 polish). Right-
+    click cycles `Cube ↔ Sphere`; Sphere is a placeholder shape
+    rendered in the preview only — exporter / CPU rasterizer skip
+    it (documented in `mesher.rs`). When export learns spheres,
+    bump schema v4 → v5; until then a `.maq` with sphere cells
+    will export an "incomplete" mesh and the GUI surfaces a toast.
+16. **AI texture provider trait = sync** (v0.10 A). The GUI offloads
+    via `AsyncComputeTaskPool::spawn(async move { provider.generate(...) })`
+    so we never drag a tokio runtime through the lib. CLI calls
+    straight-line.
+17. **Texture cache key = SHA-256 over (prompt, seed, w, h, model)**
+    + a `b"maquette-texgen-v1\x00"` domain separator (v0.10 A).
+    Bumping the separator invalidates every cached texture; do that
+    only when the *meaning* of "request" changes, not when adding
+    optional fields with backward-compatible defaults.
+18. **Texture granularity = one seamless 128² tile per palette slot**,
+    not per cell (v0.10 design). Keeps prompt count = non-empty-slot
+    count (typically 2–6); keeps Fal bill and visual consistency
+    tight.
+19. **Palette colour serves dual purpose** (v0.10 design). It is
+    edit-layer primary data (Flat view always returns the painted
+    bytes, AI textures sit in a second layer on top), AND it feeds
+    the AI two ways: tone coordination hint (default ON, toggle via
+    `TexturePrefs::ignore_color_hint`) and partition signal (always
+    ON; same `color_idx` = same material = same tile).
+20. **Async export pipeline** (v0.9 polish). Save dialog uses
+    `rfd::AsyncFileDialog` (avoids macOS 26 NSSavePanel.runModal
+    deadlock under winit). Actual export runs on
+    `AsyncComputeTaskPool`; main thread shows a centered progress
+    modal and stays responsive. `ExportOutcome` message is the
+    sole channel from worker → GUI / CLI.
+21. **Event-driven rendering = `WinitSettings::desktop_app()`**
+    (v0.9 polish). Idle CPU ≈ 0% (Godot / Blender editor model).
+    Smooth animations (Fit / Reset / PIP click) work because
+    `camera::request_redraw_while_animating` pumps `RequestRedraw`
+    while `PanOrbitCamera` is still interpolating.
 
 ## Working notes (mutable scratchpad)
 
-- Cargo's unit-of-compilation is the crate. With default features,
+### Crate / build
+
+* Cargo's unit-of-compilation is the crate. With default features,
   both binaries compile the full Bevy tree. CLI-only builds skip
   the five GUI extensions (≈ 43 s saved on a cold build); trimming
-  Bevy's own default features (`render`, `pbr`, `winit`…) is the
-  outstanding v0.9 win — the measured cold-build gap above that is
-  Bevy compiling itself with `wgpu` / `naga` / etc.
-- The `[[bin]]` table in `Cargo.toml` pins `maquette` to
+  Bevy's own default features is the v0.9 B win.
+* The `[[bin]]` table in `Cargo.toml` pins `maquette` to
   `required-features = ["gui"]` so `cargo build --no-default-features`
-  only builds the CLI. `default-run = "maquette"` so
-  `cargo run` still launches the GUI.
-- `bevy_mod_outline` is bin-only. If any lib code ever needs
-  outline data (e.g. for a "bake outline into vertex color"
-  feature), it must live in the inverted-hull baker under
-  `export.rs`, not under `mesher.rs`.
-- `project::apply_to_grid_and_palette` exists specifically for the
+  only builds the CLI. `default-run = "maquette"` so `cargo run`
+  still launches the GUI.
+* `bevy_mod_outline` is bin-only. If lib code ever needs outline
+  data, it must live in the inverted-hull baker under `export.rs`,
+  not under `mesher.rs`.
+
+### Lib core
+
+* `project::apply_to_grid_and_palette` exists specifically for the
   GUI (mutates existing `ResMut` handles). CLI and tests use
   `project::read_project` which returns fresh `(Grid, Palette)`.
   Don't add a third load API without reading this note.
-- CLI integration tests shell out via `CARGO_BIN_EXE_maquette-cli`
-  — the env var Cargo injects at test-compile time.
-- `ExportPlugin` + `ExportRequest` remain in the lib. The GUI uses
-  the Message; the CLI calls `export::write` directly. Same
-  `ExportOptions` struct, so any new option reaches both surfaces.
-- Palette is sparse (`Vec<Option<Color>>`). Use `Palette::get(idx)`,
+* `ExportPlugin` + `ExportRequest` remain in the lib. The GUI uses
+  the Message; the CLI calls `export::write_with_options` directly.
+  Same `ExportOptions` struct, so any new option reaches both
+  surfaces.
+* Palette is sparse (`Vec<Option<Color>>`). Use `Palette::get(idx)`,
   `iter_live()`, `live_count()`, `add()`, `update()`, `delete()`.
-  Never index `palette.colors[i]` directly; slots can be `None`.
-- `EditHistory::begin_stroke` / `end_stroke` live under the GUI
+  Never index `palette.colors[i]` directly.
+* `EditHistory::begin_stroke` / `end_stroke` live under the GUI
   binary. The data structure itself is headless-tested.
-- Greedy meshing in `mesher.rs` is the shipping path.
+* `EditHistory::strokes_committed` is the autosave trigger
+  (monotonic counter, observed in `autosave.rs`). Anything that
+  mutates `Grid` / `Palette` outside the normal stroke flow must
+  call `EditHistory::record` to bump the counter, otherwise
+  autosave will only flush on next window-blur.
+* Greedy meshing in `mesher.rs` is the shipping path.
   `build_color_buckets_culled` stays as the regression oracle.
-- `render::rotate_iso` bakes an iso rotation (yaw −45°, pitch ≈
-  35.264°). "Greater z = closer" in rotated space. The rasterizer
-  uses an edge-function scanline loop with a depth buffer; no
-  mipmaps, no MSAA — flat-shade-only quads, so a single-sample
-  raster is perceptually equivalent to supersampled for the voxel
-  use case.
-- `palette_io` owns the `colors.json` schema. If a new palette
-  feature adds per-slot metadata (e.g. names, tags), bump the
-  schema version there and keep `read_palette_json` accepting the
-  old version as a subset.
-- **v0.8** GUI additions (`multiview.rs`, `float_window.rs`,
-  the Fit / Reset / Multi / Float toolbar, empty-state overlay)
-  all live in `src/` — none in the lib. `camera::painted_bbox` is
-  currently bin-local; promote to `maquette::geom::painted_bbox`
-  only if the CLI `render` grows a `--fit` flag.
-- **v0.8** `FloatPreviewState` spawns a `Window` + `Camera3d` with
+  Both are **strictly cube-only** — see `is_cube_voxel`. Sphere
+  cells go through `build_sphere_instances(grid)` and are GUI-only
+  preview entities (one `Sphere(0.5)` per column, scaled by
+  height). Exporter / CPU rasterizer skip sphere cells; v0.9 polish
+  surfaces a toast when an export emits zero geometry due to
+  sphere-only canvas.
+* `render::rotate_iso` bakes an iso rotation (yaw −45°, pitch ≈
+  35.264°). The rasterizer uses an edge-function scanline loop
+  with a depth buffer; no mipmaps, no MSAA — flat-shade quads only.
+* `palette_io` owns the `colors.json` schema. New per-slot metadata
+  must bump the schema version there and keep `read_palette_json`
+  accepting the old version as a subset.
+
+### GUI
+
+* v0.8 GUI additions (`multiview.rs`, `float_window.rs`, the
+  Fit / Reset / Multi / Float toolbar, empty-state overlay) all
+  live in `src/` — none in the lib. `camera::painted_bbox` is
+  bin-local; promote to `maquette::geom::painted_bbox` only if the
+  CLI `render` grows a `--fit` flag.
+* v0.8 `FloatPreviewState` spawns a `Window` + `Camera3d` with
   `RenderTarget::Window(WindowRef::Entity(...))` (Bevy 0.18 ships
-  this as a standalone component, not a field of `Camera`).
-  `WindowClosed` is the message that fires when the OS close is
-  clicked; don't confuse with `WindowCloseRequested`.
-- **v0.8** PIP cameras keep `is_active = false` on spawn and get
-  flipped by `apply_enabled`. Toggling via `MultiViewState` does
-  **not** despawn entities — cheap, and keeps camera transforms
-  stable across toggles.
-- **Toasts** (`src/notify.rs`, 2026-04-23 patch). New lib code that
-  wants to surface an end-user message should emit a `Message` in
-  the lib (see `ExportOutcome`) and add a consumer system in
-  `notify.rs` that translates it into `Toasts::{success, info,
-  warning, error}`. Do **not** take `ResMut<Toasts>` from lib code
-  — breaks the Headless Invariant. For GUI-only modules
-  (`session.rs`, `autosave.rs`), direct `ResMut<Toasts>` is fine.
-- **Autosave** (`src/autosave.rs`, v0.9 A). If any future feature
-  mutates `Grid` or `Palette` outside the normal paint flow, make
-  sure `EditHistory::record` is still called — autosave's trigger
-  is the stroke counter, not dirty-bit observation. Anything that
-  sets `CurrentProject::unsaved = true` without pushing a history
-  stroke will get saved on next window-blur but not on the
-  committing-tick, which is usually fine but worth knowing.
-- **Swap format** (`project.rs`, v0.9 A). The swap file is a plain
-  `.maq` under the hood — not compressed, not a journal, not a
-  binary diff. This is the contract the CLI tests pin. If a future
-  version needs a compact swap (larger projects, faster writes),
-  bump the constant or add a sibling `.maq.swap.v2` — don't silently
-  change the on-disk shape behind existing `read_project` readers.
+  this as a standalone component). `WindowClosed` is the message
+  that fires when the OS close button is clicked; don't confuse
+  with `WindowCloseRequested`. v0.9 polish: closing the float
+  window now copies its camera pose back to the docked camera, so
+  the user picks up where they left off.
+* PIP cameras keep `is_active = false` on spawn and get flipped by
+  `apply_enabled`. Toggling does not despawn entities — cheap, and
+  keeps camera transforms stable across toggles.
+* v0.9 polish: PIP click → main camera animates to that ortho
+  angle (yaw / pitch only, projection stays perspective). Border
+  colour codes the missing axis (Top = green, Front = blue, Side
+  = red). Each PIP draws a small tinted-disc compass in its top-
+  right corner.
+* `notify.rs` toasts are GUI-only. Lib code surfaces messages via
+  bus (see `ExportOutcome`). Don't take `ResMut<Toasts>` from lib
+  code — breaks the Headless Invariant.
+* `EguiGlobalSettings { auto_create_primary_context: false }` is
+  intentional. The primary egui context is explicitly attached to
+  `MainPreviewCamera` in `camera.rs`; without this guard a Startup-
+  ordering race lets a PIP camera grab it and the entire UI
+  collapses into a 180×180 square.
+* `WinitSettings::desktop_app()` is the editor render loop.
+  `camera::request_redraw_while_animating` pumps `RequestRedraw`
+  every frame while `PanOrbitCamera` is converging — without it,
+  Fit / Reset / PIP-click animations would step in single 5 s
+  heartbeat ticks.
+
+### v0.10 texgen
+
+* `texgen.rs` is in the lib (Headless Invariant). Trait is sync;
+  GUI offloads via `AsyncComputeTaskPool::spawn(async move { ... })`.
+* `MockProvider::MODEL_ID == "mock-v1"`. Bump only when the visual
+  output rule changes (it's part of the cache key).
+* `RustymeProvider` is sync Redis (`redis = "0.27"`, no tokio).
+  `task_id = uuid::v4`. Result list is `BRPOP rustyme:texgen:result`
+  with a configurable timeout; revoke / purge go through the admin
+  HTTP via `ureq`. Worker contract is frozen in
+  `docs/texture/rustyme.md` — do not change payload shape without
+  versioning the queue name.
+* The disk cache (`default_cache_dir()`) honours `XDG_CACHE_HOME`
+  first, then `$HOME/.cache/maquette/textures/`. Filenames are
+  `<cache_key>.png` where `cache_key` is the 64-char SHA-256 from
+  `TextureRequest::cache_key`. Same prompt + seed + model + size
+  → same file → `texgen: cache hit` log line, no provider call.
+
+### Async export
+
+* `export_dialog.rs` (GUI-only) wraps `rfd::AsyncFileDialog`
+  through `AsyncComputeTaskPool`. Polled every frame via
+  `future::poll_once` + a per-frame `RequestRedraw` (otherwise the
+  reactive event loop's 5 s heartbeat would stall the dialog). The
+  rest of the pipeline is unchanged from v0.8.
+* Concurrency guard: `ExportInFlight` resource. The File menu's
+  `Export…` greys to `Export… (running)` while it's set; redundant
+  `ExportRequest` events are dropped with an `export: ignoring
+  request` log line.
+
+### Swap / autosave (v0.9 A)
+
+* The swap file is a plain `.maq` under the hood — not compressed,
+  not a journal. Pinned by CLI tests
+  (`cli_reads_swap_file_like_a_regular_project`,
+  `cli_export_ignores_sibling_swap_file`). If a future version
+  needs a compact swap, bump the constant or add a sibling
+  `.maq.swap.v2`; don't silently change the on-disk shape.
+* Untitled-project autosave is **explicitly deferred** to v0.9 C.
+  The reason is the path: with no parent `.maq` file there's no
+  natural location for the swap, and a global cache dir needs
+  `dirs` (which v0.9 C will pull in for prefs anyway).
+
+## How to find things
+
+* User-facing manual verification → `docs/handoff/USER-TODO.md`.
+* Per-version delivery notes → `docs/handoff/v0.X-complete.md`.
+* AI texture wire protocol → `docs/texture/rustyme.md`.
+* sonargrid worker implementation roadmap →
+  `docs/texture/rustyme-worker-roadmap.md`.
+* Cost / billing awareness for new CLI verbs →
+  `docs/handoff/COST_AWARENESS.md`.

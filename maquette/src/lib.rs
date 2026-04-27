@@ -31,3 +31,4 @@ pub mod mesher;
 pub mod palette_io;
 pub mod project;
 pub mod render;
+pub mod texgen;

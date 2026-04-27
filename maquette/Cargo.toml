@@ -72,6 +72,28 @@ clap = { version = "4", features = ["derive"] }
 # call the encoder and a decoder in tests.
 png = "0.18"
 
+# Stable hash for texture cache keys (prompt + seed + model → disk
+# file name). `DefaultHasher` is tempting but explicitly "not stable
+# across compiler versions" per the std docs, which would silently
+# invalidate on-disk caches every Rust upgrade. `sha2` is pure Rust,
+# zero runtime deps, and already in the ecosystem's hot set.
+sha2 = "0.10"
+
+# Texture-generation Rustyme (sonargrid) producer.
+# * redis: sync LPUSH the TaskEnvelope, BRPOP the result list.
+#   We use sync on purpose — the provider trait is sync and the GUI
+#   offloads to `AsyncComputeTaskPool::spawn(async move { ... })`,
+#   so dragging in tokio for Redis calls wins nothing.
+# * base64: result payload carries PNG bytes as base64 so one Redis
+#   message can convey the whole image (~50 KB PNG → 67 KB base64,
+#   well under Redis's 512 MB value cap).
+# * uuid: TaskEnvelope.id is a UUID v4 string per Rustyme protocol.
+# * ureq: admin revoke/purge HTTP. ureq is sync, tiny, rustls-based.
+redis = "0.27"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
 [dev-dependencies]
 # Real glTF parser, used only in tests to make sure the files we emit
 # survive a round trip through a canonical reader. Catches spec

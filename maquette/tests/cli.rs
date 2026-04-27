@@ -503,3 +503,225 @@ fn cli_export_ignores_sibling_swap_file() {
          swap's raw vertex count would be {sixteen_cell_vertices}"
     );
 }
+
+// ---------------------------------------------------------------------
+// `maquette-cli texture gen` (v0.10 A — Mock provider only)
+// ---------------------------------------------------------------------
+
+/// Same prompt + same seed = byte-identical PNG. This is the
+/// foundation of the disk cache and of the GUI's "tweak prompt
+/// without re-spending money" loop, so we want a regression here
+/// even though the underlying unit tests already cover it — the
+/// CLI argument plumbing is its own failure surface.
+#[test]
+fn cli_texture_gen_mock_is_deterministic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.png");
+    let b = tmp.path().join("b.png");
+
+    // Use --no-cache so the second run actually re-generates rather
+    // than serving from cache; that way we're really asserting on
+    // provider determinism, not on cache plumbing.
+    for out in [&a, &b] {
+        let status = Command::new(cli_bin())
+            .arg("texture")
+            .arg("gen")
+            .arg("--prompt")
+            .arg("isometric stone tile, low-poly")
+            .arg("--seed")
+            .arg("12345")
+            .arg("--width")
+            .arg("32")
+            .arg("--height")
+            .arg("32")
+            .arg("--no-cache")
+            .arg("--out")
+            .arg(out)
+            .status()
+            .expect("failed to invoke maquette-cli texture gen");
+        assert!(status.success(), "texture gen failed for {}", out.display());
+    }
+
+    let bytes_a = std::fs::read(&a).unwrap();
+    let bytes_b = std::fs::read(&b).unwrap();
+    assert!(!bytes_a.is_empty(), "PNG should be non-empty");
+    assert_eq!(
+        bytes_a, bytes_b,
+        "Mock provider must be deterministic for identical requests"
+    );
+
+    // Sanity: actually a PNG header.
+    assert_eq!(&bytes_a[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+}
+
+/// Different prompt → different bytes. Catches the "we accidentally
+/// wired prompt to a no-op argument" class of bug.
+#[test]
+fn cli_texture_gen_diverges_on_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stone = tmp.path().join("stone.png");
+    let grass = tmp.path().join("grass.png");
+
+    for (prompt, out) in [("stone tile", &stone), ("grass tile", &grass)] {
+        let status = Command::new(cli_bin())
+            .arg("texture")
+            .arg("gen")
+            .arg("--prompt")
+            .arg(prompt)
+            .arg("--seed")
+            .arg("0")
+            .arg("--width")
+            .arg("32")
+            .arg("--height")
+            .arg("32")
+            .arg("--no-cache")
+            .arg("--out")
+            .arg(out)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    assert_ne!(
+        std::fs::read(&stone).unwrap(),
+        std::fs::read(&grass).unwrap(),
+        "different prompts must yield different PNG bytes"
+    );
+}
+
+/// The disk cache must be re-entrant: a second run with the same
+/// request and the cache enabled has to produce the same PNG and
+/// must not re-invoke the provider. Phase A doesn't bill, so we
+/// can't observe billing; but we can at least observe identical
+/// output files (and on a future Fal provider this same test
+/// becomes "second run is free").
+#[test]
+fn cli_texture_gen_cache_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    let out1 = tmp.path().join("first.png");
+    let out2 = tmp.path().join("second.png");
+
+    // Point the cache at a tempdir via XDG_CACHE_HOME so we don't
+    // touch the user's real ~/.cache during testing.
+    let run = |out: &Path| {
+        let status = Command::new(cli_bin())
+            .env("XDG_CACHE_HOME", &cache)
+            .arg("texture")
+            .arg("gen")
+            .arg("--prompt")
+            .arg("dirt block")
+            .arg("--seed")
+            .arg("99")
+            .arg("--width")
+            .arg("32")
+            .arg("--height")
+            .arg("32")
+            .arg("--out")
+            .arg(out)
+            .status()
+            .unwrap();
+        assert!(status.success(), "texture gen failed");
+    };
+
+    run(&out1);
+    run(&out2);
+
+    assert_eq!(
+        std::fs::read(&out1).unwrap(),
+        std::fs::read(&out2).unwrap(),
+        "cached re-run must produce identical bytes"
+    );
+    let cached_textures = cache.join("maquette").join("textures");
+    assert!(
+        cached_textures.exists(),
+        "cache directory should be created at {}",
+        cached_textures.display()
+    );
+    let entries: Vec<_> = std::fs::read_dir(&cached_textures)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "cache should have exactly one entry (one unique request), got {entries:?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// `maquette-cli texture {revoke,purge}` (v0.10 B — Rustyme producer)
+// ---------------------------------------------------------------------
+
+/// Without `--admin-url` and without the fallback env var, `revoke`
+/// must fail fast with an actionable message, not try to talk to
+/// some default URL. This is the contract users rely on when they
+/// typo the flag name.
+#[test]
+fn cli_texture_revoke_requires_admin_url() {
+    let out = Command::new(cli_bin())
+        .env_remove("MAQUETTE_RUSTYME_ADMIN_URL")
+        .args(["texture", "revoke", "00000000-0000-0000-0000-000000000000"])
+        .output()
+        .expect("failed to spawn");
+    assert!(
+        !out.status.success(),
+        "revoke without admin url must exit non-zero, got {out:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--admin-url") && stderr.contains("MAQUETTE_RUSTYME_ADMIN_URL"),
+        "stderr should point the user at both the flag and the env var, got: {stderr}"
+    );
+}
+
+/// Same contract for `purge` — a typo here otherwise silently
+/// talks to nothing useful.
+#[test]
+fn cli_texture_purge_requires_admin_url() {
+    let out = Command::new(cli_bin())
+        .env_remove("MAQUETTE_RUSTYME_ADMIN_URL")
+        .args(["texture", "purge", "texgen"])
+        .output()
+        .expect("failed to spawn");
+    assert!(
+        !out.status.success(),
+        "purge without admin url must exit non-zero, got {out:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--admin-url") && stderr.contains("MAQUETTE_RUSTYME_ADMIN_URL"),
+        "stderr should point the user at both the flag and the env var, got: {stderr}"
+    );
+}
+
+/// Selecting `--provider rustyme` without `MAQUETTE_RUSTYME_REDIS_URL`
+/// must fail with an actionable error pointing at the docs; otherwise
+/// the user sees an opaque "redis connect" error that looks like a
+/// network problem.
+#[test]
+fn cli_texture_gen_rustyme_requires_redis_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out_path = tmp.path().join("x.png");
+    let output = Command::new(cli_bin())
+        .env_remove("MAQUETTE_RUSTYME_REDIS_URL")
+        .args([
+            "texture", "gen",
+            "--provider", "rustyme",
+            "--prompt", "stone",
+            "--no-cache",
+            "--out",
+        ])
+        .arg(&out_path)
+        .output()
+        .expect("failed to spawn");
+    assert!(
+        !output.status.success(),
+        "rustyme provider without redis url must error out"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MAQUETTE_RUSTYME_REDIS_URL"),
+        "stderr should name the missing env var, got: {stderr}"
+    );
+}

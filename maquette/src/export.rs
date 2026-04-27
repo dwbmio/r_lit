@@ -42,8 +42,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use bevy::prelude::*;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::window::RequestRedraw;
 use serde::Serialize;
 
 use crate::grid::{Grid, Palette, CELL_SIZE};
@@ -97,7 +100,18 @@ impl Default for OutlineConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
-    #[error("the project is empty — paint at least one cell before exporting")]
+    /// Every painted cell was filtered out before mesh generation —
+    /// either the canvas is truly blank, or the user only painted
+    /// shapes the current exporter doesn't yet handle (Sphere cells
+    /// are skipped in v0.9; see `docs/handoff/USER-TODO.md` #1c).
+    /// Distinguishing the two cases in the message is important
+    /// because the second one looks like a bug to a user who's
+    /// clearly painted things.
+    #[error(
+        "no exportable geometry — paint at least one Cube cell before exporting \
+         (v0.9: Sphere cells are a placeholder and are not yet written to the \
+         exported model)"
+    )]
     Empty,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -111,7 +125,16 @@ impl Plugin for ExportPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ExportRequest>()
             .add_message::<ExportOutcome>()
-            .add_systems(Update, handle_export_request);
+            .init_resource::<ExportInProgress>()
+            .add_systems(
+                Update,
+                (
+                    spawn_export_task,
+                    poll_export_task,
+                    pump_export_redraws,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -126,27 +149,179 @@ pub enum ExportOutcome {
     Failure { message: String },
 }
 
-fn handle_export_request(
+/// Live export state. Present (`Some`) while a task is running on the
+/// async compute pool; the GUI reads this to draw a progress modal
+/// and the menu uses it to disable "Export…" during an in-flight
+/// write.
+///
+/// We deliberately only allow one export at a time — concurrent
+/// exports would need request queueing and more modal UX to present
+/// clearly, and there's no realistic user flow that benefits from
+/// firing two in parallel.
+#[derive(Resource, Default)]
+pub struct ExportInProgress {
+    job: Option<ExportJob>,
+}
+
+impl ExportInProgress {
+    /// Is an export currently running? Exposed for `ui.rs` so the
+    /// menu can show "Export… (in progress)" and the progress modal
+    /// can render itself.
+    pub fn is_running(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Path the running export is writing to, for the progress modal
+    /// label. `None` = no export running.
+    pub fn current_path(&self) -> Option<&Path> {
+        self.job.as_ref().map(|j| j.path.as_path())
+    }
+
+    /// Human-readable "running for 1.2s" string, updated each frame
+    /// the progress modal polls it. Surfaced in the modal so the user
+    /// can tell at a glance whether it's progressing or wedged.
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.job
+            .as_ref()
+            .map(|j| j.started.elapsed())
+            .unwrap_or_default()
+    }
+}
+
+struct ExportJob {
+    task: Task<Result<(), ExportError>>,
+    path: PathBuf,
+    started: Instant,
+}
+
+/// Drain `ExportRequest`s: snapshot Grid + Palette, hand off to the
+/// async compute pool. Returns immediately; `poll_export_task` picks
+/// up the result on a later frame.
+///
+/// We reject a new request while one is already running; a concurrent
+/// export isn't useful and the UI already disables the menu item, so
+/// this is just a last-line guard.
+fn spawn_export_task(
     mut events: MessageReader<ExportRequest>,
     grid: Res<Grid>,
     palette: Res<Palette>,
-    mut outcomes: MessageWriter<ExportOutcome>,
+    mut in_progress: ResMut<ExportInProgress>,
+    mut redraw: MessageWriter<RequestRedraw>,
 ) {
-    for ExportRequest(opts) in events.read() {
-        match write(&grid, &palette, opts) {
-            Ok(()) => {
-                log::info!("exported to {}", opts.path.display());
-                outcomes.write(ExportOutcome::Success {
-                    path: opts.path.clone(),
-                });
-            }
-            Err(e) => {
-                log::error!("export failed: {e}");
-                outcomes.write(ExportOutcome::Failure {
-                    message: format!("{e}"),
-                });
-            }
+    let mut reqs = events.read();
+    let Some(ExportRequest(opts)) = reqs.next() else {
+        return;
+    };
+
+    if in_progress.job.is_some() {
+        // Extra requests while a job runs are silently dropped with a
+        // log line + ignored-message drain below. Anything more
+        // nuanced (queue N exports, cancel the running one, etc.)
+        // would need UI affordances we don't yet want to carry.
+        log::warn!(
+            "export: ignoring request for {} — another export is already running",
+            opts.path.display(),
+        );
+        for _ in reqs {}
+        return;
+    }
+
+    log::info!(
+        "export: starting {} ({:?}, outline={})",
+        opts.path.display(),
+        opts.format,
+        opts.outline.enabled,
+    );
+
+    // Snapshot the document. `Grid` clones its `Vec<Cell>` (one u8 +
+    // small struct per cell; a 128×128 canvas is ~16K cells ≈ 256 KiB)
+    // and `Palette` clones a short `Vec<Option<Color>>`. This stays
+    // cheap even for maxed-out canvases and gives the task a stable
+    // snapshot so further user edits during the export don't corrupt
+    // the output mid-write.
+    let grid_snapshot = grid.clone();
+    let palette_snapshot = palette.clone();
+    let opts_snapshot = opts.clone();
+    let path = opts.path.clone();
+
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        write(&grid_snapshot, &palette_snapshot, &opts_snapshot)
+    });
+
+    in_progress.job = Some(ExportJob {
+        task,
+        path,
+        started: Instant::now(),
+    });
+
+    // Kick a redraw so the progress modal renders on the very next
+    // frame rather than after the 5 s reactive heartbeat.
+    redraw.write(RequestRedraw);
+
+    // Flush the rest of the queue so we don't spin on stale requests
+    // next frame.
+    if reqs.next().is_some() {
+        log::warn!("export: extra ExportRequest events coalesced into the current job");
+        for _ in reqs {}
+    }
+}
+
+/// Check whether the spawned export task has finished. Non-blocking:
+/// `future::poll_once` returns immediately whether the task is ready
+/// or not, so this runs every frame without hitching the main loop.
+fn poll_export_task(
+    mut in_progress: ResMut<ExportInProgress>,
+    mut outcomes: MessageWriter<ExportOutcome>,
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    let Some(job) = in_progress.job.as_mut() else {
+        return;
+    };
+    let Some(result) = block_on(future::poll_once(&mut job.task)) else {
+        return;
+    };
+
+    let elapsed = job.started.elapsed();
+    let path = job.path.clone();
+    in_progress.job = None;
+
+    match result {
+        Ok(()) => {
+            log::info!("export: wrote {} in {:.2?}", path.display(), elapsed);
+            outcomes.write(ExportOutcome::Success { path });
         }
+        Err(e) => {
+            log::error!(
+                "export: failed writing {} after {:.2?}: {e}",
+                path.display(),
+                elapsed,
+            );
+            outcomes.write(ExportOutcome::Failure {
+                message: format!("{e}"),
+            });
+        }
+    }
+
+    // Force one more frame so the progress modal dismisses and the
+    // toast/title changes driven by `ExportOutcome` actually reach
+    // the user under `Reactive(5s)`.
+    redraw.write(RequestRedraw);
+}
+
+/// Spinner + elapsed-time counter need a new frame every tick, but
+/// `WinitSettings::desktop_app()` doesn't tick idle. Fire a
+/// `RequestRedraw` each frame while an export is running so the
+/// modal animates smoothly and the poll above runs at full pace.
+///
+/// The cost is "one extra frame per ms until the export finishes",
+/// which matches what `request_redraw_while_animating` already does
+/// for camera interpolation — i.e. it's well-worn territory.
+fn pump_export_redraws(
+    in_progress: Res<ExportInProgress>,
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    if in_progress.is_running() {
+        redraw.write(RequestRedraw);
     }
 }
 

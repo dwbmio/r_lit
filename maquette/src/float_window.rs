@@ -43,7 +43,12 @@ impl Plugin for FloatWindowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FloatPreviewState>().add_systems(
             Update,
-            (apply_float_state, handle_float_window_closed).chain(),
+            (
+                handle_float_window_closed,
+                sync_orphaned_float_state,
+                apply_float_state,
+            )
+                .chain(),
         );
     }
 }
@@ -135,12 +140,20 @@ fn apply_float_state(
 /// stuck `true` even though no window exists, and the next toggle
 /// would attempt to re-dock nothing.
 ///
-/// We also guard against the primary window closing: if the user
-/// closes the main window the app should exit normally (Bevy's
-/// default behavior). We only react to our own floating window.
+/// Implementation notes:
+/// * We **don't** query `With<FloatPreviewWindow>` against the
+///   closed entity — Bevy may despawn the window entity before or
+///   after dispatching `WindowClosed` depending on the winit /
+///   platform path, so the query can miss. Instead we reason by
+///   exclusion: any non-primary window closing in this app is the
+///   float preview, because we only ever spawn one secondary
+///   window.
+/// * As belt-and-suspenders, `sync_orphaned_float_state` below
+///   catches any case where `WindowClosed` never fires (e.g. a
+///   crash in the window backend) by checking every frame whether
+///   `floating = true` matches the presence of an entity.
 fn handle_float_window_closed(
     mut events: MessageReader<WindowClosed>,
-    float_windows: Query<(), With<FloatPreviewWindow>>,
     primary: Query<Entity, With<PrimaryWindow>>,
     mut state: ResMut<FloatPreviewState>,
 ) {
@@ -149,9 +162,21 @@ fn handle_float_window_closed(
         if Some(ev.window) == primary_entity {
             continue;
         }
-        if float_windows.contains(ev.window) {
-            state.floating = false;
-        }
+        state.floating = false;
+    }
+}
+
+/// Defensive resync: if `state.floating == true` but no float-
+/// preview window entity exists (e.g. the OS killed the window
+/// without us seeing a `WindowClosed`), flip the state so the UI
+/// "Float" toggle stops claiming the window is up. Cheap: a
+/// single `is_empty()` query per frame.
+fn sync_orphaned_float_state(
+    mut state: ResMut<FloatPreviewState>,
+    float_windows: Query<(), With<FloatPreviewWindow>>,
+) {
+    if state.floating && float_windows.is_empty() {
+        state.floating = false;
     }
 }
 

@@ -27,6 +27,10 @@ use maquette::grid::{Grid, Palette};
 use maquette::palette_io;
 use maquette::project;
 use maquette::render::{self, RenderOptions};
+use maquette::texgen::{
+    self, MockProvider, TextureProvider, TextureRequest,
+    rustyme::{RustymeConfig, RustymeProvider},
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -56,6 +60,94 @@ enum Command {
     Render(RenderArgs),
     /// Share palettes across projects as `colors.json` documents.
     Palette(PaletteArgs),
+    /// Generate textures from prompts. Providers: `mock` (offline
+    /// deterministic noise) and `rustyme` (fan-out through a
+    /// sonargrid cluster — worker contract in
+    /// `docs/texture/rustyme.md`).
+    Texture(TextureArgs),
+}
+
+#[derive(Parser, Debug)]
+struct TextureArgs {
+    #[command(subcommand)]
+    action: TextureAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum TextureAction {
+    /// Generate one texture and write it as a PNG. Uses the disk
+    /// cache by default — re-running the same prompt+seed is free.
+    Gen(TextureGenArgs),
+    /// Cancel an in-flight Rustyme task by id. Best-effort; races
+    /// with the worker picking it up — Rustyme only guarantees
+    /// removal from the pending queue.
+    Revoke(TextureRevokeArgs),
+    /// Flush every pending task from a Rustyme queue. Use only when
+    /// recovering from a stuck worker fleet; in-flight tasks are
+    /// untouched.
+    Purge(TexturePurgeArgs),
+}
+
+#[derive(Parser, Debug)]
+struct TextureGenArgs {
+    /// Free-form prompt. Provider-specific phrasing
+    /// ("isometric block tile, low-poly minecraft style, …") is up
+    /// to the caller — the CLI passes the string through verbatim.
+    #[arg(long)]
+    prompt: String,
+    /// Output PNG path.
+    #[arg(short, long)]
+    out: PathBuf,
+    /// Texture provider. `mock` is offline + deterministic; `rustyme`
+    /// routes through the sonargrid task queue (see docs/texture/
+    /// rustyme.md for the worker contract).
+    #[arg(long, value_enum, default_value_t = ProviderArg::Mock)]
+    provider: ProviderArg,
+    /// Seed for the underlying RNG / diffusion model. Same prompt
+    /// + same seed + same provider = byte-identical bytes.
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
+    /// Output width in pixels.
+    #[arg(long, default_value_t = 128)]
+    width: u32,
+    /// Output height in pixels.
+    #[arg(long, default_value_t = 128)]
+    height: u32,
+    /// Skip the on-disk cache lookup and store. Use when comparing
+    /// providers / debugging output drift; in normal use the cache
+    /// is what makes iterative prompt tuning cheap.
+    #[arg(long, default_value_t = false)]
+    no_cache: bool,
+}
+
+#[derive(Parser, Debug)]
+struct TextureRevokeArgs {
+    /// Rustyme task id (UUID v4) to cancel.
+    task_id: String,
+    /// Rustyme Admin HTTP base URL, e.g. `http://localhost:12121`.
+    /// Falls back to `MAQUETTE_RUSTYME_ADMIN_URL` when unset.
+    #[arg(long)]
+    admin_url: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+struct TexturePurgeArgs {
+    /// Logical queue name as Rustyme knows it (not the Redis LPUSH
+    /// key). Typical value: `texgen`.
+    queue: String,
+    /// Rustyme Admin HTTP base URL. Falls back to
+    /// `MAQUETTE_RUSTYME_ADMIN_URL` when unset.
+    #[arg(long)]
+    admin_url: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum ProviderArg {
+    /// Offline, deterministic, free. Great for tests + bootstrap.
+    Mock,
+    /// Fan-out through Rustyme/sonargrid. Requires `MAQUETTE_RUSTYME_*`
+    /// env vars or a running cluster — see `docs/texture/rustyme.md`.
+    Rustyme,
 }
 
 #[derive(Parser, Debug)]
@@ -192,7 +284,85 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             PaletteAction::Export(a) => cmd_palette_export(a),
             PaletteAction::Import(a) => cmd_palette_import(a),
         },
+        Command::Texture(args) => match args.action {
+            TextureAction::Gen(a) => cmd_texture_gen(a),
+            TextureAction::Revoke(a) => cmd_texture_revoke(a),
+            TextureAction::Purge(a) => cmd_texture_purge(a),
+        },
     }
+}
+
+fn cmd_texture_gen(args: TextureGenArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let provider: Box<dyn TextureProvider> = match args.provider {
+        ProviderArg::Mock => Box::new(MockProvider),
+        ProviderArg::Rustyme => {
+            let cfg = RustymeConfig::from_env().ok_or(
+                "rustyme provider selected but MAQUETTE_RUSTYME_REDIS_URL is not set. \
+                 See docs/texture/rustyme.md for the full env-var list.",
+            )?;
+            Box::new(RustymeProvider::new(cfg))
+        }
+    };
+    // Upstream model id — the Mock provider has a fixed one; for
+    // Rustyme we let the caller pick via `MAQUETTE_RUSTYME_MODEL`
+    // so cache entries don't collide when the worker fleet swaps
+    // backends (fal-ai/flux/schnell → replicate/sdxl → …).
+    let model_id = match args.provider {
+        ProviderArg::Mock => MockProvider::MODEL_ID.to_string(),
+        ProviderArg::Rustyme => std::env::var("MAQUETTE_RUSTYME_MODEL")
+            .unwrap_or_else(|_| "rustyme:texture.gen".to_string()),
+    };
+    let request = TextureRequest::new(
+        args.prompt,
+        args.seed,
+        args.width,
+        args.height,
+        model_id,
+    );
+    let cache_dir = if args.no_cache {
+        None
+    } else {
+        texgen::default_cache_dir()
+    };
+    let bytes = texgen::generate_cached(provider.as_ref(), &request, cache_dir.as_deref())?;
+    if let Some(parent) = args.out.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(&args.out, bytes.as_slice())?;
+    println!(
+        "wrote {} ({} bytes, provider={}, cache_key={})",
+        args.out.display(),
+        bytes.len(),
+        provider.name(),
+        request.cache_key(),
+    );
+    Ok(())
+}
+
+fn resolve_admin_url(cli_arg: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+    cli_arg
+        .or_else(|| std::env::var("MAQUETTE_RUSTYME_ADMIN_URL").ok())
+        .ok_or_else(|| {
+            "Rustyme admin URL missing. Pass --admin-url or set \
+             MAQUETTE_RUSTYME_ADMIN_URL (e.g. http://localhost:12121)."
+                .into()
+        })
+}
+
+fn cmd_texture_revoke(args: TextureRevokeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let admin = resolve_admin_url(args.admin_url)?;
+    let body = texgen::rustyme::revoke(&admin, &args.task_id)?;
+    println!("revoked task {} — admin response: {body}", args.task_id);
+    Ok(())
+}
+
+fn cmd_texture_purge(args: TexturePurgeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let admin = resolve_admin_url(args.admin_url)?;
+    let body = texgen::rustyme::purge_queue(&admin, &args.queue)?;
+    println!("purged queue {} — admin response: {body}", args.queue);
+    Ok(())
 }
 
 fn cmd_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {

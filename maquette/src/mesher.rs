@@ -40,7 +40,61 @@
 //! its own quad instead of merging into alternating strips, but the
 //! render / export model stays dead simple.
 
-use crate::grid::{Cell, Grid, CELL_SIZE};
+use crate::grid::{Cell, Grid, ShapeKind, CELL_SIZE};
+
+/// One sphere instance to render in the preview. v0.9 A introduced
+/// per-cell shapes as a right-click cycle gesture, with `Sphere` as
+/// the only non-cube placeholder. The exporter **does not** emit
+/// sphere geometry yet (see `build_color_buckets` for the cube
+/// path); the GUI-side `preview_mesh` consumes this list to spawn
+/// one scaled sphere entity per column.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SphereInstance {
+    /// World-space X centre (accounting for the grid-centre offset
+    /// callers already apply to cube positions).
+    pub grid_x: usize,
+    pub grid_z: usize,
+    /// Column height in cells. The sphere is stretched vertically
+    /// to fill a `1 × height × 1` bounding box (so a height-3
+    /// column reads as a tall pill, not a squashed ball).
+    pub height: u8,
+    pub color_idx: u8,
+}
+
+/// Collect every painted cell whose shape is `Sphere`. Used only by
+/// the GUI preview; exporter / CPU rasterizer skip spheres until
+/// the toolchain supports non-cube geometry end-to-end.
+pub fn build_sphere_instances(grid: &Grid) -> Vec<SphereInstance> {
+    let mut out = Vec::new();
+    for z in 0..grid.h {
+        for x in 0..grid.w {
+            let Some(cell) = grid.get(x, z) else { continue };
+            if !matches!(cell.shape, ShapeKind::Sphere) {
+                continue;
+            }
+            let Some(color_idx) = cell.color_idx else {
+                continue;
+            };
+            out.push(SphereInstance {
+                grid_x: x,
+                grid_z: z,
+                height: height_of(cell),
+                color_idx,
+            });
+        }
+    }
+    out
+}
+
+/// A cell counts as a "cube voxel" for the mesher iff it's painted
+/// **and** its shape is `Cube`. All other shapes are intentionally
+/// invisible to the greedy / culled meshers — they get rendered by
+/// specialised paths (e.g. [`build_sphere_instances`]). Keeping
+/// this predicate in one place makes it impossible for the two
+/// shape code paths to disagree about cell ownership.
+fn is_cube_voxel(cell: &Cell) -> bool {
+    cell.color_idx.is_some() && matches!(cell.shape, ShapeKind::Cube)
+}
 
 /// Default builder — greedy rectangle meshing. Use this for all
 /// shipping code paths; the surface it produces is equivalent to
@@ -70,6 +124,9 @@ pub fn build_color_buckets_culled(grid: &Grid) -> Vec<(u8, MeshBuilder)> {
             let Some(cell) = grid.get(x, z) else {
                 continue;
             };
+            if !is_cube_voxel(cell) {
+                continue;
+            }
             let Some(ci) = cell.color_idx else { continue };
             let h = height_of(cell) as i32;
 
@@ -117,7 +174,11 @@ fn height_of(cell: &Cell) -> u8 {
 fn max_column_height(grid: &Grid) -> usize {
     let mut m = 0;
     for cell in &grid.cells {
-        if cell.color_idx.is_some() {
+        // Sphere cells don't participate in cube meshing, so their
+        // height must not extend the cube-mesher's slab walk —
+        // otherwise we'd iterate empty Y planes and slow the
+        // builder down for no output.
+        if is_cube_voxel(cell) {
             let h = height_of(cell) as usize;
             if h > m {
                 m = h;
@@ -139,6 +200,9 @@ fn voxel_color(grid: &Grid, x: i64, y: i64, z: i64) -> Option<u8> {
         return None;
     }
     let cell = grid.get(x as usize, z as usize)?;
+    if !is_cube_voxel(cell) {
+        return None;
+    }
     let ci = cell.color_idx?;
     if (y as usize) >= height_of(cell) as usize {
         return None;
@@ -165,7 +229,7 @@ fn neighbor_filled(grid: &Grid, x: i32, y: i32, z: i32, face: u8) -> bool {
     let Some(cell) = grid.get(nxu, nzu) else {
         return false;
     };
-    if cell.color_idx.is_none() {
+    if !is_cube_voxel(cell) {
         return false;
     }
     (ny as u8) < height_of(cell)
@@ -758,5 +822,57 @@ mod tests {
         let greedy = build_color_buckets(&grid);
         // Max-height column: 4 sides (each 1×MAX_HEIGHT) + top + bottom.
         assert_eq!(total_quads(&greedy), 6);
+    }
+
+    #[test]
+    fn sphere_cell_is_excluded_from_cube_buckets() {
+        // A cell with `shape == Sphere` must not emit any quads — the
+        // cube mesher is strictly cube-only since v0.9. The sphere
+        // has to show up in the sphere-instance list instead.
+        let mut grid = Grid::with_size(4, 4);
+        paint(&mut grid, 1, 1, 0, 2);
+        grid.cycle_shape(1, 1); // Cube → Sphere
+        assert!(
+            build_color_buckets(&grid).is_empty(),
+            "sphere cells must not contribute to cube buckets"
+        );
+        let spheres = build_sphere_instances(&grid);
+        assert_eq!(spheres.len(), 1);
+        assert_eq!(spheres[0].grid_x, 1);
+        assert_eq!(spheres[0].grid_z, 1);
+        assert_eq!(spheres[0].height, 2);
+    }
+
+    #[test]
+    fn cube_neighbour_of_sphere_is_not_face_culled() {
+        // Adjacent cube should render its side facing the sphere —
+        // the sphere is *not* a cube and therefore cannot hide a
+        // cube face. Without this, exported models would have
+        // invisible holes where spheres meet cubes.
+        use crate::grid::ShapeKind;
+        let mut grid = Grid::with_size(4, 4);
+        paint(&mut grid, 0, 0, 0, 1);
+        paint(&mut grid, 1, 0, 0, 1);
+        // Flip the right cell to sphere — the left cell's +X face
+        // must now survive meshing.
+        grid.cycle_shape(1, 0);
+        assert!(matches!(
+            grid.get(1, 0).unwrap().shape,
+            ShapeKind::Sphere
+        ));
+        // Sanity: two lone cubes = two independent single-cube
+        // meshes' surface area = 2 × 6 = 12. Shape change drops one
+        // cube, so the remaining surface is one cube = 6.
+        let greedy = build_color_buckets(&grid);
+        assert!(
+            (total_area(&greedy) - 6.0).abs() < 1e-3,
+            "remaining cube must expose all 6 faces even though a sphere sits adjacent"
+        );
+    }
+
+    #[test]
+    fn cycle_shape_noop_on_empty_cell() {
+        let mut grid = Grid::with_size(2, 2);
+        assert!(grid.cycle_shape(0, 0).is_none());
     }
 }

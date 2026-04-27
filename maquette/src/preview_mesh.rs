@@ -10,7 +10,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy_mod_outline::{OutlineMode, OutlineVolume};
 use maquette::grid::{Grid, Palette, CELL_SIZE};
-use maquette::mesher::{build_color_buckets, MeshBuilder};
+use maquette::mesher::{build_color_buckets, build_sphere_instances, MeshBuilder};
 
 use crate::toon::ToonMaterial;
 
@@ -18,6 +18,12 @@ const OUTLINE_WIDTH_PX: f32 = 3.0;
 
 #[derive(Component)]
 pub struct CellMesh;
+
+/// Marker for per-cell sphere entities (v0.9 shape toggle). Kept
+/// separate from [`CellMesh`] so the sphere-sync system can tear
+/// down its own entities without touching the cube mesh pipeline.
+#[derive(Component)]
+pub struct SphereCell;
 
 pub struct PreviewMeshPlugin;
 
@@ -34,12 +40,16 @@ fn rebuild_cell_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ToonMaterial>>,
     existing: Query<Entity, With<CellMesh>>,
+    existing_spheres: Query<Entity, With<SphereCell>>,
 ) {
     if !grid.dirty {
         return;
     }
 
     for e in &existing {
+        commands.entity(e).despawn();
+    }
+    for e in &existing_spheres {
         commands.entity(e).despawn();
     }
 
@@ -68,6 +78,52 @@ fn rebuild_cell_mesh(
             OutlineMode::ExtrudeFlat,
             Transform::default(),
         ));
+    }
+
+    // Sphere-shape cells render as a vertical stack of unit spheres
+    // — one per layer — so a height-3 sphere column reads as three
+    // discrete balls rather than a stretched pill. Matches the
+    // "voxel-per-layer" semantics cube columns already have: height
+    // encodes stack count, not per-block scale.
+    //
+    // Placeholder path — the cube mesher is the only one the
+    // exporter currently consumes, so spheres are preview-only
+    // until the export pipeline grows shape support.
+    //
+    // Sharing the sphere `Mesh` handle across every sphere entity
+    // lets Bevy instance the draw call under the hood, which keeps
+    // performance bounded even for canvases heavy on spheres
+    // (worst case: 128 × 128 × MAX_HEIGHT = ~131k instances, still
+    // one-mesh-one-material).
+    let sphere_mesh = meshes.add(Sphere::new(CELL_SIZE * 0.5));
+    for inst in build_sphere_instances(&grid) {
+        let color = palette.get(inst.color_idx).unwrap_or(Color::WHITE);
+        // Sharing a per-color material handle across every layer of
+        // the same column lets Bevy batch draws — allocating one
+        // material per layer would defeat the instancing win above.
+        let material = materials.add(ToonMaterial::with_color(color));
+        let cx = ox + (inst.grid_x as f32 + 0.5) * CELL_SIZE;
+        let cz = oz + (inst.grid_z as f32 + 0.5) * CELL_SIZE;
+        let layers = inst.height.max(1);
+        for layer in 0..layers {
+            // Layer `i` sits between y=i and y=i+1, so its centre is
+            // at y=i+0.5. Matches the cube mesher's voxel placement
+            // exactly — top of a height-3 column ends at y=3 whether
+            // the shape is cube or sphere.
+            let cy = (layer as f32 + 0.5) * CELL_SIZE;
+            commands.spawn((
+                SphereCell,
+                Mesh3d(sphere_mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                OutlineVolume {
+                    visible: true,
+                    width: OUTLINE_WIDTH_PX,
+                    colour: Color::BLACK,
+                },
+                OutlineMode::ExtrudeFlat,
+                Transform::from_xyz(cx, cy, cz),
+            ));
+        }
     }
 
     grid.dirty = false;

@@ -1,27 +1,54 @@
 //! egui panels: menu bar, paint canvas + palette (left), status bar.
 //!
 //! The canvas uses egui's custom painter to draw a 2D grid and consume
-//! pointer events. Left-click paints with the selected palette color,
-//! right-click erases. Painting mutates the [`Grid`] resource directly;
+//! pointer events. Left-click paints with the selected palette color;
+//! right-click cycles the block shape (placeholder: Cube ↔ Sphere, see
+//! [`maquette::grid::ShapeKind`]); Backspace / Delete erases the cell
+//! under the cursor. Painting mutates the [`Grid`] resource directly;
 //! the mesh rebuild system (in [`crate::grid`]) then picks up the change.
 
 use bevy::color::Hsla;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
-use maquette::export::{ExportFormat, ExportOptions, ExportRequest, OutlineConfig};
+use maquette::export::{ExportFormat, ExportInProgress, OutlineConfig};
 use maquette::grid::{
-    DeleteColorMode, Grid, Palette, DEFAULT_GRID_H, DEFAULT_GRID_W, MAX_GRID, MAX_HEIGHT, MIN_GRID,
-    MIN_HEIGHT,
+    DeleteColorMode, Grid, Palette, ShapeKind, DEFAULT_GRID_H, DEFAULT_GRID_W, MAX_GRID, MAX_HEIGHT,
+    MIN_GRID, MIN_HEIGHT,
 };
 
 use bevy::window::PrimaryWindow;
 
-use crate::camera::{FitPreviewToModel, ResetPreviewView};
+use crate::camera::{
+    egui_rect, FitPreviewToModel, PreviewViewportRect, ResetPreviewView, ZoomPreview, ZOOM_STEP,
+};
+use crate::export_dialog::PendingExportDialog;
 use crate::float_window::FloatPreviewState;
 use crate::history::{EditHistory, HistoryAction, PaintOp};
-use crate::multiview::{pip_logical_rects, MultiViewState};
-use crate::session::{CurrentProject, ProjectAction};
+use crate::multiview::{pip_logical_rects, JumpToOrthoView, MultiViewState};
+use crate::scene::WorldAxesState;
+use crate::session::{CurrentProject, PendingProjectDialog, ProjectAction};
+
+/// Bundle the outbound message writers for `ui_system` so we stay
+/// under Bevy's 16-parameter limit on systems. Every field is a
+/// plain `MessageWriter`; grouping them is pure book-keeping.
+#[derive(SystemParam)]
+pub struct UiMessages<'w> {
+    pub project: MessageWriter<'w, ProjectAction>,
+    pub reset_view: MessageWriter<'w, ResetPreviewView>,
+    pub fit_view: MessageWriter<'w, FitPreviewToModel>,
+    pub zoom_view: MessageWriter<'w, ZoomPreview>,
+    pub history: MessageWriter<'w, HistoryAction>,
+    pub jump_ortho: MessageWriter<'w, JumpToOrthoView>,
+    /// Reactive-rendering wake-up (`WinitSettings::desktop_app()` only
+    /// runs `Update` when winit fires an event or someone writes
+    /// `RequestRedraw`). After any blocking native dialog we have to
+    /// manually kick the loop, otherwise the message we just queued
+    /// (Export / Save / Open …) sits idle until the 5 s heartbeat
+    /// fires and the user thinks the app hung.
+    pub redraw: MessageWriter<'w, bevy::window::RequestRedraw>,
+}
 
 pub struct UiPlugin;
 
@@ -46,6 +73,49 @@ struct UiState {
     /// Current brush height in cell units. `1..=MAX_HEIGHT`. Carried on
     /// the UI (not the grid) because it's a tool setting, not data.
     brush_height: u8,
+    /// Brush application mode. Overwrite replaces the cell wholesale
+    /// (the v0.1 behavior); Additive stacks brush height on top of
+    /// whatever is already there, preserving the existing color.
+    paint_mode: PaintMode,
+    /// Cells already hit by the current open stroke. Only consulted
+    /// in `PaintMode::Additive` — without it, a drag across one cell
+    /// at 60 fps would max out its height in a few milliseconds.
+    /// Cleared on every `begin_stroke`.
+    stroke_touched: std::collections::HashSet<(usize, usize)>,
+}
+
+/// Brush application mode — see `UiState::paint_mode`.
+///
+/// Exposed as `pub` so the `View → Paint Mode` submenu and the brush
+/// bar widget (both in `ui.rs`) can speak the same enum. Default =
+/// `Overwrite`, matching the v0.1–v0.8 behavior the user is used to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PaintMode {
+    /// Click / drag replaces the cell with `(selected color,
+    /// brush height)`. This is the historical default and what
+    /// users expect when they want to "recolor" or "reset" a
+    /// cell.
+    #[default]
+    Overwrite,
+    /// Click / drag **adds** `brush_height` to the existing cell's
+    /// height (clamped at `MAX_HEIGHT`) and keeps the existing
+    /// color. Empty cells are painted fresh with the brush color +
+    /// height — so a single click on a blank cell behaves the same
+    /// under both modes.
+    ///
+    /// Each cell is only processed once per stroke; without that
+    /// guard a 0.5-second drag would stack the cell to `MAX_HEIGHT`
+    /// in one gesture.
+    Additive,
+}
+
+impl PaintMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            PaintMode::Overwrite => "Overwrite",
+            PaintMode::Additive => "Additive",
+        }
+    }
 }
 
 impl Default for UiState {
@@ -56,6 +126,8 @@ impl Default for UiState {
             export_modal: None,
             delete_color_modal: None,
             brush_height: MIN_HEIGHT,
+            paint_mode: PaintMode::default(),
+            stroke_touched: std::collections::HashSet::new(),
         }
     }
 }
@@ -121,13 +193,23 @@ fn ui_system(
     mut history: ResMut<EditHistory>,
     mut multiview: ResMut<MultiViewState>,
     mut float_state: ResMut<FloatPreviewState>,
+    mut axes: ResMut<WorldAxesState>,
+    mut preview_viewport: ResMut<PreviewViewportRect>,
+    export_state: Res<ExportInProgress>,
+    mut pending_export_dialog: ResMut<PendingExportDialog>,
+    pending_project_dialog: Res<PendingProjectDialog>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut project_ev: MessageWriter<ProjectAction>,
-    mut reset_view_ev: MessageWriter<ResetPreviewView>,
-    mut fit_view_ev: MessageWriter<FitPreviewToModel>,
-    mut history_ev: MessageWriter<HistoryAction>,
-    mut export_ev: MessageWriter<ExportRequest>,
+    mut msgs: UiMessages,
 ) -> Result {
+    // Local aliases so the rest of the (quite long) function reads
+    // the same as before the SystemParam refactor.
+    let project_ev = &mut msgs.project;
+    let reset_view_ev = &mut msgs.reset_view;
+    let fit_view_ev = &mut msgs.fit_view;
+    let zoom_view_ev = &mut msgs.zoom_view;
+    let history_ev = &mut msgs.history;
+    let jump_ortho_ev = &mut msgs.jump_ortho;
+    let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
     handle_shortcuts(
@@ -135,34 +217,110 @@ fn ui_system(
         &mut ui_state,
         &mut palette,
         &mut multiview,
-        &mut project_ev,
-        &mut reset_view_ev,
-        &mut fit_view_ev,
-        &mut history_ev,
+        &mut *project_ev,
+        &mut *reset_view_ev,
+        &mut *fit_view_ev,
+        &mut *zoom_view_ev,
+        &mut *history_ev,
     );
 
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("New…").clicked() {
+                // A pending native Open / Save / Save As dialog
+                // already owns the File-menu I/O path; stacking a
+                // second sheet on top is both UX noise and, pre
+                // v0.9, a real freeze risk on macOS. We disable the
+                // whole File group while it's up rather than
+                // pick-and-choose — New… mutates in-memory state
+                // the pending dialog's I/O might race with.
+                let project_dialog_busy = pending_project_dialog.is_pending();
+                let new_btn = ui.add_enabled(
+                    !project_dialog_busy,
+                    egui::Button::new("New…"),
+                );
+                if new_btn.clicked() {
                     ui_state.new_project = Some(NewProjectDraft::default());
                     ui.close();
                 }
-                if ui.button("Open…").clicked() {
+                let open_btn = ui.add_enabled(
+                    !project_dialog_busy,
+                    egui::Button::new(if project_dialog_busy {
+                        "Open… (choosing file)"
+                    } else {
+                        "Open…"
+                    }),
+                );
+                if open_btn.clicked() {
                     project_ev.write(ProjectAction::Open);
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Save").clicked() {
+                let save_btn = ui.add_enabled(
+                    !project_dialog_busy,
+                    egui::Button::new("Save"),
+                );
+                if save_btn.clicked() {
                     project_ev.write(ProjectAction::Save);
                     ui.close();
                 }
-                if ui.button("Save As…").clicked() {
+                let save_as_btn = ui.add_enabled(
+                    !project_dialog_busy,
+                    egui::Button::new(if project_dialog_busy {
+                        "Save As… (choosing file)"
+                    } else {
+                        "Save As…"
+                    }),
+                );
+                if save_as_btn.clicked() {
                     project_ev.write(ProjectAction::SaveAs);
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Export…").clicked() {
+                // Export is gated on the project being saved *and*
+                // clean. Two reasons:
+                //   1. `ExportDraft` derives the default output
+                //      filename from `current.display_name()` — an
+                //      unsaved project would yield `Untitled.glb`
+                //      and lose the paper-trail back to the source.
+                //   2. After an export users tend to treat the .glb
+                //      as the deliverable. If the `.maq` behind it
+                //      only lives in memory, a later crash leaves
+                //      an orphan model with no way to re-edit it.
+                // Explicit save-first is the cheapest invariant
+                // that rules both failure modes out.
+                let export_needs_save = current.path.is_none() || current.unsaved;
+                let export_busy = export_state.is_running() || pending_export_dialog.is_pending();
+                let export_disabled = export_busy || export_needs_save;
+                let export_label = if export_state.is_running() {
+                    "Export… (running)"
+                } else if pending_export_dialog.is_pending() {
+                    "Export… (choosing file)"
+                } else if export_needs_save {
+                    "Export… (save project first)"
+                } else {
+                    "Export…"
+                };
+                let export_btn = ui.add_enabled(
+                    !export_disabled,
+                    egui::Button::new(export_label),
+                );
+                // `on_disabled_hover_text` still fires on a greyed-
+                // out button, so the user who hovers to find out
+                // *why* it's disabled gets the real reason instead
+                // of silence.
+                let export_btn = if export_needs_save && !export_busy {
+                    export_btn.on_disabled_hover_text(
+                        "Save the project first (File → Save). \
+                         Exports are named after the saved .maq file — \
+                         an unsaved project would produce Untitled.glb \
+                         and lose the link back to its source.",
+                    )
+                } else {
+                    export_btn
+                };
+                if export_btn.clicked() {
+                    log::info!("ui: File → Export clicked — opening Export modal");
                     ui_state.export_modal = Some(ExportDraft::default());
                     ui.close();
                 }
@@ -178,6 +336,32 @@ fn ui_system(
                     history_ev.write(HistoryAction::Redo);
                     ui.close();
                 }
+                ui.separator();
+                ui.menu_button("Paint Mode", |ui| {
+                    for mode in [PaintMode::Overwrite, PaintMode::Additive] {
+                        if ui
+                            .radio(ui_state.paint_mode == mode, mode.label())
+                            .on_hover_text(match mode {
+                                PaintMode::Overwrite => {
+                                    "Replace the cell on every click / drag. (default)"
+                                }
+                                PaintMode::Additive => {
+                                    "Stack the brush height onto the existing cell; \
+                                     each cell grows at most once per drag."
+                                }
+                            })
+                            .clicked()
+                        {
+                            ui_state.paint_mode = mode;
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    ui.small(
+                        egui::RichText::new("Shortcut: A to toggle")
+                            .color(egui::Color32::from_gray(150)),
+                    );
+                });
                 ui.separator();
                 if ui.button("Clear Canvas").clicked() {
                     let size = (grid.w, grid.h);
@@ -220,6 +404,18 @@ fn ui_system(
                     multiview.enabled = enabled;
                     ui.close();
                 }
+                let mut axes_visible = axes.visible;
+                if ui
+                    .checkbox(&mut axes_visible, "Show World Axes")
+                    .on_hover_text(
+                        "Overlay the X (red) / Y (green) / Z (blue) world axes at the \
+                         origin of the canvas so you can read orientation at a glance.",
+                    )
+                    .changed()
+                {
+                    axes.visible = axes_visible;
+                    ui.close();
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About Maquette").clicked() {
@@ -237,6 +433,7 @@ fn ui_system(
         egui::Window::new("New Project")
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("Pick a canvas size. You can only set this when creating a project.");
@@ -287,6 +484,7 @@ fn ui_system(
         egui::Window::new("Export")
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("Writes a game-engine-ready mesh. No toon shader, no preview-only tricks.");
@@ -349,28 +547,81 @@ fn ui_system(
                 ExportFormat::Gltf => ("gltf", "glTF JSON"),
             };
             let default_name = format!("{}.{ext}", current.display_name());
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter(filter_name, &[ext])
-                .set_file_name(default_name)
-                .save_file()
-            {
-                let [r, g, b] = draft.outline_color;
-                export_ev.write(ExportRequest(ExportOptions {
-                    path,
-                    format: draft.format,
-                    outline: OutlineConfig {
-                        enabled: draft.outline_enabled,
-                        width_pct: draft.outline_width_pct,
-                        color: Color::srgb(r, g, b),
-                    },
-                }));
-            }
+            log::info!(
+                "ui: opening save dialog for export (.{ext}, outline={})",
+                draft.outline_enabled,
+            );
+            // Hand the native "Save As…" sheet off to the async
+            // dispatch pipeline. The old synchronous path wedged
+            // on macOS 26 because `NSSavePanel.runModal()` nested
+            // under winit's event-loop callback; the async pipeline
+            // uses `beginSheetModalForWindow:completionHandler:`,
+            // which is the integration Cocoa actually supports from
+            // inside another event handler. See
+            // `export_dialog.rs` header for the full rationale.
+            let [r, g, b] = draft.outline_color;
+            pending_export_dialog.open(
+                draft.format,
+                OutlineConfig {
+                    enabled: draft.outline_enabled,
+                    width_pct: draft.outline_width_pct,
+                    color: Color::srgb(r, g, b),
+                },
+                default_name,
+                filter_name.to_string(),
+                ext.to_string(),
+            );
+            // Kick one redraw so the first `poll_once` happens on
+            // the very next frame instead of after the 5 s reactive
+            // heartbeat; the poll system keeps the loop awake for
+            // the dialog's lifetime after that.
+            redraw_ev.write(bevy::window::RequestRedraw);
             ui_state.export_modal = None;
         } else if cancelled || !open {
+            log::debug!("ui: Export modal dismissed without confirming");
             ui_state.export_modal = None;
         } else {
             ui_state.export_modal = Some(draft);
         }
+    }
+
+    // Progress modal: appears for as long as the async export task
+    // is alive. We render it *outside* the export_modal block so that
+    // closing the options dialog (which happens the same frame we
+    // dispatch the request) doesn't tear down the progress UI.
+    if export_state.is_running() {
+        let path_label = export_state
+            .current_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(unknown path)".to_string());
+        let elapsed = export_state.elapsed();
+        egui::Window::new("Exporting…")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(18.0));
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Writing mesh…").strong(),
+                        );
+                        ui.small(
+                            egui::RichText::new(&path_label)
+                                .color(egui::Color32::from_gray(170)),
+                        );
+                        ui.small(format!("elapsed {:.1}s", elapsed.as_secs_f32()));
+                    });
+                });
+                ui.add_space(4.0);
+                ui.small(
+                    egui::RichText::new(
+                        "Window stays responsive — the UI keeps drawing \
+                         while the export runs on a background thread.",
+                    )
+                    .color(egui::Color32::from_gray(150)),
+                );
+            });
     }
 
     delete_color_modal(ctx, &mut ui_state, &mut grid, &mut palette, &mut current);
@@ -380,6 +631,7 @@ fn ui_system(
         egui::Window::new("About Maquette")
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("Maquette — a block-style asset editor with a toon look.");
@@ -389,7 +641,8 @@ fn ui_system(
                 );
                 ui.add_space(6.0);
                 ui.label("• Left-click a cell to paint with the selected color.");
-                ui.label("• Right-click a cell to erase.");
+                ui.label("• Right-click a painted cell to cycle its shape (Cube ↔ Sphere).");
+                ui.label("• Hover a cell and press Backspace / Delete to erase it.");
                 ui.label("• Drag the preview to turn the model; scroll to zoom.");
                 ui.add_space(6.0);
                 ui.label("File → Save writes a .maq project you can reopen later.");
@@ -409,38 +662,45 @@ fn ui_system(
         ui_state.show_about = open;
     }
 
-    egui::SidePanel::left("canvas_panel")
+    let canvas_rect = egui::SidePanel::left("canvas_panel")
         .default_width(520.0)
         .min_width(360.0)
         .show(ctx, |ui| {
             ui.heading("Canvas");
             ui.separator();
-            paint_canvas(
+            let rect = paint_canvas(
                 ui,
                 &mut grid,
                 &palette,
                 &mut current,
                 &mut history,
-                ui_state.brush_height,
+                &mut ui_state,
             );
             ui.add_space(10.0);
             ui.separator();
             palette_bar(ui, &mut palette, &mut ui_state);
-            ui.add_space(10.0);
-            ui.separator();
-            brush_bar(ui, &mut ui_state.brush_height);
-        });
+            rect
+        })
+        .inner;
+
+    // Brush tools float on top of the canvas in its top-left
+    // corner, Blender-style, instead of living at the bottom of
+    // the sidebar. Anchoring to `canvas_rect.min` means the
+    // overlay tracks the canvas when the user resizes the left
+    // panel.
+    brush_overlay(ctx, canvas_rect, &mut ui_state);
 
     if multiview.enabled {
         if let Ok(window) = windows.single() {
-            paint_pip_labels(ctx, window, &multiview);
+            paint_pip_labels(ctx, window, &multiview, &mut *jump_ortho_ev);
         }
     }
 
     preview_toolbar(
         ctx,
-        &mut reset_view_ev,
-        &mut fit_view_ev,
+        &mut *reset_view_ev,
+        &mut *fit_view_ev,
+        &mut *zoom_view_ev,
         &mut multiview,
         &mut float_state,
     );
@@ -454,13 +714,30 @@ fn ui_system(
             ui.separator();
             ui.label(format!("Painted: {painted} / {total}"));
             ui.separator();
-            ui.label(
-                "Left-click: paint  •  Right-click: erase  •  Drag preview: turn  •  Scroll preview: zoom",
-            );
+            let paint_verb = match ui_state.paint_mode {
+                PaintMode::Overwrite => "paint (overwrite)",
+                PaintMode::Additive => "paint (stack +)",
+            };
+            ui.label(format!(
+                "Left-click: {paint_verb}  •  Right-click: cycle shape  •  Del/Back: erase hovered  •  A: toggle mode  •  Drag preview: turn"
+            ));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label("Maquette · v0.8-dev");
             });
         });
+    });
+
+    // Report the "empty central area" (= everything the panels above
+    // didn't claim) to the camera plugin so the 3D preview viewport
+    // lines up with what the user sees. `available_rect` is computed
+    // after every SidePanel / TopBottomPanel runs, so by this point
+    // it reflects the usable preview region.
+    let avail = ctx.available_rect();
+    preview_viewport.rect = Some(egui_rect::Rect {
+        min_x: avail.min.x,
+        min_y: avail.min.y,
+        max_x: avail.max.x,
+        max_y: avail.max.y,
     });
 
     Ok(())
@@ -472,8 +749,10 @@ fn paint_canvas(
     palette: &Palette,
     current: &mut CurrentProject,
     history: &mut EditHistory,
-    brush_height: u8,
-) {
+    ui_state: &mut UiState,
+) -> egui::Rect {
+    let brush_height = ui_state.brush_height;
+    let paint_mode = ui_state.paint_mode;
     let available = ui.available_size_before_wrap();
     let budget = available.x.min(available.y).min(520.0);
     let cell_px = (budget / grid.w.max(grid.h) as f32).floor().max(6.0);
@@ -494,6 +773,18 @@ fn paint_canvas(
                 if let Some(ci) = cell.color_idx {
                     if let Some(fill) = palette.get(ci) {
                         painter.rect_filled(cell_rect, 0.0, to_egui_color(fill));
+                        // Shape indicator — glyph on top of the
+                        // colored square so the 2D canvas reads
+                        // the same shape the 3D preview ships.
+                        // Kept deliberately minimal (single stroke,
+                        // no fill) so the underlying palette
+                        // swatch is still unambiguous.
+                        draw_shape_glyph(&painter, cell_rect, cell.shape);
+                        // Height badge (top-left corner). Only
+                        // shows for stacked cells — height == 1 is
+                        // the base case and would add noise to
+                        // 100 % of a freshly painted canvas.
+                        draw_height_badge(&painter, cell_rect, cell.height);
                     }
                 }
             }
@@ -524,45 +815,249 @@ fn paint_canvas(
         || response.drag_started_by(egui::PointerButton::Secondary)
     {
         history.begin_stroke();
+        // Reset the per-stroke "already processed" set. Used by both
+        //   * `PaintMode::Additive` left-click (stack at most once
+        //     per cell per drag), and
+        //   * right-click shape cycling (cycle at most once per cell
+        //     per drag — without it a 0.5s hover would cycle a cell
+        //     through every shape at 60 Hz).
+        ui_state.stroke_touched.clear();
     }
 
-    // Input: paint on primary drag/click, erase on secondary.
+    // Left button → paint. Right button → cycle block shape
+    // (placeholder: Cube ↔ Sphere). Erase is keyboard-only
+    // (Backspace / Delete below) since right-click now has a
+    // higher-value job.
     let paint = response.dragged_by(egui::PointerButton::Primary)
         || response.clicked_by(egui::PointerButton::Primary);
-    let erase = response.dragged_by(egui::PointerButton::Secondary)
+    let shape_cycle = response.dragged_by(egui::PointerButton::Secondary)
         || response.clicked_by(egui::PointerButton::Secondary);
 
-    if paint || erase {
+    if paint || shape_cycle {
         if let Some(pos) = response.interact_pointer_pos() {
             let local = pos - rect.min;
             if local.x >= 0.0 && local.y >= 0.0 {
                 let gx = (local.x / cell_px) as usize;
                 let gy = (local.y / cell_px) as usize;
-                let change = if paint {
-                    grid.paint(gx, gy, palette.selected, brush_height)
-                } else {
-                    grid.erase(gx, gy)
-                };
-                if let Some((before, after)) = change {
-                    history.record(PaintOp {
-                        x: gx,
-                        y: gy,
-                        before,
-                        after,
-                    });
-                    current.mark_dirty();
+                if gx < grid.w && gy < grid.h {
+                    let change = if paint {
+                        apply_paint(
+                            grid,
+                            gx,
+                            gy,
+                            palette.selected,
+                            brush_height,
+                            paint_mode,
+                            &mut ui_state.stroke_touched,
+                        )
+                    } else {
+                        // Same per-stroke guard keeps a drag from
+                        // re-cycling the same cell. One cell per
+                        // gesture, same as Additive paint.
+                        if !ui_state.stroke_touched.insert((gx, gy)) {
+                            None
+                        } else {
+                            grid.cycle_shape(gx, gy)
+                        }
+                    };
+                    if let Some((before, after)) = change {
+                        history.record(PaintOp {
+                            x: gx,
+                            y: gy,
+                            before,
+                            after,
+                        });
+                        current.mark_dirty();
+                    }
                 }
             }
         }
     }
 
-    // Close the stroke when the pointer is released. Plain clicks
-    // never open a stroke (`drag_started` doesn't fire for them), so
-    // single-cell edits fall through the `record` single-op fallback.
+    // Delete / Backspace erases the cell under the cursor. Keyboard
+    // erase is deliberately *not* stroke-grouped across frames —
+    // each key press is its own undo entry, since the user is
+    // unlikely to want to Ctrl+Z all their deletes at once.
+    //
+    // Note: `input_mut` + `consume_key` so the key event doesn't
+    // leak to other widgets (e.g. a future name field or egui text
+    // input that might want Backspace for its own purposes).
+    if let Some(hover) = response.hover_pos() {
+        let local = hover - rect.min;
+        if local.x >= 0.0 && local.y >= 0.0 {
+            let gx = (local.x / cell_px) as usize;
+            let gy = (local.y / cell_px) as usize;
+            if gx < grid.w && gy < grid.h {
+                let erase_key = ui.ctx().input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                });
+                if erase_key {
+                    if let Some((before, after)) = grid.erase(gx, gy) {
+                        history.begin_stroke();
+                        history.record(PaintOp {
+                            x: gx,
+                            y: gy,
+                            before,
+                            after,
+                        });
+                        history.end_stroke();
+                        current.mark_dirty();
+                    }
+                }
+            }
+        }
+    }
+
+    // Close the stroke when the pointer is released.
+    //
+    // A "stroke" ends either on drag release OR on a plain click
+    // (no drag). We used to listen only to `drag_stopped_by`, which
+    // left `stroke_touched` stale after a single click — the second
+    // click on the same cell would hit the "already touched this
+    // stroke" guard in `apply_paint` / `cycle_shape` and silently
+    // no-op. Symptoms: Additive paint refusing to stack past the
+    // first +1, right-click refusing to cycle Cube→Sphere after the
+    // cell was already painted, etc.
+    //
+    // `end_stroke` is safe against missing matching `begin_stroke`
+    // (see `history::end_stroke` — it just `take`s the Option).
     if response.drag_stopped_by(egui::PointerButton::Primary)
         || response.drag_stopped_by(egui::PointerButton::Secondary)
+        || response.clicked_by(egui::PointerButton::Primary)
+        || response.clicked_by(egui::PointerButton::Secondary)
     {
         history.end_stroke();
+        ui_state.stroke_touched.clear();
+    }
+
+    rect
+}
+
+/// Overlay a small shape-indicator glyph on top of a painted cell
+/// so the 2D canvas matches the 3D preview. Cube is the default
+/// shape and intentionally *unmarked* — the colored square itself
+/// is the Cube affordance, and a glyph on every cell would add
+/// visual noise for no information. Non-cube shapes get a single-
+/// stroke overlay sized to fit inside the cell with a comfortable
+/// margin.
+///
+/// Stroke colours: black outer ring to match the 3D cel-shader
+/// outline (so the 2D glyph reads as "same shape, top-down view"),
+/// plus a thin inner white ring so the glyph stays visible on
+/// dark palette colours.
+fn draw_shape_glyph(painter: &egui::Painter, cell_rect: egui::Rect, shape: ShapeKind) {
+    match shape {
+        ShapeKind::Cube => {}
+        ShapeKind::Sphere => {
+            let side = cell_rect.width().min(cell_rect.height());
+            // Skip glyph on tiny cells — below ~10px the ring
+            // becomes indistinguishable from noise. Users on
+            // 128×128 canvases will just have to rely on the 3D
+            // preview. Paint cells usually stay well above this
+            // floor.
+            if side < 10.0 {
+                return;
+            }
+            let radius = side * 0.38;
+            let centre = cell_rect.center();
+            painter.circle_stroke(
+                centre,
+                radius,
+                egui::Stroke::new(1.6, egui::Color32::from_black_alpha(220)),
+            );
+            painter.circle_stroke(
+                centre,
+                radius - 1.4,
+                egui::Stroke::new(0.9, egui::Color32::from_white_alpha(140)),
+            );
+        }
+    }
+}
+
+/// Paint a small height-count badge in the top-left corner of
+/// `cell_rect`. Only shown for stacked cells (`height >= 2`) —
+/// displaying "1" on every freshly-painted cell would add visual
+/// noise without conveying new information, since `height == 1`
+/// is the default brush value.
+///
+/// Rendered as a dark rounded pill with white text inside so the
+/// badge stays legible over any palette colour. The pill is
+/// deliberately small (font ≈ cell × 0.42, clamped to the 8–14 px
+/// range) to fit comfortably even on tight 16-px cells — on
+/// anything smaller we give up and skip the badge, which is also
+/// where the shape glyph bails out.
+fn draw_height_badge(painter: &egui::Painter, cell_rect: egui::Rect, height: u8) {
+    if height < 2 {
+        return;
+    }
+    let side = cell_rect.width().min(cell_rect.height());
+    if side < 12.0 {
+        return;
+    }
+    let text = format!("{height}");
+    let font_size = (side * 0.42).clamp(8.0, 14.0);
+    // First measure so we can size the pill to the digits (a "10"
+    // is visibly wider than a "2" and a fixed background would
+    // either crop the former or float over the latter).
+    let galley = painter.layout_no_wrap(
+        text,
+        egui::FontId::proportional(font_size),
+        egui::Color32::WHITE,
+    );
+    let pad = egui::vec2(3.0, 1.0);
+    let badge_size = galley.size() + pad * 2.0;
+    let origin = cell_rect.min + egui::vec2(2.0, 2.0);
+    let badge_rect = egui::Rect::from_min_size(origin, badge_size);
+    painter.rect_filled(badge_rect, 3.0, egui::Color32::from_black_alpha(200));
+    painter.galley(origin + pad, galley, egui::Color32::WHITE);
+}
+
+/// Apply one paint tick to `(gx, gy)` according to `mode`.
+///
+/// Returns `Some((before, after))` if the cell actually changed, so
+/// the caller can push a single undo entry. `None` means either the
+/// cell already equals the target state, or `Additive` mode has
+/// already processed this cell in the current stroke (tracked via
+/// `stroke_touched`).
+fn apply_paint(
+    grid: &mut Grid,
+    gx: usize,
+    gy: usize,
+    selected_color: u8,
+    brush_height: u8,
+    mode: PaintMode,
+    stroke_touched: &mut std::collections::HashSet<(usize, usize)>,
+) -> Option<(maquette::grid::Cell, maquette::grid::Cell)> {
+    match mode {
+        PaintMode::Overwrite => grid.paint(gx, gy, selected_color, brush_height),
+        PaintMode::Additive => {
+            // Guard: each cell can only grow once per stroke. A
+            // drag at 60 fps hits the same cell many times; without
+            // this, the user would see their 3-cell stroke balloon
+            // to MAX_HEIGHT in half a second.
+            if !stroke_touched.insert((gx, gy)) {
+                return None;
+            }
+            let existing = grid.get(gx, gy).copied().unwrap_or_default();
+            let (color, height) = match existing.color_idx {
+                Some(existing_color) => {
+                    // Already painted: keep its color, stack
+                    // height. `u16` intermediate so the sum never
+                    // wraps before the `MAX_HEIGHT` clamp.
+                    let stacked = (existing.height as u16 + brush_height as u16)
+                        .min(MAX_HEIGHT as u16) as u8;
+                    (existing_color, stacked)
+                }
+                None => {
+                    // Empty cell — Additive collapses to a fresh
+                    // paint so a single click on blank canvas
+                    // still does something sensible.
+                    (selected_color, brush_height)
+                }
+            };
+            grid.paint(gx, gy, color, height)
+        }
     }
 }
 
@@ -575,6 +1070,7 @@ fn handle_shortcuts(
     project_ev: &mut MessageWriter<ProjectAction>,
     reset_view_ev: &mut MessageWriter<ResetPreviewView>,
     fit_view_ev: &mut MessageWriter<FitPreviewToModel>,
+    zoom_view_ev: &mut MessageWriter<ZoomPreview>,
     history_ev: &mut MessageWriter<HistoryAction>,
 ) {
     use egui::{Key, KeyboardShortcut, Modifiers};
@@ -614,11 +1110,35 @@ fn handle_shortcuts(
         if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F)) {
             fit_view_ev.write(FitPreviewToModel);
         }
+        // +/− zoom the preview one step. Accept both the standalone
+        // Plus/Minus keys and the Equals key (which shares a
+        // glyph with + on US layouts without requiring Shift), so
+        // either shoulder-tap works without reaching for a modifier.
+        let zoom_in = i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Plus))
+            || i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Equals));
+        if zoom_in {
+            zoom_view_ev.write(ZoomPreview {
+                factor: 1.0 / ZOOM_STEP,
+            });
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Minus)) {
+            zoom_view_ev.write(ZoomPreview { factor: ZOOM_STEP });
+        }
         // F2 toggles the multi-view PIP overlay. Plain F-key (no
         // cmd) because it's a viewport preference, not a document
         // action, and should feel as light as tab-switching.
         if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F2)) {
             multiview.enabled = !multiview.enabled;
+        }
+        // Plain-A swaps between Overwrite and Additive paint modes.
+        // Ungated (no Cmd) because this is a tool, not a document
+        // action, and the muscle-memory should match "hit A to
+        // alternate" rather than a chord.
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::A)) {
+            ui_state.paint_mode = match ui_state.paint_mode {
+                PaintMode::Overwrite => PaintMode::Additive,
+                PaintMode::Additive => PaintMode::Overwrite,
+            };
         }
         if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::E))
             && ui_state.export_modal.is_none()
@@ -794,6 +1314,7 @@ fn delete_color_modal(
     egui::Window::new("Delete palette color")
         .collapsible(false)
         .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .open(&mut open)
         .show(ctx, |ui| {
             let Some(color) = palette.get(draft.idx) else {
@@ -901,26 +1422,112 @@ fn delete_color_modal(
     }
 }
 
-fn brush_bar(ui: &mut egui::Ui, brush_height: &mut u8) {
-    ui.label(egui::RichText::new("Brush").strong());
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label("Height");
-        let mut h = *brush_height as u32;
-        let response = ui.add(
-            egui::Slider::new(&mut h, (MIN_HEIGHT as u32)..=(MAX_HEIGHT as u32))
-                .suffix(" cells"),
-        );
-        if response.changed() {
-            *brush_height = h as u8;
-        }
-    });
-    ui.small(
-        egui::RichText::new(
-            "Controls how many cells tall each paint stroke extrudes in the preview.",
-        )
-        .color(egui::Color32::from_gray(150)),
-    );
+/// Floating brush HUD — sits in the canvas's top-left corner
+/// like Blender's paint-tool overlay. Anchored via `fixed_pos` to
+/// the canvas `rect` so it tracks automatic repositioning when
+/// the user resizes the left side panel. The overlay is fixed
+/// (non-movable) by design: users consistently pick "it stays
+/// where I expect" over "I can drag it but now it's covering my
+/// work" in similar DCC HUDs.
+///
+/// Hit-test note: the overlay lives in egui's floating layer and
+/// intercepts clicks over its own rect. Cells the brush panel
+/// covers can't be painted until the user moves the panel or
+/// shrinks the brush — acceptable for a tool HUD, and matches
+/// Blender's behaviour with its Tool Settings floater.
+fn brush_overlay(ctx: &egui::Context, canvas_rect: egui::Rect, ui_state: &mut UiState) {
+    // Canvas may not have been laid out yet on the first frame
+    // (width 0). Bail so we don't anchor at (0,0) of the screen.
+    if canvas_rect.width() < 1.0 {
+        return;
+    }
+
+    let anchor = canvas_rect.min + egui::vec2(8.0, 8.0);
+    egui::Area::new(egui::Id::new("brush_overlay"))
+        .fixed_pos(anchor)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_black_alpha(180))
+                .corner_radius(6.0)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(70)))
+                .inner_margin(egui::Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    // Hard-cap the overlay width so it doesn't
+                    // balloon across a wide left panel — the
+                    // brush HUD is meant to occupy a corner, not
+                    // a strip.
+                    ui.set_max_width(240.0);
+
+                    ui.label(egui::RichText::new("Brush").strong());
+                    ui.add_space(2.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Height");
+                        let mut h = ui_state.brush_height as u32;
+                        let response = ui.add(
+                            egui::Slider::new(
+                                &mut h,
+                                (MIN_HEIGHT as u32)..=(MAX_HEIGHT as u32),
+                            )
+                            .suffix(" cells"),
+                        );
+                        if response.changed() {
+                            ui_state.brush_height = h as u8;
+                        }
+                    });
+
+                    // Paint mode toggle. Rendered as a
+                    // `SelectableLabel` pair rather than a radio
+                    // group because the two options are mutually
+                    // exclusive *and* we want the chosen one to
+                    // read as "currently active" at a glance —
+                    // radio bullets get lost at the small sizes
+                    // a floating HUD uses.
+                    ui.horizontal(|ui| {
+                        ui.label("Mode");
+                        if ui
+                            .selectable_label(
+                                ui_state.paint_mode == PaintMode::Overwrite,
+                                PaintMode::Overwrite.label(),
+                            )
+                            .on_hover_text(
+                                "Replace the cell with the current color + brush height. \
+                                 Default mode; this is how v0.1–v0.8 worked.",
+                            )
+                            .clicked()
+                        {
+                            ui_state.paint_mode = PaintMode::Overwrite;
+                        }
+                        if ui
+                            .selectable_label(
+                                ui_state.paint_mode == PaintMode::Additive,
+                                PaintMode::Additive.label(),
+                            )
+                            .on_hover_text(
+                                "Stack the brush height on top of what's already there; \
+                                 keep the existing color. Empty cells still use the brush \
+                                 color. Each cell is only grown once per drag.",
+                            )
+                            .clicked()
+                        {
+                            ui_state.paint_mode = PaintMode::Additive;
+                        }
+                    });
+
+                    ui.small(
+                        egui::RichText::new(match ui_state.paint_mode {
+                            PaintMode::Overwrite => {
+                                "Overwrite: replace the cell with the selected color."
+                            }
+                            PaintMode::Additive => {
+                                "Additive: stack onto existing cells. One stack per cell per stroke."
+                            }
+                        })
+                        .color(egui::Color32::from_gray(170)),
+                    );
+                });
+        });
 }
 
 /// A small floating button row anchored to the top-right corner of
@@ -933,6 +1540,7 @@ fn preview_toolbar(
     ctx: &egui::Context,
     reset_view_ev: &mut MessageWriter<ResetPreviewView>,
     fit_view_ev: &mut MessageWriter<FitPreviewToModel>,
+    zoom_view_ev: &mut MessageWriter<ZoomPreview>,
     multiview: &mut MultiViewState,
     float_state: &mut FloatPreviewState,
 ) {
@@ -947,6 +1555,28 @@ fn preview_toolbar(
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // Zoom controls come first so Fit / Reset still
+                        // land in the historical right-hand slot users
+                        // learned in v0.7. Smaller buttons because
+                        // they're the high-frequency click, and the
+                        // hover tooltip names the accelerator key.
+                        if ui
+                            .small_button("−")
+                            .on_hover_text("Zoom out · scroll down / −")
+                            .clicked()
+                        {
+                            zoom_view_ev.write(ZoomPreview { factor: ZOOM_STEP });
+                        }
+                        if ui
+                            .small_button("+")
+                            .on_hover_text("Zoom in · scroll up / =")
+                            .clicked()
+                        {
+                            zoom_view_ev.write(ZoomPreview {
+                                factor: 1.0 / ZOOM_STEP,
+                            });
+                        }
+                        ui.separator();
                         if ui
                             .button("Fit")
                             .on_hover_text("Frame the painted geometry · F")
@@ -992,9 +1622,9 @@ fn preview_toolbar(
 fn paint_empty_canvas_hint(painter: &egui::Painter, canvas_rect: egui::Rect) {
     let lines = [
         ("Left-click", "paint with the selected color"),
-        ("Right-click", "erase"),
+        ("Right-click", "cycle shape (Cube ↔ Sphere)"),
+        ("Delete / Backspace", "erase the hovered cell"),
         ("1–9", "select a palette color"),
-        ("Right-click a swatch", "edit or delete"),
     ];
 
     let line_height = 22.0;
@@ -1045,22 +1675,74 @@ fn paint_empty_canvas_hint(painter: &egui::Painter, canvas_rect: egui::Rect) {
 /// Paint a small label + frame on top of each ortho PIP viewport.
 /// egui runs on top of Bevy's render, so this overlay shows through
 /// any edge of the viewport that would otherwise be unlabeled.
-fn paint_pip_labels(ctx: &egui::Context, window: &Window, state: &MultiViewState) {
+/// Draw labels + borders on the PIPs *and* make each PIP clickable —
+/// clicking snaps the main preview to that angle.
+///
+/// The PIPs themselves are rendered by raw `Camera3d`s outside of
+/// egui, so we have to synthesise interaction: drop an invisible
+/// clickable widget per PIP in a dedicated `egui::Area`. `Area`
+/// anchors in screen coordinates and participates in egui's pointer
+/// pipeline, so hovering / clicking works even though the PIP pixels
+/// themselves are drawn by Bevy's renderer behind egui's layer.
+fn paint_pip_labels(
+    ctx: &egui::Context,
+    window: &Window,
+    state: &MultiViewState,
+    jump_ortho_ev: &mut MessageWriter<JumpToOrthoView>,
+) {
     let rects = pip_logical_rects(window, state);
     let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("multiview_labels"));
     let painter = ctx.layer_painter(layer);
-    let frame_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(80));
+    let hover_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255));
     let label_bg = egui::Color32::from_black_alpha(170);
-    let label_fg = egui::Color32::from_gray(220);
+    let label_fg = egui::Color32::from_gray(230);
 
-    for r in rects {
+    for (i, r) in rects.iter().enumerate() {
         let rect = egui::Rect::from_min_size(
             egui::pos2(r.x, r.y),
             egui::vec2(r.size, r.size),
         );
+
+        let mut clicked = false;
+        let mut hovered = false;
+        egui::Area::new(egui::Id::new(("pip_hit", i)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(rect, egui::Sense::click());
+                clicked = resp.clicked();
+                hovered = resp.hovered();
+                if hovered {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            });
+
+        // Each PIP gets its own tinted accent so the three adjacent
+        // thumbnails read as separate views rather than a single
+        // striped panel. The accent hue also matches the dominant
+        // axis each view *doesn't* show (Top hides Y → green,
+        // Front hides Z → blue, Side hides X → red), which gives
+        // the user a second visual cue beyond the text label.
+        let accent = pip_accent_color(r.kind);
+        let frame_stroke = if hovered {
+            hover_stroke
+        } else {
+            egui::Stroke::new(1.5, accent)
+        };
         painter.rect_stroke(rect, 0.0, frame_stroke, egui::epaint::StrokeKind::Outside);
 
-        let badge_size = egui::vec2(48.0, 18.0);
+        // Thin accent bar along the bottom edge acts as a "tab"
+        // indicator; cheaper than a tinted full-frame fill and
+        // keeps the PIP interior itself the dark Bevy clear color.
+        let bar_height = 3.0;
+        let bar_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.bottom() - bar_height),
+            egui::vec2(rect.width(), bar_height),
+        );
+        painter.rect_filled(bar_rect, 0.0, accent);
+
+        let badge_size = egui::vec2(52.0, 18.0);
         let badge_rect = egui::Rect::from_min_size(
             egui::pos2(r.x + 6.0, r.y + 6.0),
             badge_size,
@@ -1072,6 +1754,126 @@ fn paint_pip_labels(ctx: &egui::Context, window: &Window, state: &MultiViewState
             r.kind.label(),
             egui::FontId::proportional(12.0),
             label_fg,
+        );
+
+        draw_pip_axes(&painter, rect, r.kind);
+
+        if clicked {
+            jump_ortho_ev.write(JumpToOrthoView { kind: r.kind });
+        }
+    }
+}
+
+/// Per-PIP accent hue used for the border and the bottom strip.
+/// Kept subtle (desaturated, mid-alpha) so the dark 3D render stays
+/// the dominant surface; the accent just labels the panel.
+fn pip_accent_color(kind: crate::multiview::OrthoKind) -> egui::Color32 {
+    use crate::multiview::OrthoKind;
+    match kind {
+        // Top view shows XZ (looks down +Y) → accent the hidden axis.
+        OrthoKind::Top => egui::Color32::from_rgba_unmultiplied(120, 210, 140, 200),
+        // Front view shows XY → accent the hidden +Z.
+        OrthoKind::Front => egui::Color32::from_rgba_unmultiplied(110, 170, 240, 200),
+        // Side view shows ZY → accent the hidden +X.
+        OrthoKind::Side => egui::Color32::from_rgba_unmultiplied(230, 130, 130, 200),
+    }
+}
+
+/// Draw a small 2-arrow gizmo in the top-right corner of a PIP
+/// showing the two world axes that *are* in the projection plane.
+/// Each arrow is color-coded X=red, Y=green, Z=blue (matching
+/// Blender / Unity / Godot) with a tiny text label, so the user can
+/// answer "which way is +X in this view?" at a glance. The gizmo
+/// sits under an alpha-backed plate so it stays readable over any
+/// mesh without needing a depth-aware 3D overlay.
+fn draw_pip_axes(
+    painter: &egui::Painter,
+    pip_rect: egui::Rect,
+    kind: crate::multiview::OrthoKind,
+) {
+    use crate::multiview::OrthoKind;
+    // Screen-space unit vectors for each world axis, per PIP.
+    // `None` = axis points into/out of the screen for this view
+    // and isn't drawn. Mapping is the same one `spawn_ortho_cameras`
+    // encodes — keep these in sync if you re-orient a PIP.
+    let (x_dir, y_dir, z_dir): (
+        Option<egui::Vec2>,
+        Option<egui::Vec2>,
+        Option<egui::Vec2>,
+    ) = match kind {
+        // Top: up = -Z → world +X = screen right, +Z = screen down.
+        OrthoKind::Top => (
+            Some(egui::vec2(1.0, 0.0)),
+            None,
+            Some(egui::vec2(0.0, 1.0)),
+        ),
+        // Front: up = +Y → world +X = screen right, +Y = screen up.
+        OrthoKind::Front => (
+            Some(egui::vec2(1.0, 0.0)),
+            Some(egui::vec2(0.0, -1.0)),
+            None,
+        ),
+        // Side: camera at +X, up = +Y → world +Z = screen left
+        // (camera right is -Z), +Y = screen up.
+        OrthoKind::Side => (
+            None,
+            Some(egui::vec2(0.0, -1.0)),
+            Some(egui::vec2(-1.0, 0.0)),
+        ),
+    };
+
+    let axes: [(Option<egui::Vec2>, &str, egui::Color32); 3] = [
+        (x_dir, "X", egui::Color32::from_rgb(230, 90, 90)),
+        (y_dir, "Y", egui::Color32::from_rgb(120, 210, 120)),
+        (z_dir, "Z", egui::Color32::from_rgb(120, 170, 245)),
+    ];
+
+    // Small, top-right corner. Size scales slightly with PIP size so
+    // the gizmo stays readable when the PIPs flex with the window.
+    let radius = (pip_rect.width() * 0.13).clamp(16.0, 24.0);
+    let pad = 10.0;
+    let centre = egui::pos2(pip_rect.right() - radius - pad, pip_rect.top() + radius + pad);
+
+    // Backing plate — low-alpha round disc so the gizmo is legible
+    // over any mesh color without yelling at the user.
+    painter.circle_filled(
+        centre,
+        radius + 4.0,
+        egui::Color32::from_black_alpha(90),
+    );
+
+    for (dir, label, color) in axes.iter() {
+        let Some(d) = dir else { continue };
+        let tip = centre + *d * radius;
+        painter.line_segment(
+            [centre, tip],
+            egui::Stroke::new(2.0, *color),
+        );
+        // Arrowhead: two short segments rotated ±25° from the tip
+        // back toward the centre. Cheap and renders crisply at any
+        // scale because it's pure line geometry.
+        let back = -*d;
+        let (sin25, cos25) = (0.4226_f32, 0.9063_f32);
+        let head_len = radius * 0.35;
+        let left = egui::vec2(
+            back.x * cos25 - back.y * sin25,
+            back.x * sin25 + back.y * cos25,
+        ) * head_len;
+        let right = egui::vec2(
+            back.x * cos25 + back.y * sin25,
+            -back.x * sin25 + back.y * cos25,
+        ) * head_len;
+        painter.line_segment([tip, tip + left], egui::Stroke::new(2.0, *color));
+        painter.line_segment([tip, tip + right], egui::Stroke::new(2.0, *color));
+        // Label sits one step beyond the tip, slightly offset along
+        // the arrow direction so "X" doesn't overlap the arrowhead.
+        let label_pos = tip + *d * 10.0;
+        painter.text(
+            label_pos,
+            egui::Align2::CENTER_CENTER,
+            *label,
+            egui::FontId::proportional(11.0),
+            *color,
         );
     }
 }

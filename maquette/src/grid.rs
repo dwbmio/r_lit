@@ -26,6 +26,42 @@ pub const CELL_SIZE: f32 = 1.0;
 pub const MAX_HEIGHT: u8 = 8;
 pub const MIN_HEIGHT: u8 = 1;
 
+/// Per-cell block shape. v0.9 introduces `Sphere` as a placeholder
+/// alternate shape for the right-click "cycle shape" gesture; more
+/// shapes (cone, cylinder, slab, etc.) will land post-v1.0. The
+/// default — and the only shape the exporter currently emits — is
+/// `Cube`.
+///
+/// Serde layout: `#[serde(rename_all = "snake_case")]` so the on-disk
+/// form is human-readable. Missing field in older .maq files falls
+/// back to `Cube` via the custom `#[serde(default)]` on `Cell::shape`
+/// — existing projects load unchanged.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeKind {
+    #[default]
+    Cube,
+    Sphere,
+}
+
+impl ShapeKind {
+    /// Cycle to the next shape. Used by the right-click gesture in
+    /// the paint canvas. Order is stable and round-trips.
+    pub fn next(self) -> Self {
+        match self {
+            ShapeKind::Cube => ShapeKind::Sphere,
+            ShapeKind::Sphere => ShapeKind::Cube,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShapeKind::Cube => "Cube",
+            ShapeKind::Sphere => "Sphere",
+        }
+    }
+}
+
 /// A single cell of the 2D painting canvas.
 ///
 /// `color_idx == None` means the cell is empty (transparent, no geometry
@@ -37,9 +73,14 @@ pub struct Cell {
     /// `color_idx.is_some()`. Mesher treats `0` as `1` for legacy v1
     /// project files written before the height UI existed.
     pub height: u8,
+    /// Per-cell block shape. Defaults to `Cube` for full backward
+    /// compatibility with pre-v0.9 .maq files — the field is
+    /// `#[serde(default)]` so older projects load unchanged.
+    #[serde(default)]
+    pub shape: ShapeKind,
 }
 
-#[derive(Resource, Serialize, Deserialize)]
+#[derive(Resource, Serialize, Deserialize, Clone)]
 pub struct Grid {
     pub w: usize,
     pub h: usize,
@@ -105,7 +146,9 @@ impl Grid {
     }
 
     /// Paint a cell with the given color and height. `height` is clamped
-    /// to `MIN_HEIGHT..=MAX_HEIGHT`.
+    /// to `MIN_HEIGHT..=MAX_HEIGHT`. Preserves the cell's existing
+    /// `shape` — callers that want a specific shape should call
+    /// [`Self::paint_with_shape`] instead.
     pub fn paint(
         &mut self,
         x: usize,
@@ -113,14 +156,47 @@ impl Grid {
         color_idx: u8,
         height: u8,
     ) -> Option<(Cell, Cell)> {
+        // Preserve the existing shape if this cell already has one.
+        // "Overwrite" paint semantics are about color + height; a
+        // user who set a cell to Sphere and then recolors it expects
+        // the sphere to stay a sphere.
+        let shape = self.get(x, y).map(|c| c.shape).unwrap_or_default();
+        self.paint_with_shape(x, y, color_idx, height, shape)
+    }
+
+    /// Paint a cell with explicit shape. Used by Additive-mode code
+    /// paths in the UI where the shape carries over from the
+    /// existing cell, and by future shape-aware brushes.
+    pub fn paint_with_shape(
+        &mut self,
+        x: usize,
+        y: usize,
+        color_idx: u8,
+        height: u8,
+        shape: ShapeKind,
+    ) -> Option<(Cell, Cell)> {
         self.set_if_changed(
             x,
             y,
             Cell {
                 color_idx: Some(color_idx),
                 height: height.clamp(MIN_HEIGHT, MAX_HEIGHT),
+                shape,
             },
         )
+    }
+
+    /// Cycle the cell's shape to the next variant (see
+    /// [`ShapeKind::next`]). Noop on empty cells — cycling a shape
+    /// we have no color for would be silently invisible and is
+    /// almost certainly a mis-click. Returns `Some((before, after))`
+    /// if the cell actually changed.
+    pub fn cycle_shape(&mut self, x: usize, y: usize) -> Option<(Cell, Cell)> {
+        let current = self.get(x, y)?;
+        current.color_idx?;
+        let mut next = *current;
+        next.shape = current.shape.next();
+        self.set_if_changed(x, y, next)
     }
 
     pub fn erase(&mut self, x: usize, y: usize) -> Option<(Cell, Cell)> {
@@ -148,7 +224,7 @@ pub const MAX_PALETTE_SLOTS: usize = 256;
 /// Slots may be reused: [`Palette::add`] fills the first vacant slot
 /// before appending to the end, so long-running editing sessions
 /// don't grow the palette unbounded.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct Palette {
     /// Slot vector. `None` means "this index has been deleted and
     /// is available for reuse"; `Some(color)` is a live color.

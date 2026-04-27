@@ -19,7 +19,10 @@ struct ToonParams {
     ambient_pad: vec4<f32>,
 }
 
-@group(2) @binding(0) var<uniform> material: ToonParams;
+// Bevy 0.18 moved the material bind group from index 2 to 3 (slot 2
+// is now the per-object mesh storage buffer). Using the preprocessor
+// directive keeps this shader resilient against future re-slotting.
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ToonParams;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {

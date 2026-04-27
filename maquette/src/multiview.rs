@@ -30,27 +30,69 @@ use bevy::window::PrimaryWindow;
 /// menu. Default = `enabled = true` so new installs see the feature
 /// the first time they launch; users who want the v0.7 look can
 /// disable it.
+///
+/// ### Sizing model
+///
+/// Panel size is **proportional to window width**, not a fixed
+/// pixel value. Early versions used a hard-coded 180 px per panel,
+/// which read as comfortable on a 1024 px window (~53 % of width)
+/// but microscopic on a 4K monitor and oppressively large on a
+/// 13" laptop half-screen. We now lock the three-PIP strip to a
+/// consistent fraction of window width, with a sensible per-panel
+/// clamp so the view doesn't become either unreadable on tiny
+/// windows or wastefully gigantic on ultrawide monitors. See
+/// [`compute_panel_size`] for the math.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct MultiViewState {
     pub enabled: bool,
-    /// Side length of one PIP in logical pixels (before DPI scaling).
-    pub panel_size: u32,
+    /// Fraction of the primary window's logical width that the
+    /// entire three-PIP strip (including the two inter-panel gaps)
+    /// is allowed to occupy. 0.38 ≈ three mid-sized panels on a
+    /// typical 1280 px editor window.
+    pub strip_fraction: f32,
     /// Gap between PIPs and between the strip and the window edge.
     pub gap: u32,
     /// How much space to leave above the bottom window edge — roughly
     /// the status-bar height so the PIPs never sit behind egui.
     pub bottom_reserved: u32,
+    /// Hard floor on per-panel size. Below this, labels and axis
+    /// ticks become illegible; when a window is very narrow we'd
+    /// rather let the strip spill past `strip_fraction` than shrink
+    /// into pixel soup.
+    pub min_panel_size: u32,
+    /// Hard ceiling on per-panel size. Above this, the PIPs start
+    /// eating into the main perspective preview and feel bloated;
+    /// on wide monitors we stop growing and let the "free" space
+    /// go to the main view.
+    pub max_panel_size: u32,
 }
 
 impl Default for MultiViewState {
     fn default() -> Self {
         Self {
             enabled: true,
-            panel_size: 180,
+            strip_fraction: 0.38,
             gap: 8,
             bottom_reserved: 32,
+            min_panel_size: 100,
+            max_panel_size: 160,
         }
     }
+}
+
+/// Derive the current per-panel logical side length from the
+/// window width and the strip-fraction policy in the state. The
+/// strip contains three panels and two gaps; we solve for the
+/// panel side and clamp into the `min / max` band.
+///
+/// Pure function so `sync_viewports` (physical-pixel viewport
+/// math) and `pip_logical_rects` (logical-pixel label placement)
+/// always agree on what size the PIPs are — any divergence here
+/// produced misaligned label boxes in v0.8.
+pub fn compute_panel_size(state: &MultiViewState, window_width_logical: f32) -> f32 {
+    let strip_width = window_width_logical * state.strip_fraction;
+    let raw = (strip_width - 2.0 * state.gap as f32) / 3.0;
+    raw.clamp(state.min_panel_size as f32, state.max_panel_size as f32)
 }
 
 /// Attached to each PIP camera so we can identify and order them.
@@ -91,9 +133,26 @@ pub struct MultiViewPlugin;
 impl Plugin for MultiViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MultiViewState>()
+            .add_message::<JumpToOrthoView>()
             .add_systems(Startup, spawn_ortho_cameras)
             .add_systems(Update, (apply_enabled, sync_viewports).chain());
     }
+}
+
+/// Sent when the user clicks one of the Top / Front / Side PIPs (or
+/// uses the corresponding keyboard shortcut). The camera module
+/// listens and snaps the main `PanOrbitCamera` to that canonical
+/// angle so the user can inspect the model from a pure axis view
+/// without giving up the ability to rotate afterwards.
+///
+/// Intentionally does *not* swap the main camera's projection to
+/// orthographic — the PIPs on the right already cover that use
+/// case. This message is about "rotate the perspective preview to
+/// look from this direction", which is the natural way to read the
+/// gesture "I clicked the Top thumbnail".
+#[derive(Message, Clone, Copy, Debug)]
+pub struct JumpToOrthoView {
+    pub kind: OrthoKind,
 }
 
 /// Fixed ortho viewport height in world units. 14 covers a full
@@ -104,9 +163,18 @@ impl Plugin for MultiViewPlugin {
 const ORTHO_VIEWPORT: f32 = 14.0;
 
 fn spawn_ortho_cameras(mut commands: Commands) {
-    // Top: camera high above Y axis, looking straight down. "Up" on
-    // screen = +Z so the canvas reads the same way as the 2D paint
-    // panel (x right, z "up" toward the top of the screen).
+    // Top: camera high above the Y axis, looking straight down.
+    //
+    // Coordinate alignment with the 2D paint canvas is critical here:
+    // the canvas uses egui's y-down screen convention, and cell (x, y)
+    // is emitted into world (x, 0, y) (see `preview_mesh.rs` origin).
+    // For Top to *match* the 2D canvas pixel-for-pixel, we need:
+    //   * world +X → right on screen
+    //   * world +Z → down on screen (so canvas y-down = Top y-down)
+    // Using `up = +Z` would give world +Z → up (inverted rows) AND,
+    // via the right-hand rule, world +X → left (mirrored columns),
+    // i.e. a 180° rotation vs. the painting surface. `NEG_Z` as up
+    // flips both back into alignment.
     commands.spawn((
         Name::new("Ortho Top"),
         Camera3d::default(),
@@ -123,10 +191,9 @@ fn spawn_ortho_cameras(mut commands: Commands) {
             },
             ..OrthographicProjection::default_3d()
         }),
-        // Nudge slightly off-axis so `looking_at` has a defined frame
-        // (a pure +Y / +up alignment is fine, but keeping a tiny +X
-        // bias future-proofs us against floating-point edge cases).
-        Transform::from_xyz(0.0001, 40.0, 0.0).looking_at(Vec3::ZERO, Vec3::Z),
+        // Tiny +X bias keeps `looking_at` numerically well-defined
+        // against a near-parallel up vector.
+        Transform::from_xyz(0.0001, 40.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
         OrthoView {
             kind: OrthoKind::Top,
         },
@@ -209,7 +276,8 @@ fn sync_viewports(
     };
     let phys = window.physical_size();
     let scale = window.scale_factor();
-    let panel_px = ((state.panel_size as f32) * scale) as u32;
+    let panel_logical = compute_panel_size(&state, window.width());
+    let panel_px = (panel_logical * scale) as u32;
     let gap_px = ((state.gap as f32) * scale) as u32;
     let bottom_px = ((state.bottom_reserved as f32) * scale) as u32;
 
@@ -255,7 +323,7 @@ fn placeholder_viewport() -> Viewport {
 pub fn pip_logical_rects(window: &Window, state: &MultiViewState) -> [PipRect; 3] {
     let w = window.width();
     let h = window.height();
-    let size = state.panel_size as f32;
+    let size = compute_panel_size(state, w);
     let gap = state.gap as f32;
     let bottom = state.bottom_reserved as f32;
     let y_top = h - bottom - size;
