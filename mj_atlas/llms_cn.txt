@@ -1,7 +1,7 @@
 # mj_atlas — 游戏级纹理图集打包工具
 
-- 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据
-- 版本: 0.1.0
+- 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据；manifest 是一等公民，可 inspect / diff / verify / tag
+- 版本: 0.3.0
 - 语言: Rust
 - 二进制名: mj_atlas
 - 许可证: MIT（imagequant/quantize 功能为 GPL-3.0）
@@ -58,11 +58,14 @@ mj_atlas pack <输入目录> [选项]
 
 #### 高级选项
 
-- `--polygon`: 启用多边形 mesh 模式。输出每个精灵的 vertices/verticesUV/triangles。跳过透明区域，GPU overdraw 减少 30%+。
+- `--polygon`: 启用多边形 mesh 模式。输出每个精灵的 vertices/verticesUV/triangles。多连通域 sprite 会被分别提轮廓 + 三角化，合并到同一份 mesh 输出。GPU overdraw 减少 30%+。
 - `--tolerance <浮点>`: 多边形简化容差（默认: 2.0）。越小 = 轮廓越紧，顶点越多。
+- `--polygon-shape <模式>`: 形状模式（默认: concave）。可选: concave（保留凹轮廓）、convex（每个连通域取凸包）、auto（凹/凸包面积比 ≥ 0.85 时取凸包）
+- `--max-vertices <N>`: 单 sprite 总顶点预算（默认 0 = 关闭）。>0 时按 ×1.5 步进自动放大 tolerance（最多 8 轮）直到满足预算。每个连通域最少 3 顶点。
 - `--quantize`: 有损 PNG 压缩（imagequant）。文件大小减少约 60-70%。
 - `--quantize-quality <1-100>`: 量化质量（默认: 85）。越低 = 越小，伪影越多。
-- `--incremental`: 增量打包（预留功能）。
+- `--incremental`: 启用增量打包。读取 `<output>.manifest.json` 边车文件，按差异选择最便宜的路径：完全跳过 / 局部重打 / 全量重打。**保证 UV 稳定**——未变 sprite 的 (x, y, rotated) 完全保留。已发布的客户端可直接换 atlas PNG，无需重新 bake UV。
+- `--force`: 与 --incremental 配合使用，忽略缓存强制全量重打。常用于验证确定性。
 
 #### JSON 输出 (--json)
 
@@ -72,22 +75,79 @@ mj_atlas pack <输入目录> [选项]
   "atlases": 1,
   "total_sprites": 16,
   "duplicates_removed": 3,
+  "cached_atlases": 0,
+  "skipped": false,
   "files": [
     {
       "image": "/path/to/atlas.png",
       "data": "/path/to/atlas.json",
       "size": {"w": 1024, "h": 512},
-      "sprites": 16
+      "sprites": 16,
+      "from_cache": false
     }
   ]
 }
 ```
+
+`cached_atlases` 是命中缓存的 atlas 数量；`skipped: true` 表示本次完全没有写盘（所有 atlas 都从缓存返回）。
+`from_cache: true` 表示该 atlas 文件未被重写（manifest 与磁盘内容均未变）。
 
 #### 错误输出 (--json)
 
 ```json
 {"status": "error", "error": "No images found in: ./empty_dir"}
 ```
+
+### inspect（v0.3+）
+
+漂亮打印或 JSON 转储一个 atlas 的 manifest sidecar。只读。
+
+```
+mj_atlas inspect <ATLAS_OR_MANIFEST> [--json]
+```
+
+`<ATLAS_OR_MANIFEST>` 接受：manifest 文件本身、atlas PNG、JSON/.tpsheet/.tres sidecar、任何重命名后的 JSON 副本（仍能被识别为 manifest）、它们所在的目录，或多 bin 变体 `atlas_N.png`（自动剥离 `_N` 后缀）。
+
+人读输出：每个 atlas 的尺寸 / 占用率 / 空闲矩形数、sprite 总数与 alias 数、options_hash 前缀、tag 聚合、sprite 列表（≤64 个时全列出）。
+
+JSON 输出：`{ "summary": { ...统计... }, "manifest": { ...完整 manifest... } }`
+
+### diff（v0.3+）
+
+两个 manifest 的差异。报告 added / removed / pixel_change / resized / moved / tags_changed / unchanged，并给出 `uv_stable` 顶级判定（每个未变 sprite 的 (atlas_idx, x, y, rotated) 是否完全保留）。
+
+```
+mj_atlas diff <A> <B> [--json]
+```
+
+`uv_stable: false` 意味着 A 与 B 之间的布局被重排（通常因为发生了全量重打）——已发布客户端中 baked 的 UV 需要重新生成。
+
+### verify（v0.3+）
+
+重新计算磁盘上的 atlas PNG 哈希（可选 `--check-sources` 还会校验 sprite 源文件），不一致则退出码非 0。
+
+```
+mj_atlas verify <ATLAS_OR_MANIFEST> [--check-sources] [--json]
+```
+
+不带 `--check-sources` 只校验 atlas PNG 字节。带上之后，`<input_root>/<rel_path>` 下的每个 sprite 源文件会被重新解码并比对 pixel hash。文件丢失 / 内容修改 / 解码失败都会被报告。
+
+### tag（v0.3+）
+
+读写每个 sprite 的用户元数据：tags、attribution、source_url。直接改写 manifest，**不重打**。
+
+```
+mj_atlas tag <ATLAS_OR_MANIFEST> [SPRITE]
+    [--add tag1,tag2] [--remove tag1] [--clear]
+    [--set-attribution TEXT] [--clear-attribution]
+    [--set-source-url URL]   [--clear-source-url]
+    [--list]
+    [--json]
+```
+
+`[SPRITE]` 省略时，写操作应用到所有 sprite（适合统一打 attribution）。
+
+Tags / attribution / source_url **不参与缓存 key**，编辑它们永远不会让增量缓存失效。这些字段跨重打保留：`pack` 在写新 manifest 之前会读旧 manifest 并把这些字段合并过来。
 
 ### formats
 
@@ -164,8 +224,11 @@ Godot 4 原生 .tres 资源文件。生成:
 - 重复精灵检测: SHA256 像素哈希 + 快速预拒绝（尺寸+采样）
 - 动画自动检测: 按 name_NN.ext 命名规则分组
 - 多图集自动拆分: 超出 max-size 时自动创建多个图集
-- 多边形 mesh: 轮廓提取 → Douglas-Peucker 简化 → earcut 三角化
+- 多边形 mesh: 8-连通域 flood-fill → 每个连通域 Moore 边界跟踪 → Douglas-Peucker 简化 → earcut 三角化
+- 多连通域 mesh: 一张 sprite 内的多个不相连图形分别提轮廓 + 三角化，合并到同一份 vertices + triangles 输出
+- 多边形形状模式: concave / convex / auto，配合 max-vertices 顶点预算
 - PNG 量化: imagequant + lodepng 有损压缩
+- **UV 稳定的增量打包**: manifest 边车记录布局 + 内容哈希；输入未变 → 跳过；改动小 → 局部重打（未变 sprite 位置完全保留）；不可行 → 全量重打。manifest 同时是后续"原始资源管理"功能的基础
 
 ## 常见用法
 
@@ -182,12 +245,32 @@ mj_atlas pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-qua
 # 多边形 mesh 减少 overdraw
 mj_atlas pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
 
+# 多边形 + 顶点预算（移动端硬限制）
+mj_atlas pack ./sprites -o atlas --trim --polygon --polygon-shape auto --max-vertices 12
+
+# 增量打包（CI 提速：未变跳过，小改动局部重打，UV 稳定）
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental
+
+# 强制全量重打（验证确定性）
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental --force
+
 # CI 流水线 JSON 输出
-mj_atlas pack ./sprites -o atlas --trim --pot --json
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 
 # GUI 应用
 mj_atlas gui
 ```
+
+## Manifest 文件 (.manifest.json)
+
+`--incremental` 模式下与 atlas 同目录写入 `<output>.manifest.json`，记录：
+- `options_hash`: 影响打包结果的所有选项哈希（不包含 output_dir/output_name）
+- `sprites`: 每个 sprite 的 `(content_hash, mtime, file_size, atlas_idx, content_x, content_y, rotated, trim_offset, trimmed_size, source_size, polygon_hash, alias_of, tags, attribution, source_url)`
+- `atlases`: 每个 atlas 的 `(image_filename, image_hash, width, height, format, used_rects, free_rects)`
+
+v0.3 新增字段 `tags`、`attribution`、`source_url` 由 `mj_atlas tag` 维护，**不参与缓存 key**，跨重打保留。
+
+布局/缓存 schema 见 `docs/INCREMENTAL.md`，v0.3 manifest 子命令见 `docs/INSPECT.md`，多边形 mesh 细节见 `docs/POLYGON.md`。
 
 ## 项目文件 (.tpproj)
 
@@ -207,6 +290,8 @@ GUI 保存/加载的项目文件为 JSON 格式:
   }
 }
 ```
+
+GUI 当前不直接持久化 incremental / polygon-shape / max-vertices 设置；这些目前仅 CLI 暴露。
 
 ## 退出码
 

@@ -1,3 +1,4 @@
+mod cmd;
 mod error;
 mod output;
 mod pack;
@@ -5,6 +6,7 @@ mod pack;
 mod preview;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use pack::PolygonShape;
 use error::Result;
 use std::path::PathBuf;
 
@@ -143,9 +145,22 @@ enum Commands {
         #[arg(long, default_value = "true")]
         recursive: bool,
 
-        /// Reserved for future incremental packing (skip unchanged sprites).
-        #[arg(long, hide = true)]
+        /// Enable incremental packing. Reads `<output>.manifest.json` next to
+        /// the atlas and skips work for unchanged inputs:
+        ///   - All inputs unchanged + matching options ⇒ skip everything (fast cache hit)
+        ///   - Pure additions / in-place pixel edits ⇒ partial repack with UV stability
+        ///   - Removed sprites or resized sprites ⇒ partial repack (UV-stable, no compaction)
+        ///   - Anything that breaks the layout (atlas would need to grow) ⇒ full repack
+        /// Sprites that did NOT change keep their exact `(x, y, rotated)` across runs,
+        /// so already-deployed game code can drop in a new atlas without rebaking UVs.
+        #[arg(long)]
         incremental: bool,
+
+        /// Force a full repack even when the incremental cache would hit.
+        /// Use this when you suspect the manifest is corrupt or want to verify
+        /// determinism. Has no effect without --incremental.
+        #[arg(long)]
+        force: bool,
 
         /// Alpha threshold for trim. Pixels with alpha <= this value are considered transparent.
         /// 0 = only fully transparent pixels are trimmed (default).
@@ -180,6 +195,21 @@ enum Commands {
         /// Recommended: 1.0 (tight) to 4.0 (coarse). Default: 2.0.
         #[arg(long, default_value = "2.0", value_name = "TOLERANCE")]
         tolerance: f32,
+
+        /// Polygon shape model. Controls how each connected component is meshed.
+        /// concave (default) — keep the simplified outline; tightest fit, most vertices.
+        /// convex — replace each component with its convex hull; few vertices, may overdraw.
+        /// auto — pick convex when concave-area / hull-area ≥ 0.85, else concave.
+        #[arg(long, value_enum, default_value = "concave", value_name = "MODE")]
+        polygon_shape: PolygonShapeArg,
+
+        /// Maximum total vertex count per sprite (across all components).
+        /// 0 (default) disables the budget — uses --tolerance as-is.
+        /// >0 enables iterative tolerance escalation (×1.5 per round, max 8 rounds)
+        /// until the total vertex count fits the budget. Useful for hard
+        /// per-frame draw call budgets on mobile/web.
+        #[arg(long, default_value = "0", value_name = "N")]
+        max_vertices: u32,
     },
 
     /// Launch the interactive GUI application.
@@ -214,6 +244,103 @@ enum Commands {
     /// List all supported output formats with descriptions.
     /// With --json, outputs a JSON array of format objects.
     Formats,
+
+    /// Pretty-print or JSON-dump a packed atlas's manifest.
+    /// Accepts the manifest itself, the atlas PNG, the JSON/.tpsheet/.tres
+    /// sidecar, or the directory containing them — paths are auto-resolved.
+    #[command(
+        long_about = "Read the `<output>.manifest.json` sidecar of a packed atlas and \
+            print a human-readable summary (or full JSON with --json).\n\n\
+            Resolves any of these inputs:\n  \
+            - atlas.manifest.json          (direct)\n  \
+            - atlas.png / atlas.json       (sibling)\n  \
+            - atlas_1.png (multi-bin)      (strips _N suffix)\n  \
+            - the directory containing them"
+    )]
+    Inspect {
+        /// Path to the manifest, the atlas PNG, sidecar metadata, or the directory.
+        #[arg(value_name = "ATLAS_OR_MANIFEST")]
+        input: PathBuf,
+    },
+
+    /// Diff two manifests — added / removed / modified / moved sprites,
+    /// plus a UV-stability verdict (whether unchanged sprites kept their
+    /// position across the two pack runs).
+    Diff {
+        /// First (older) manifest. Same path-resolution rules as `inspect`.
+        #[arg(value_name = "A")]
+        a: PathBuf,
+        /// Second (newer) manifest.
+        #[arg(value_name = "B")]
+        b: PathBuf,
+    },
+
+    /// Verify that on-disk artifacts match the manifest's hashes.
+    /// Always rehashes atlas PNGs. With --check-sources also rehashes every
+    /// sprite source file. Exits non-zero on any mismatch.
+    Verify {
+        /// Path to the manifest, atlas, or its directory.
+        #[arg(value_name = "ATLAS_OR_MANIFEST")]
+        input: PathBuf,
+        /// Also rehash sprite source files (slower but catches accidental
+        /// edits to the input library that haven't been repacked yet).
+        #[arg(long)]
+        check_sources: bool,
+    },
+
+    /// Read or edit a sprite's user metadata (tags, attribution, source URL).
+    /// Edits the manifest in place — no repack is triggered.
+    /// When <SPRITE> is omitted, write ops apply to ALL sprites (use carefully).
+    Tag {
+        /// Path to the manifest, atlas, or its directory.
+        #[arg(value_name = "ATLAS_OR_MANIFEST")]
+        input: PathBuf,
+        /// Sprite name (relative path key, as shown by `inspect`). Omit to
+        /// target every sprite in the manifest.
+        #[arg(value_name = "SPRITE")]
+        sprite: Option<String>,
+        /// Add tags. Comma-separated. Existing tags are preserved.
+        #[arg(long, value_name = "TAGS", value_delimiter = ',')]
+        add: Vec<String>,
+        /// Remove specific tags. Comma-separated.
+        #[arg(long, value_name = "TAGS", value_delimiter = ',')]
+        remove: Vec<String>,
+        /// Drop ALL tags on the targeted sprite(s).
+        #[arg(long)]
+        clear: bool,
+        /// Set the attribution string (free-form; license / author / etc.).
+        #[arg(long, value_name = "TEXT")]
+        set_attribution: Option<String>,
+        /// Clear the attribution string.
+        #[arg(long)]
+        clear_attribution: bool,
+        /// Set the source URL (where this sprite came from).
+        #[arg(long, value_name = "URL")]
+        set_source_url: Option<String>,
+        /// Clear the source URL.
+        #[arg(long)]
+        clear_source_url: bool,
+        /// Read-only: list the current metadata without modifying anything.
+        #[arg(long)]
+        list: bool,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+enum PolygonShapeArg {
+    Concave,
+    Convex,
+    Auto,
+}
+
+impl From<&PolygonShapeArg> for PolygonShape {
+    fn from(a: &PolygonShapeArg) -> Self {
+        match a {
+            PolygonShapeArg::Concave => PolygonShape::Concave,
+            PolygonShapeArg::Convex => PolygonShape::Convex,
+            PolygonShapeArg::Auto => PolygonShape::Auto,
+        }
+    }
 }
 
 #[derive(Clone, ValueEnum)]
@@ -288,8 +415,18 @@ fn run(cli: &Cli) -> Result<()> {
             quantize_quality,
             polygon,
             tolerance,
+            polygon_shape,
+            max_vertices,
+            force,
         } => {
             let out_dir = output_dir.clone().unwrap_or_else(|| input.clone());
+
+            let fmt = match format {
+                OutputFormat::Json => output::Format::JsonHash,
+                OutputFormat::JsonArray => output::Format::JsonArray,
+                OutputFormat::GodotTpsheet => output::Format::GodotTpsheet,
+                OutputFormat::GodotTres => output::Format::GodotTres,
+            };
 
             let opts = pack::PackOptions {
                 input_dir: input.clone(),
@@ -305,38 +442,41 @@ fn run(cli: &Cli) -> Result<()> {
                 pot: *pot,
                 recursive: *recursive,
                 incremental: *incremental,
+                force: *force,
+                format: fmt,
                 quantize: *quantize,
                 quantize_quality: *quantize_quality,
                 polygon: *polygon,
                 tolerance: *tolerance,
+                polygon_shape: PolygonShape::from(polygon_shape),
+                max_vertices: *max_vertices,
             };
 
             let results = pack::execute(&opts)?;
-
-            let fmt = match format {
-                OutputFormat::Json => output::Format::JsonHash,
-                OutputFormat::JsonArray => output::Format::JsonArray,
-                OutputFormat::GodotTpsheet => output::Format::GodotTpsheet,
-                OutputFormat::GodotTres => output::Format::GodotTres,
-            };
 
             for atlas_result in &results {
                 atlas_result.save_to_disk(&opts, fmt)?;
             }
 
+            pack::persist_manifest(&opts, &results)?;
+
             if cli.json {
                 let total_dups: usize = results.iter().map(|r| r.duplicates_removed).sum();
+                let cached_count = results.iter().filter(|r| r.from_cache).count();
                 let summary = serde_json::json!({
                     "status": "ok",
                     "atlases": results.len(),
                     "total_sprites": results.iter().map(|r| r.sprites.len()).sum::<usize>(),
                     "duplicates_removed": total_dups,
+                    "cached_atlases": cached_count,
+                    "skipped": cached_count == results.len() && !results.is_empty(),
                     "files": results.iter().map(|r| {
                         serde_json::json!({
                             "image": r.image_path.display().to_string(),
                             "data": r.data_path.display().to_string(),
                             "size": {"w": r.width, "h": r.height},
                             "sprites": r.sprites.len(),
+                            "from_cache": r.from_cache,
                         })
                     }).collect::<Vec<_>>(),
                 });
@@ -420,6 +560,40 @@ fn run(cli: &Cli) -> Result<()> {
                 println!("  godot-tres      Godot native .tres (zero plugin, AtlasTexture + SpriteFrames)");
             }
             Ok(())
+        }
+
+        Commands::Inspect { input } => cmd::inspect::run(input, cli.json),
+
+        Commands::Diff { a, b } => cmd::diff::run(a, b, cli.json),
+
+        Commands::Verify {
+            input,
+            check_sources,
+        } => cmd::verify::run(input, *check_sources, cli.json),
+
+        Commands::Tag {
+            input,
+            sprite,
+            add,
+            remove,
+            clear,
+            set_attribution,
+            clear_attribution,
+            set_source_url,
+            clear_source_url,
+            list,
+        } => {
+            let ops = cmd::tag::TagOps {
+                add: add.clone(),
+                remove: remove.clone(),
+                clear: *clear,
+                set_attribution: set_attribution.clone(),
+                clear_attribution: *clear_attribution,
+                set_source_url: set_source_url.clone(),
+                clear_source_url: *clear_source_url,
+                list_only: *list,
+            };
+            cmd::tag::run(input, sprite.as_deref(), ops, cli.json)
         }
     }
 }

@@ -3,8 +3,9 @@ pub mod json;
 
 use crate::error::Result;
 use crate::pack::{AtlasResult, PackOptions};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Format {
     JsonHash,
     JsonArray,
@@ -12,6 +13,18 @@ pub enum Format {
     GodotTpsheet,
     /// Godot native .tres AtlasTexture (zero plugin)
     GodotTres,
+}
+
+impl Format {
+    /// Stable string representation used in manifests and options_hash.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Format::JsonHash => "json",
+            Format::JsonArray => "json-array",
+            Format::GodotTpsheet => "godot-tpsheet",
+            Format::GodotTres => "godot-tres",
+        }
+    }
 }
 
 pub fn write_output(atlas: &AtlasResult, format: Format, opts: &PackOptions) -> Result<()> {

@@ -1,7 +1,7 @@
 # mj_atlas — Game-Ready Texture Atlas Packer
 
-- purpose: Pack sprite images into optimized texture atlases with metadata for game engines
-- version: 0.1.0
+- purpose: Pack sprite images into optimized texture atlases with metadata for game engines; manifest is a first-class artifact you can inspect / diff / verify / tag
+- version: 0.3.0
 - language: Rust
 - binary: mj_atlas
 - license: MIT (imagequant/quantize feature is GPL-3.0)
@@ -58,11 +58,14 @@ mj_atlas pack <INPUT_DIR> [OPTIONS]
 
 #### Advanced Options
 
-- `--polygon`: Enable polygon mesh mode. Outputs vertices/verticesUV/triangles per sprite. Reduces GPU overdraw 30%+ by skipping transparent regions.
+- `--polygon`: Enable polygon mesh mode. Outputs vertices/verticesUV/triangles per sprite. Multi-component sprites get one contour + triangulation per connected component, all joined into one mesh. Reduces GPU overdraw 30%+ by skipping transparent regions.
 - `--tolerance <FLOAT>`: Polygon simplification tolerance (default: 2.0). Lower = tighter contour, more vertices.
+- `--polygon-shape <MODE>`: Shape mode (default: concave). Values: concave (keep simplified outline), convex (per-component convex hull), auto (convex when concave/hull-area ≥ 0.85, else concave).
+- `--max-vertices <N>`: Total vertex budget per sprite (default 0 = off). When > 0, escalate tolerance ×1.5 (max 8 rounds) until total vertex count ≤ N. Each component has a hard floor of 3 vertices.
 - `--quantize`: Lossy PNG compression via imagequant. Reduces file size ~60-70%.
 - `--quantize-quality <1-100>`: Quantization quality (default: 85). Lower = smaller, more artifacts.
-- `--incremental`: Reserved for future incremental packing.
+- `--incremental`: Enable incremental packing. Reads `<output>.manifest.json` sidecar and picks the cheapest path: full-skip (no changes) / partial repack (small changes) / full repack (layout-breaking changes). **Guarantees UV stability** — every unchanged sprite keeps its exact `(x, y, rotated)` across runs. Already-deployed clients can drop in a new atlas PNG without rebaking UVs.
+- `--force`: With --incremental, ignore the manifest and force a full repack. Useful for verifying determinism.
 
 #### JSON Output (--json)
 
@@ -72,22 +75,78 @@ mj_atlas pack <INPUT_DIR> [OPTIONS]
   "atlases": 1,
   "total_sprites": 16,
   "duplicates_removed": 3,
+  "cached_atlases": 0,
+  "skipped": false,
   "files": [
     {
       "image": "/path/to/atlas.png",
       "data": "/path/to/atlas.json",
       "size": {"w": 1024, "h": 512},
-      "sprites": 16
+      "sprites": 16,
+      "from_cache": false
     }
   ]
 }
 ```
+
+`cached_atlases` counts atlases reused from cache. `skipped: true` means no atlas was rewritten (every atlas was a cache hit). `from_cache: true` on a file means its bytes are unchanged on disk.
 
 #### Error Output (--json)
 
 ```json
 {"status": "error", "error": "No images found in: ./empty_dir"}
 ```
+
+### inspect (v0.3+)
+
+Pretty-print or JSON-dump a packed atlas's manifest sidecar. Read-only.
+
+```
+mj_atlas inspect <ATLAS_OR_MANIFEST> [--json]
+```
+
+`<ATLAS_OR_MANIFEST>` accepts: the manifest file, the atlas PNG, the JSON/.tpsheet/.tres sidecar, a renamed JSON copy of a manifest, the directory containing them, or any multi-bin atlas variant `atlas_N.png` (auto-strips the `_N` suffix).
+
+Human output: per-atlas size/occupancy/free-rect count, total sprites, alias count, options_hash prefix, tag aggregation, and the sprite list (when ≤64 sprites).
+
+JSON output: `{ "summary": { ...stats... }, "manifest": { ...full manifest... } }`.
+
+### diff (v0.3+)
+
+Diff two manifests. Reports added / removed / pixel_change / resized / moved / tags_changed / unchanged plus the verdict `uv_stable` (whether every unchanged sprite kept its exact `(atlas_idx, x, y, rotated)`).
+
+```
+mj_atlas diff <A> <B> [--json]
+```
+
+`uv_stable: false` means the layout was reshuffled between A and B (typically because a full repack happened) — already-deployed clients with baked UVs will need a rebake.
+
+### verify (v0.3+)
+
+Rehash on-disk atlas PNGs and (optionally) sprite source files; non-zero exit on mismatch.
+
+```
+mj_atlas verify <ATLAS_OR_MANIFEST> [--check-sources] [--json]
+```
+
+Without `--check-sources` only the atlas PNG bytes are checked. With it, every sprite source file at `<input_root>/<rel_path>` is decoded and its pixel hash is compared to the manifest. Missing/altered/decode-failed sources are all reported.
+
+### tag (v0.3+)
+
+Read or edit per-sprite user metadata: tags, attribution, source URL. Edits the manifest in place — never repacks.
+
+```
+mj_atlas tag <ATLAS_OR_MANIFEST> [SPRITE]
+    [--add tag1,tag2] [--remove tag1] [--clear]
+    [--set-attribution TEXT] [--clear-attribution]
+    [--set-source-url URL]   [--clear-source-url]
+    [--list]
+    [--json]
+```
+
+When `[SPRITE]` is omitted, write ops apply to every sprite (useful for blanket attribution).
+
+Tags / attribution / source_url are NOT part of the cache key. Editing them never invalidates the incremental cache. The fields survive across repacks: `pack` reads any prior manifest and merges these fields into the fresh one before saving.
 
 ### formats
 
@@ -164,8 +223,11 @@ Native Godot 4 .tres resources. Generates:
 - Duplicate sprite detection: SHA256 pixel hash with fast pre-rejection (size+sampling)
 - Animation auto-detection: Groups sprites by name_NN.ext pattern
 - Multi-atlas auto-split: When sprites exceed max-size, automatically creates multiple atlases
-- Polygon mesh: Contour extraction → Douglas-Peucker simplification → earcut triangulation
+- Polygon mesh: 8-connected flood-fill components → Moore neighbor tracing per component → Douglas-Peucker simplification → earcut triangulation
+- Multi-component meshing: disjoint shapes within one sprite each get their own contour, joined into one combined vertices+triangles output
+- Polygon shape modes: concave / convex / auto, plus max-vertices vertex budget with iterative tolerance escalation
 - PNG quantization: imagequant + lodepng for lossy compression
+- **UV-stable incremental packing**: manifest sidecar records layout + content hashes; unchanged inputs ⇒ skip; small diffs ⇒ partial repack (unchanged sprites keep their exact position); layout-breaking changes ⇒ full repack. The manifest is also the foundation for a future "raw resource manager" that builds on top of mj_atlas's content-addressed view.
 
 ## Common Usage Patterns
 
@@ -182,12 +244,32 @@ mj_atlas pack ./sprites -o atlas --trim --rotate --pot --quantize --quantize-qua
 # Polygon mesh for reduced overdraw
 mj_atlas pack ./sprites -o atlas --trim --pot --polygon --tolerance 1.5
 
+# Polygon + vertex budget (mobile hard limit)
+mj_atlas pack ./sprites -o atlas --trim --polygon --polygon-shape auto --max-vertices 12
+
+# Incremental (CI speedup: skip when nothing changed, UV-stable partial repack on small diffs)
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental
+
+# Force full repack (verify determinism)
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental --force
+
 # CI pipeline with JSON output
-mj_atlas pack ./sprites -o atlas --trim --pot --json
+mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 
 # GUI application
 mj_atlas gui
 ```
+
+## Manifest File (.manifest.json)
+
+When `--incremental` is enabled, mj_atlas writes `<output>.manifest.json` next to the atlas. It records:
+- `options_hash`: hash of all output-affecting options (excludes output_dir/output_name, which are paths only)
+- `sprites`: per-sprite `(content_hash, mtime, file_size, atlas_idx, content_x, content_y, rotated, trim_offset, trimmed_size, source_size, polygon_hash, alias_of, tags, attribution, source_url)`
+- `atlases`: per-atlas `(image_filename, image_hash, width, height, format, used_rects, free_rects)`
+
+The v0.3 fields `tags`, `attribution`, `source_url` are user-editable via `mj_atlas tag` and are NOT part of the cache key. They survive across repacks.
+
+See `docs/INCREMENTAL.md` for the layout/cache schema, `docs/INSPECT.md` for the v0.3 manifest subcommands, and `docs/POLYGON.md` for polygon mesh details.
 
 ## Project File (.tpproj)
 
@@ -207,6 +289,8 @@ The GUI saves/loads project files in JSON format:
   }
 }
 ```
+
+The GUI does not currently persist `incremental`, `polygon_shape`, or `max_vertices` settings — these are CLI-only for now.
 
 ## Exit Codes
 

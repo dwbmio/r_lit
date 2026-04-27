@@ -1,79 +1,147 @@
 use image::RgbaImage;
 
-/// Extract the outer contour polygon from a sprite's alpha channel.
-/// Uses Moore neighbor tracing on the binary alpha mask.
-/// Returns vertices in pixel coordinates relative to the image.
-pub fn extract_contour(img: &RgbaImage, alpha_threshold: u8) -> Vec<(f32, f32)> {
+/// Extract the outer contour of every connected (8-neighbor) opaque component.
+///
+/// Scans the alpha mask, runs flood fill to label components, then traces each
+/// component's external boundary with Moore neighbor tracing. Components below
+/// `min_area_pixels` are discarded as noise (e.g. anti-aliased dust pixels).
+///
+/// Returns one polygon (vertices in pixel coords) per component, ordered by
+/// scan position so output is deterministic. Holes inside components are
+/// **not** extracted — overdraw of a few interior transparent pixels is much
+/// cheaper than supporting hole topology in the downstream mesh format.
+pub fn extract_components(
+    img: &RgbaImage,
+    alpha_threshold: u8,
+    min_area_pixels: u32,
+) -> Vec<Vec<(f32, f32)>> {
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return vec![];
     }
+    let w_i = w as i32;
+    let h_i = h as i32;
 
-    let w = w as i32;
-    let h = h as i32;
-
-    let opaque = |x: i32, y: i32| -> bool {
-        if x < 0 || y < 0 || x >= w || y >= h {
-            return false;
-        }
-        img.get_pixel(x as u32, y as u32)[3] > alpha_threshold
-    };
-
-    // Find start pixel: first opaque pixel scanning top-to-bottom, left-to-right
-    let mut start = None;
-    'outer: for y in 0..h {
+    // Build a binary opaque-pixel mask.
+    let mut opaque = vec![false; (w * h) as usize];
+    for y in 0..h {
         for x in 0..w {
-            if opaque(x, y) {
-                start = Some((x, y));
-                break 'outer;
+            opaque[(y * w + x) as usize] = img.get_pixel(x, y)[3] > alpha_threshold;
+        }
+    }
+
+    // Flood-fill labeling (8-connected). Each pixel gets a component id; -1 = empty.
+    let mut label: Vec<i32> = vec![-1; (w * h) as usize];
+    let mut next_label: i32 = 0;
+    let mut areas: Vec<u32> = Vec::new();
+
+    for sy in 0..h_i {
+        for sx in 0..w_i {
+            let idx = (sy * w_i + sx) as usize;
+            if !opaque[idx] || label[idx] != -1 {
+                continue;
+            }
+            // BFS flood fill
+            let lbl = next_label;
+            next_label += 1;
+            let mut area: u32 = 0;
+            let mut stack: Vec<(i32, i32)> = vec![(sx, sy)];
+            while let Some((x, y)) = stack.pop() {
+                if x < 0 || y < 0 || x >= w_i || y >= h_i {
+                    continue;
+                }
+                let i = (y * w_i + x) as usize;
+                if !opaque[i] || label[i] != -1 {
+                    continue;
+                }
+                label[i] = lbl;
+                area += 1;
+                for (dx, dy) in [
+                    (-1, 0), (1, 0), (0, -1), (0, 1),
+                    (-1, -1), (1, -1), (-1, 1), (1, 1),
+                ] {
+                    stack.push((x + dx, y + dy));
+                }
+            }
+            areas.push(area);
+        }
+    }
+
+    if next_label == 0 {
+        // Fully transparent — return a single full-rect component (preserves
+        // legacy behaviour where transparent sprites still get a fallback mesh).
+        return vec![vec![
+            (0.0, 0.0),
+            (w as f32, 0.0),
+            (w as f32, h as f32),
+            (0.0, h as f32),
+        ]];
+    }
+
+    let mut polygons = Vec::with_capacity(next_label as usize);
+    for lbl in 0..next_label {
+        if areas[lbl as usize] < min_area_pixels {
+            continue;
+        }
+        // Trace this component's external boundary.
+        if let Some(poly) = trace_component(&label, w_i, h_i, lbl) {
+            if poly.len() >= 3 {
+                polygons.push(poly);
             }
         }
     }
 
-    let (sx, sy) = match start {
-        Some(s) => s,
-        None => {
-            // Fully transparent
-            return vec![(0.0, 0.0), (w as f32, 0.0), (w as f32, h as f32), (0.0, h as f32)];
-        }
-    };
+    if polygons.is_empty() {
+        // All components were below the noise floor — fall back to full rect.
+        return vec![vec![
+            (0.0, 0.0),
+            (w as f32, 0.0),
+            (w as f32, h as f32),
+            (0.0, h as f32),
+        ]];
+    }
 
-    // Moore neighbor tracing
-    // 8-connected neighbors in clockwise order starting from left
+    polygons
+}
+
+/// Trace the boundary of a labeled component using Moore neighbor tracing.
+fn trace_component(label: &[i32], w: i32, h: i32, target: i32) -> Option<Vec<(f32, f32)>> {
+    // Find the topmost-leftmost pixel of `target`.
+    let mut start: Option<(i32, i32)> = None;
+    'find: for y in 0..h {
+        for x in 0..w {
+            if label[(y * w + x) as usize] == target {
+                start = Some((x, y));
+                break 'find;
+            }
+        }
+    }
+    let (sx, sy) = start?;
+
     let neighbors: [(i32, i32); 8] = [
-        (-1, 0),  // 0: left
-        (-1, -1), // 1: top-left
-        (0, -1),  // 2: top
-        (1, -1),  // 3: top-right
-        (1, 0),   // 4: right
-        (1, 1),   // 5: bottom-right
-        (0, 1),   // 6: bottom
-        (-1, 1),  // 7: bottom-left
+        (-1, 0),  (-1, -1), (0, -1), (1, -1),
+        (1, 0),   (1, 1),   (0, 1),  (-1, 1),
     ];
+    let is_target = |x: i32, y: i32| -> bool {
+        x >= 0 && y >= 0 && x < w && y < h && label[(y * w + x) as usize] == target
+    };
 
     let mut boundary: Vec<(i32, i32)> = Vec::new();
     let mut cx = sx;
     let mut cy = sy;
-    // Start direction: came from left, so backtrack_dir = 0 (left neighbor)
     let mut backtrack_dir: usize = 0;
 
-    let max_iters = (w * h * 4) as usize; // safety limit
-
+    let max_iters = (w * h * 4) as usize;
     for _ in 0..max_iters {
         boundary.push((cx, cy));
-
-        // Start searching from (backtrack_dir + 1) % 8 in clockwise order
         let start_dir = (backtrack_dir + 1) % 8;
         let mut found = false;
-
         for step in 0..8 {
             let dir = (start_dir + step) % 8;
             let (dx, dy) = neighbors[dir];
             let nx = cx + dx;
             let ny = cy + dy;
-
-            if opaque(nx, ny) {
-                // backtrack direction = opposite of the direction we came from
+            if is_target(nx, ny) {
                 backtrack_dir = (dir + 4) % 8;
                 cx = nx;
                 cy = ny;
@@ -81,29 +149,35 @@ pub fn extract_contour(img: &RgbaImage, alpha_threshold: u8) -> Vec<(f32, f32)> 
                 break;
             }
         }
-
-        if !found || (cx == sx && cy == sy) {
+        if !found || (cx == sx && cy == sy && boundary.len() > 1) {
             break;
         }
     }
 
-    // Remove consecutive duplicates
     boundary.dedup();
-
     if boundary.len() < 3 {
-        return vec![
-            (0.0, 0.0),
-            (w as f32, 0.0),
-            (w as f32, h as f32),
-            (0.0, h as f32),
-        ];
+        return None;
     }
+    Some(
+        boundary
+            .into_iter()
+            .map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5))
+            .collect(),
+    )
+}
 
-    // Convert to f32, shift to pixel centers (+0.5)
-    boundary
-        .iter()
-        .map(|&(x, y)| (x as f32 + 0.5, y as f32 + 0.5))
-        .collect()
+/// Polygon signed area (shoelace formula). Positive = CCW, negative = CW.
+pub fn polygon_area(points: &[(f32, f32)]) -> f32 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        sum += x1 * y2 - x2 * y1;
+    }
+    sum.abs() / 2.0
 }
 
 /// Compute the convex hull of a set of points using Graham scan.

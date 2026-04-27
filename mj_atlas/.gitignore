@@ -2,5 +2,15 @@
 /target/
 /test_sprites/
 
+# Generated demo assets (regenerate with examples/gen_sprites.py)
+/examples/sprites/
+/examples/out/
+
+# Re-include human-readable docs that the root .gitignore would otherwise hide
+# (the root rule is "*.md" with a small whitelist).
+!README.md
+!README_CN.md
+!docs/*.md
+
 # OS files
 .DS_Store

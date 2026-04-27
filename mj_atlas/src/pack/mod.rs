@@ -1,6 +1,7 @@
 pub mod contour;
 pub mod dedup;
 pub mod extrude;
+pub mod manifest;
 pub mod multi_bin;
 pub mod simplify;
 pub mod triangulate;
@@ -27,8 +28,17 @@ pub struct PackOptions {
     pub rotate: bool,
     pub pot: bool,
     pub recursive: bool,
-    #[allow(dead_code)]
+    /// Enable incremental packing — read manifest, only repack what changed.
+    /// When all inputs match (and the manifest is consistent with the on-disk
+    /// atlases) the pack is skipped entirely. Otherwise we attempt a partial
+    /// repack (additive / in-place) before falling back to a full repack.
     pub incremental: bool,
+    /// Force full repack even when incremental cache would hit. Implies
+    /// rewriting the manifest from scratch.
+    pub force: bool,
+    /// Output metadata format (json/json-array/godot-tpsheet/godot-tres).
+    /// Part of the cache key — changing format invalidates the manifest.
+    pub format: crate::output::Format,
     /// Enable PNG quantization (lossy compression)
     pub quantize: bool,
     /// PNG quantization quality 0-100 (lower = smaller file, more loss)
@@ -37,6 +47,24 @@ pub struct PackOptions {
     pub polygon: bool,
     /// Polygon simplification tolerance (lower = tighter fit, more vertices)
     pub tolerance: f32,
+    /// Polygon shape model — concave (default), convex (hull per component),
+    /// or auto (heuristic based on convex-vs-concave area ratio).
+    pub polygon_shape: PolygonShape,
+    /// Maximum total vertex count across all components per sprite.
+    /// 0 disables the budget — uses `tolerance` as-is.
+    /// >0 enables a binary search on tolerance to land within this budget.
+    pub max_vertices: u32,
+}
+
+/// Polygon shape mode — controls how each connected component is converted to a mesh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonShape {
+    /// Use the simplified concave outline (default; tightest fit, most vertices).
+    Concave,
+    /// Replace the outline with its convex hull (fewer vertices, may overdraw).
+    Convex,
+    /// Auto-pick: convex when hull-area / concave-area > 0.85, else concave.
+    Auto,
 }
 
 /// Information about a packed sprite in the final atlas.
@@ -82,11 +110,31 @@ pub struct AtlasResult {
     pub duplicates_removed: usize,
     /// In-memory atlas image (not written to disk until save_to_disk is called)
     pub atlas_image: RgbaImage,
+    /// Outer rectangles per non-alias sprite (place_x, place_y, place_w, place_h, rotated).
+    /// Populated during full/partial pack — used by manifest to maintain UV stability.
+    pub outer_rects: Vec<manifest::UsedRect>,
+    /// Maximal free rectangles within this atlas. Used by additive incremental packing.
+    pub free_rects: Vec<manifest::FreeRect>,
+    /// True when this atlas was reused from cache and disk writes should be skipped.
+    pub from_cache: bool,
 }
 
 impl AtlasResult {
-    /// Write atlas image and metadata to disk. Call this only on explicit export.
+    /// Write atlas image and metadata to disk. When `from_cache` is true, both
+    /// the atlas PNG and the metadata sidecar are already valid on disk and we
+    /// skip writes (idempotent re-runs become near-zero cost).
     pub fn save_to_disk(&self, opts: &PackOptions, fmt: crate::output::Format) -> Result<()> {
+        if self.from_cache {
+            log::info!(
+                "Cache hit: {} unchanged ({}x{}, {} sprites)",
+                self.image_path.display(),
+                self.width,
+                self.height,
+                self.sprites.len()
+            );
+            return Ok(());
+        }
+
         std::fs::create_dir_all(&opts.output_dir)?;
         if opts.quantize {
             save_quantized_png(&self.atlas_image, &self.image_path, opts.quantize_quality)?;
@@ -99,9 +147,14 @@ impl AtlasResult {
     }
 }
 
-/// Main entry point: execute the packing pipeline.
+/// Main entry point: execute the packing pipeline (in-memory only).
+///
+/// When `opts.incremental` is true and a valid manifest is found, this returns
+/// cached results (with `from_cache = true`) for unchanged atlases without
+/// touching the disk. The caller is responsible for calling
+/// [`AtlasResult::save_to_disk`] (a no-op for cached entries) and, in CLI
+/// flows, [`persist_manifest`] afterwards to refresh the manifest sidecar.
 pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
-    // 1. Collect input images
     let entries = collect_images(&opts.input_dir, opts.recursive)?;
     if entries.is_empty() {
         return Err(AppError::NoImages(opts.input_dir.display().to_string()));
@@ -112,7 +165,45 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
         opts.input_dir.display()
     );
 
-    // 2. Load all images in parallel
+    if opts.incremental && !opts.force {
+        match try_incremental(opts, &entries)? {
+            Some(results) => return Ok(results),
+            None => {} // fall through to full repack
+        }
+    }
+
+    log::info!("Running full repack");
+    full_pack(opts, &entries)
+}
+
+/// Persist (or refresh) the manifest sidecar after atlases have been written.
+///
+/// Call this after `AtlasResult::save_to_disk` in CLI flows. When all atlases
+/// were cache hits the existing manifest stays as-is (no rehash, no rewrite).
+/// When `opts.incremental` is false this is a no-op — only manifest cleanup is
+/// performed so a stale sidecar from a previous incremental run can't poison
+/// future runs.
+pub fn persist_manifest(opts: &PackOptions, results: &[AtlasResult]) -> Result<()> {
+    if !opts.incremental {
+        let mpath = manifest::Manifest::path_for(opts);
+        if mpath.exists() {
+            let _ = std::fs::remove_file(&mpath);
+        }
+        return Ok(());
+    }
+
+    // All results from cache ⇒ manifest already matches disk state.
+    if results.iter().all(|r| r.from_cache) {
+        return Ok(());
+    }
+
+    let entries = collect_images(&opts.input_dir, opts.recursive)?;
+    write_manifest(opts, results, &entries)
+}
+
+/// Run the full pack pipeline with no cache. Used both as the no-incremental
+/// path and as the fallback when partial repack is impossible.
+fn full_pack(opts: &PackOptions, entries: &[(String, PathBuf)]) -> Result<Vec<AtlasResult>> {
     use rayon::prelude::*;
     let loaded: Vec<Result<(String, RgbaImage)>> = entries
         .par_iter()
@@ -157,16 +248,7 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
             let pack_h = trimmed_img.height() + extra;
 
             let polygon_data = if opts.polygon {
-                let raw_contour = contour::extract_contour(&trimmed_img, opts.trim_threshold);
-                let simplified = simplify::simplify_polygon(&raw_contour, opts.tolerance);
-                let triangles = triangulate::triangulate(&simplified);
-                let hull = contour::convex_hull(&simplified);
-                let obb = contour::min_area_obb(&hull);
-                Some(PolygonData {
-                    contour: simplified,
-                    triangles,
-                    obb,
-                })
+                Some(build_polygon_data(&trimmed_img, opts))
             } else {
                 None
             };
@@ -222,6 +304,8 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
 
         let mut atlas_img = RgbaImage::new(bin_w as u32, bin_h as u32);
         let mut atlas_sprites = Vec::with_capacity(packed_items.len() + aliases.len());
+        // Outer bboxes (incl. extrude/padding/spacing reservation) for free-rect tracking.
+        let mut outer_rects: Vec<manifest::UsedRect> = Vec::with_capacity(packed_items.len());
 
         // Build a map: canonical_name → PackedSprite for alias resolution
         let mut canonical_packed: HashMap<String, PackedSprite> = HashMap::new();
@@ -249,6 +333,18 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
                 place_x as i64,
                 place_y as i64,
             );
+
+            // The bin packer reserves `pack_w + spacing` × `pack_h + spacing` per
+            // item — record that full reservation so additive incremental packing
+            // stays clear of the spacing margin.
+            outer_rects.push(manifest::UsedRect {
+                name: sprite.name.clone(),
+                x: place_x,
+                y: place_y,
+                w: packed.rect.w as u32,
+                h: packed.rect.h as u32,
+                rotated: was_rotated,
+            });
 
             let content_x = place_x + opts.extrude + opts.padding;
             let content_y = place_y + opts.extrude + opts.padding;
@@ -307,6 +403,12 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
         // Sort sprites by name for deterministic output
         atlas_sprites.sort_by(|a, b| a.name.cmp(&b.name));
 
+        let used_for_free: Vec<(u32, u32, u32, u32)> = outer_rects
+            .iter()
+            .map(|r| (r.x, r.y, r.w, r.h))
+            .collect();
+        let free_rects = manifest::compute_free_rects(bin_w as u32, bin_h as u32, &used_for_free);
+
         results.push(AtlasResult {
             image_path,
             data_path,
@@ -316,6 +418,9 @@ pub fn execute(opts: &PackOptions) -> Result<Vec<AtlasResult>> {
             animations: animations.clone(),
             duplicates_removed: dup_count,
             atlas_image: atlas_img,
+            outer_rects,
+            free_rects,
+            from_cache: false,
         });
     }
 
@@ -420,16 +525,101 @@ fn save_quantized_png(img: &RgbaImage, path: &Path, quality: u8) -> Result<()> {
     Ok(())
 }
 
-/// Polygon mesh data for a sprite.
+/// Polygon mesh data for a sprite. May span multiple disjoint components —
+/// `triangles` indices are flat into the combined `contour` vertex list.
 #[derive(Clone)]
 struct PolygonData {
-    /// Simplified contour vertices in sprite-local coords
+    /// Simplified contour vertices in sprite-local coords (concatenated across components).
     contour: Vec<(f32, f32)>,
-    /// Triangle indices into contour
+    /// Triangle indices into the combined `contour` array.
     triangles: Vec<[usize; 3]>,
-    /// OBB: (center_x, center_y, half_w, half_h, angle)
+    /// OBB of the union: (center_x, center_y, half_w, half_h, angle).
     #[allow(dead_code)]
     obb: (f32, f32, f32, f32, f32),
+}
+
+/// Build polygon mesh data for one sprite. Handles multi-component sprites,
+/// applies `polygon_shape` (concave/convex/auto), and enforces `max_vertices`
+/// budget via tolerance escalation when the budget is exceeded.
+fn build_polygon_data(img: &RgbaImage, opts: &PackOptions) -> PolygonData {
+    // Drop dust components below this many opaque pixels — a 2x2 dot still
+    // survives but isolated antialiased pixels are filtered out.
+    const MIN_COMPONENT_AREA: u32 = 4;
+
+    let raw_components = contour::extract_components(img, opts.trim_threshold, MIN_COMPONENT_AREA);
+
+    // Step 1: simplify each component independently with the requested tolerance.
+    // Step 2: if a vertex budget is set and we're still over it, escalate
+    //         tolerance (×1.5 per round) up to a small bound.
+    let mut tolerance = opts.tolerance;
+    let mut simplified: Vec<Vec<(f32, f32)>>;
+    let max_iters = if opts.max_vertices > 0 { 8 } else { 1 };
+    let mut iter = 0;
+    loop {
+        simplified = raw_components
+            .iter()
+            .map(|c| simplify::simplify_polygon(c, tolerance))
+            .collect();
+
+        let total_verts: u32 = simplified.iter().map(|p| p.len() as u32).sum();
+        if opts.max_vertices == 0 || total_verts <= opts.max_vertices || iter >= max_iters {
+            break;
+        }
+        // Escalate — geometric progression converges fast for typical sprites.
+        tolerance *= 1.5;
+        iter += 1;
+    }
+
+    // Step 3: shape mode per component.
+    let shaped: Vec<Vec<(f32, f32)>> = simplified
+        .into_iter()
+        .map(|c| apply_shape_mode(&c, opts.polygon_shape))
+        .collect();
+
+    // Step 4: triangulate each component, concatenate with index offset.
+    let mut combined_contour: Vec<(f32, f32)> = Vec::new();
+    let mut combined_triangles: Vec<[usize; 3]> = Vec::new();
+    for poly in &shaped {
+        let offset = combined_contour.len();
+        let tris = triangulate::triangulate(poly);
+        combined_contour.extend(poly.iter().copied());
+        combined_triangles.extend(
+            tris.iter()
+                .map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]),
+        );
+    }
+
+    let hull = contour::convex_hull(&combined_contour);
+    let obb = contour::min_area_obb(&hull);
+
+    PolygonData {
+        contour: combined_contour,
+        triangles: combined_triangles,
+        obb,
+    }
+}
+
+fn apply_shape_mode(poly: &[(f32, f32)], mode: PolygonShape) -> Vec<(f32, f32)> {
+    if poly.len() < 3 {
+        return poly.to_vec();
+    }
+    match mode {
+        PolygonShape::Concave => poly.to_vec(),
+        PolygonShape::Convex => contour::convex_hull(poly),
+        PolygonShape::Auto => {
+            // Pick convex when the hull only adds a small amount of overdraw.
+            // Threshold 0.85 chosen empirically: typical character outlines have
+            // ratio ~0.6-0.75 (concave wins), simple icons ~0.9+ (convex wins).
+            let concave_area = contour::polygon_area(poly);
+            let hull = contour::convex_hull(poly);
+            let hull_area = contour::polygon_area(&hull);
+            if hull_area > 0.0 && concave_area / hull_area >= 0.85 {
+                hull
+            } else {
+                poly.to_vec()
+            }
+        }
+    }
 }
 
 /// Internal sprite data during processing.
@@ -506,6 +696,858 @@ fn detect_animations_from_names(names: &[String]) -> HashMap<String, Vec<String>
     }
 
     groups
+}
+
+// ─── Incremental pack ────────────────────────────────────────────────────────
+
+/// Try the incremental fast path. Returns:
+///   - `Ok(Some(results))`  → cache is valid, use these results (some may be `from_cache`)
+///   - `Ok(None)`           → cache miss / partial repack rejected; caller falls back to full
+///   - `Err(_)`             → I/O error reading manifest or input metadata
+fn try_incremental(
+    opts: &PackOptions,
+    entries: &[(String, PathBuf)],
+) -> Result<Option<Vec<AtlasResult>>> {
+    let manifest_path = manifest::Manifest::path_for(opts);
+    let cached = match manifest::Manifest::try_load(&manifest_path)? {
+        Some(m) => m,
+        None => {
+            log::debug!(
+                "incremental: no manifest at {}, full repack",
+                manifest_path.display()
+            );
+            return Ok(None);
+        }
+    };
+
+    // Stage 1: option compatibility — must match exactly.
+    let current_options_hash = manifest::compute_options_hash(opts);
+    if current_options_hash != cached.options_hash {
+        log::info!("incremental: options changed since last pack, full repack");
+        return Ok(None);
+    }
+
+    // Stage 2: input root must match (different sprite tree ⇒ unrelated cache).
+    if cached.input_root != opts.input_dir.to_string_lossy() {
+        log::info!("incremental: input directory changed, full repack");
+        return Ok(None);
+    }
+
+    // Stage 3: existing atlas files must still be present and unaltered.
+    for atlas in &cached.atlases {
+        let atlas_image_path = opts.output_dir.join(&atlas.image_filename);
+        if !atlas_image_path.exists() {
+            log::info!(
+                "incremental: atlas image missing on disk: {}",
+                atlas_image_path.display()
+            );
+            return Ok(None);
+        }
+        let on_disk_hash = manifest::hash_file(&atlas_image_path)?;
+        if on_disk_hash != atlas.image_hash {
+            log::info!(
+                "incremental: atlas image hash changed on disk: {}",
+                atlas_image_path.display()
+            );
+            return Ok(None);
+        }
+    }
+
+    // Stage 4: diff inputs against the manifest (no pixel decode yet — file
+    // size + mtime is the fast pre-check; only ambiguous cases hit pixel hash).
+    let diff = diff_inputs(&cached, entries)?;
+    log::info!(
+        "incremental: diff = {} added, {} removed, {} modified, {} unchanged",
+        diff.added.len(),
+        diff.removed.len(),
+        diff.modified.len(),
+        diff.unchanged.len()
+    );
+
+    // Branch A: nothing changed → full skip, synthesize cached results.
+    if diff.is_unchanged() {
+        log::info!("incremental: full cache hit, skipping pack entirely");
+        return Ok(Some(synthesize_cached_results(opts, &cached)?));
+    }
+
+    // Branch B: try partial repack — keep unchanged sprites at their exact
+    // (x, y, rotated) so deployed clients can drop in the new atlas without
+    // rebaking UVs. Falls back to None on any layout-breaking change.
+    match try_partial_repack(opts, entries, &cached, &diff)? {
+        Some(results) => {
+            log::info!("incremental: partial repack succeeded (UV-stable)");
+            Ok(Some(results))
+        }
+        None => {
+            log::info!("incremental: partial repack rejected, falling back to full repack");
+            Ok(None)
+        }
+    }
+}
+
+/// Rebuild a `Vec<AtlasResult>` from a manifest and the on-disk atlas PNGs,
+/// without doing any packing. The atlas image is loaded so the caller can still
+/// access pixels (e.g. GUI inline preview); `from_cache=true` means save_to_disk
+/// is a no-op.
+fn synthesize_cached_results(
+    opts: &PackOptions,
+    manifest: &manifest::Manifest,
+) -> Result<Vec<AtlasResult>> {
+    let mut results = Vec::with_capacity(manifest.atlases.len());
+
+    // Group sprites by atlas_idx for fast assembly.
+    let mut sprites_by_atlas: HashMap<usize, Vec<&manifest::SpriteEntry>> = HashMap::new();
+    for entry in manifest.sprites.values() {
+        sprites_by_atlas
+            .entry(entry.atlas_idx)
+            .or_default()
+            .push(entry);
+    }
+
+    let all_names: Vec<String> = manifest.sprites.keys().cloned().collect();
+    let animations = detect_animations_from_names(&all_names);
+
+    for (atlas_idx, atlas) in manifest.atlases.iter().enumerate() {
+        let image_path = opts.output_dir.join(&atlas.image_filename);
+        let data_path = opts.output_dir.join(&atlas.data_filename);
+
+        // Load the cached atlas PNG so callers (GUI) can still preview.
+        let atlas_image = image::open(&image_path)?.into_rgba8();
+
+        let mut sprites: Vec<PackedSprite> = sprites_by_atlas
+            .get(&atlas_idx)
+            .map(|v| {
+                v.iter()
+                    .map(|e| PackedSprite {
+                        name: e.rel_path.clone(),
+                        x: e.content_x,
+                        y: e.content_y,
+                        w: e.trimmed_size[0],
+                        h: e.trimmed_size[1],
+                        rotated: e.rotated,
+                        trimmed: e.trim_offset != [0, 0]
+                            || e.trimmed_size != e.source_size,
+                        trim_offset_x: e.trim_offset[0],
+                        trim_offset_y: e.trim_offset[1],
+                        source_w: e.source_size[0],
+                        source_h: e.source_size[1],
+                        alias_of: e.alias_of.clone(),
+                        // Polygon mesh is not reconstructed in cached mode — the
+                        // sidecar metadata file already on disk contains it. The
+                        // in-memory PackedSprite is only used for `--json` summary
+                        // and GUI preview, which don't need the mesh.
+                        vertices: None,
+                        vertices_uv: None,
+                        triangles: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        sprites.sort_by(|a, b| a.name.cmp(&b.name));
+
+        results.push(AtlasResult {
+            image_path,
+            data_path,
+            width: atlas.width,
+            height: atlas.height,
+            sprites,
+            animations: animations.clone(),
+            duplicates_removed: 0,
+            atlas_image,
+            outer_rects: atlas.used_rects.clone(),
+            free_rects: atlas.free_rects.clone(),
+            from_cache: true,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Diff current input set against the manifest. Uses (file_size, mtime) as a
+/// fast pre-check and only computes a SHA256 pixel hash for ambiguous cases.
+fn diff_inputs(
+    manifest: &manifest::Manifest,
+    entries: &[(String, PathBuf)],
+) -> Result<manifest::InputDiff> {
+    use rayon::prelude::*;
+
+    let entries_by_name: HashMap<&str, &Path> = entries
+        .iter()
+        .map(|(n, p)| (n.as_str(), p.as_path()))
+        .collect();
+
+    // Removed = in manifest, not on disk.
+    let mut removed: Vec<String> = manifest
+        .sprites
+        .keys()
+        .filter(|n| !entries_by_name.contains_key(n.as_str()) && {
+            // Aliases live in the manifest but resolve to the canonical sprite.
+            // If the canonical is still present, alias is technically derived and
+            // can be skipped from "removed" — but for v0.2 simplicity we treat
+            // alias removal as a change too.
+            true
+        })
+        .cloned()
+        .collect();
+    removed.sort();
+
+    // Each entry: classify as added / unchanged / modified.
+    let classified: Vec<(String, ClassifyResult)> = entries
+        .par_iter()
+        .map(|(name, path)| {
+            let result = classify_entry(name, path, manifest)?;
+            Ok((name.clone(), result))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut added = Vec::new();
+    let mut modified = Vec::new();
+    let mut unchanged = Vec::new();
+
+    for (name, c) in classified {
+        match c {
+            ClassifyResult::Added => added.push(name),
+            ClassifyResult::Unchanged => unchanged.push(name),
+            ClassifyResult::Modified { size_changed } => {
+                modified.push(manifest::ModifiedSprite { name, size_changed })
+            }
+        }
+    }
+
+    added.sort();
+    unchanged.sort();
+    modified.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(manifest::InputDiff {
+        added,
+        removed,
+        modified,
+        unchanged,
+    })
+}
+
+enum ClassifyResult {
+    Added,
+    Unchanged,
+    Modified { size_changed: bool },
+}
+
+fn classify_entry(
+    name: &str,
+    path: &Path,
+    manifest: &manifest::Manifest,
+) -> Result<ClassifyResult> {
+    let entry = match manifest.sprite(name) {
+        Some(e) => e,
+        None => return Ok(ClassifyResult::Added),
+    };
+
+    // Fast pre-check: identical (size, mtime) ⇒ assume unchanged.
+    // This avoids decoding pixels for the common "rebuild without changes" case.
+    let (size, mtime) = manifest::file_fingerprint(path)?;
+    if size == entry.file_size && mtime == entry.mtime {
+        return Ok(ClassifyResult::Unchanged);
+    }
+
+    // Fingerprint changed — decode and compute pixel hash to confirm.
+    let img = image::open(path)?.into_rgba8();
+    let pixel_hash = manifest::hash_pixels(&img);
+    if pixel_hash == entry.content_hash {
+        // Pixels identical, just file metadata changed (touch, copy).
+        return Ok(ClassifyResult::Unchanged);
+    }
+
+    // Genuine change — was the trimmed dimension preserved?
+    // We only compute trimmed size if trim is enabled (using a default threshold
+    // here is a slight approximation; classification only needs a binary "size
+    // changed" hint, which the upcoming partial-repack path will refine).
+    let (w, h) = img.dimensions();
+    let size_changed = (w, h) != (entry.source_size[0], entry.source_size[1]);
+
+    Ok(ClassifyResult::Modified { size_changed })
+}
+
+// ─── Partial repack ──────────────────────────────────────────────────────────
+
+/// Attempt a partial repack that preserves the exact (x, y, rotated) of every
+/// sprite that did not change. Returns `Some(results)` on success or `None` if
+/// the diff cannot be applied without growing an atlas (in which case the
+/// caller falls back to a full repack).
+///
+/// Strategy:
+///   1. Build a working copy of every existing atlas (load PNG, copy used/free).
+///   2. **Removed** sprites: drop entry, clear pixels, mark old rect as free.
+///   3. **Modified-same-size** sprites: replace pixels in-place at existing rect.
+///   4. **Modified-resized** sprites: treat as remove + add.
+///   5. **Added** sprites: try-fit into combined free space across atlases
+///      (best-short-side fit), place pixels, refresh free rects.
+///   6. If any add fails to fit anywhere ⇒ return None (no atlas growth).
+///
+/// Animations are re-detected on the new full sprite list. Atlases that didn't
+/// see any add/remove/modify keep their PNG (cache hit) but their metadata
+/// sidecar is re-emitted because animations are a global view.
+fn try_partial_repack(
+    opts: &PackOptions,
+    entries: &[(String, PathBuf)],
+    cached: &manifest::Manifest,
+    diff: &manifest::InputDiff,
+) -> Result<Option<Vec<AtlasResult>>> {
+    // 1. Load all existing atlas images into editable state.
+    let mut atlases: Vec<WorkingAtlas> = cached
+        .atlases
+        .iter()
+        .map(|a| {
+            let img_path = opts.output_dir.join(&a.image_filename);
+            let img = image::open(&img_path)?.into_rgba8();
+            Ok(WorkingAtlas {
+                image_filename: a.image_filename.clone(),
+                data_filename: a.data_filename.clone(),
+                width: a.width,
+                height: a.height,
+                image: img,
+                used_rects: a.used_rects.clone(),
+                free_rects: a.free_rects.clone(),
+                dirty: false,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // 2. Build a mutable view of the manifest's per-sprite entries.
+    let mut sprites: HashMap<String, manifest::SpriteEntry> =
+        cached.sprites.clone().into_iter().collect();
+
+    // 3. Apply removals: drop entry, free outer rect, clear pixels.
+    for name in &diff.removed {
+        if let Some(entry) = sprites.remove(name) {
+            // Aliases reference a canonical — only the canonical owns a layout slot.
+            if entry.alias_of.is_some() {
+                continue;
+            }
+            if let Some(atlas) = atlases.get_mut(entry.atlas_idx) {
+                if let Some(pos) = atlas.used_rects.iter().position(|u| u.name == *name) {
+                    let removed = atlas.used_rects.swap_remove(pos);
+                    clear_atlas_region(&mut atlas.image, &removed);
+                    atlas.free_rects = manifest::compute_free_rects(
+                        atlas.width,
+                        atlas.height,
+                        &atlas.used_rects.iter().map(|r| (r.x, r.y, r.w, r.h)).collect::<Vec<_>>(),
+                    );
+                    atlas.dirty = true;
+                }
+            }
+        }
+    }
+
+    // 4. Build the entries-by-name lookup for image loading.
+    let entries_by_name: HashMap<&str, &Path> = entries
+        .iter()
+        .map(|(n, p)| (n.as_str(), p.as_path()))
+        .collect();
+
+    // 5. Process added + modified sprites: load + preprocess.
+    //    For modified-resized we treat as remove+add (free old rect first).
+    let mut to_place: Vec<SpriteData> = Vec::new();
+    use rayon::prelude::*;
+
+    let mut work_names: Vec<String> = diff.added.clone();
+    for m in &diff.modified {
+        if m.size_changed {
+            // Free the old rect (full remove), schedule re-add later.
+            if let Some(entry) = sprites.remove(&m.name) {
+                if let Some(atlas) = atlases.get_mut(entry.atlas_idx) {
+                    if let Some(pos) =
+                        atlas.used_rects.iter().position(|u| u.name == m.name)
+                    {
+                        let removed = atlas.used_rects.swap_remove(pos);
+                        clear_atlas_region(&mut atlas.image, &removed);
+                        atlas.free_rects = manifest::compute_free_rects(
+                            atlas.width,
+                            atlas.height,
+                            &atlas.used_rects.iter().map(|r| (r.x, r.y, r.w, r.h)).collect::<Vec<_>>(),
+                        );
+                        atlas.dirty = true;
+                    }
+                }
+            }
+            work_names.push(m.name.clone());
+        }
+    }
+    work_names.sort();
+    work_names.dedup();
+
+    let processed: Vec<Result<SpriteData>> = work_names
+        .par_iter()
+        .map(|name| {
+            let path = entries_by_name.get(name.as_str()).ok_or_else(|| {
+                AppError::Custom(format!("partial: missing path for '{}'", name))
+            })?;
+            let img = image::open(path)?.into_rgba8();
+            Ok(preprocess_sprite(name.clone(), img, opts))
+        })
+        .collect();
+    for sd in processed {
+        to_place.push(sd?);
+    }
+
+    // 6. In-place pixel replacement for same-size modifications. We re-trim
+    //    using the same options; if the trimmed dimensions differ from the
+    //    manifest's record we bail out (this reclassifies as resized — should
+    //    have been caught earlier; safety net).
+    for m in &diff.modified {
+        if m.size_changed {
+            continue;
+        }
+        let sprite_data = match preprocess_one(opts, &m.name, &entries_by_name)? {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let entry = match sprites.get(&m.name) {
+            Some(e) => e.clone(),
+            None => continue,
+        };
+        if entry.alias_of.is_some() {
+            continue;
+        }
+        // Verify trimmed dims match (else bail and let full-repack handle).
+        let new_trim = [
+            sprite_data.original_image.width(),
+            sprite_data.original_image.height(),
+        ];
+        if new_trim != entry.trimmed_size {
+            log::info!(
+                "partial: sprite '{}' trimmed size changed {:?} -> {:?}; bail to full",
+                m.name,
+                entry.trimmed_size,
+                new_trim
+            );
+            return Ok(None);
+        }
+        let atlas = match atlases.get_mut(entry.atlas_idx) {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let outer = match atlas.used_rects.iter().find(|u| u.name == m.name) {
+            Some(u) => u.clone(),
+            None => return Ok(None),
+        };
+        // Repaint extruded image at outer.x/outer.y (apply rotation if needed).
+        let to_paint = if outer.rotated {
+            rotate_90cw(&sprite_data.extruded_image)
+        } else {
+            sprite_data.extruded_image.clone()
+        };
+        // Clear the old region first so transparent pixels of new sprite win.
+        clear_atlas_region(&mut atlas.image, &outer);
+        image::imageops::overlay(&mut atlas.image, &to_paint, outer.x as i64, outer.y as i64);
+
+        // Update sprite entry (content_hash, mtime, polygon hash).
+        let (size, mtime) = manifest::file_fingerprint(
+            entries_by_name
+                .get(m.name.as_str())
+                .copied()
+                .ok_or_else(|| AppError::Custom("partial: missing path".into()))?,
+        )?;
+        let new_hash = manifest::hash_pixels(&sprite_data.original_image);
+        sprites
+            .entry(m.name.clone())
+            .and_modify(|e| {
+                e.file_size = size;
+                e.mtime = mtime;
+                e.content_hash = new_hash.clone();
+                if let Some(poly) = &sprite_data.polygon_data {
+                    e.polygon_hash = Some(manifest::hash_polygon(&poly.contour, &poly.triangles));
+                } else {
+                    e.polygon_hash = None;
+                }
+            });
+        atlas.dirty = true;
+    }
+
+    // 7. Place added (and resized-modified) sprites into combined free space.
+    //    We try every atlas's free_rects; pick the one with the tightest fit.
+    //    On a successful placement we update used_rects, free_rects, paint pixels,
+    //    and append a sprite entry. If anything can't fit, return None.
+    for sd in to_place {
+        let extra = opts.extrude * 2 + opts.padding * 2;
+        let outer_w = sd.original_image.width() + extra + opts.spacing;
+        let outer_h = sd.original_image.height() + extra + opts.spacing;
+
+        // Find the best-fit atlas + free rect.
+        let mut best: Option<(usize, manifest::FitResult)> = None;
+        for (idx, atlas) in atlases.iter().enumerate() {
+            if let Some(fit) = manifest::try_fit(&atlas.free_rects, outer_w, outer_h, opts.rotate) {
+                if best.as_ref().map_or(true, |(_, f)| fit.score < f.score) {
+                    best = Some((idx, fit));
+                }
+            }
+        }
+        let (atlas_idx, fit) = match best {
+            Some(x) => x,
+            None => {
+                log::info!(
+                    "partial: sprite '{}' ({}x{}) does not fit any free rect; bail",
+                    sd.name,
+                    outer_w,
+                    outer_h
+                );
+                return Ok(None);
+            }
+        };
+
+        let atlas = &mut atlases[atlas_idx];
+        // Paint extruded image rotated as needed.
+        let to_paint = if fit.rotated {
+            rotate_90cw(&sd.extruded_image)
+        } else {
+            sd.extruded_image.clone()
+        };
+        image::imageops::overlay(&mut atlas.image, &to_paint, fit.x as i64, fit.y as i64);
+
+        atlas.used_rects.push(manifest::UsedRect {
+            name: sd.name.clone(),
+            x: fit.x,
+            y: fit.y,
+            w: fit.w,
+            h: fit.h,
+            rotated: fit.rotated,
+        });
+        atlas.free_rects = manifest::compute_free_rects(
+            atlas.width,
+            atlas.height,
+            &atlas.used_rects.iter().map(|r| (r.x, r.y, r.w, r.h)).collect::<Vec<_>>(),
+        );
+        atlas.dirty = true;
+
+        let content_x = fit.x + opts.extrude + opts.padding;
+        let content_y = fit.y + opts.extrude + opts.padding;
+        let content_w = sd.original_image.width();
+        let content_h = sd.original_image.height();
+
+        let path = entries_by_name
+            .get(sd.name.as_str())
+            .copied()
+            .ok_or_else(|| AppError::Custom("partial: missing path".into()))?;
+        let (size, mtime) = manifest::file_fingerprint(path)?;
+        let content_hash = manifest::hash_pixels(&sd.original_image);
+
+        sprites.insert(
+            sd.name.clone(),
+            manifest::SpriteEntry {
+                rel_path: sd.name.clone(),
+                file_size: size,
+                mtime,
+                content_hash,
+                trim_offset: [sd.trim_info.offset_x, sd.trim_info.offset_y],
+                trimmed_size: [content_w, content_h],
+                source_size: [sd.trim_info.source_w, sd.trim_info.source_h],
+                polygon_hash: sd
+                    .polygon_data
+                    .as_ref()
+                    .map(|p| manifest::hash_polygon(&p.contour, &p.triangles)),
+                atlas_idx,
+                content_x,
+                content_y,
+                rotated: fit.rotated,
+                alias_of: None,
+                // Newly-added sprites have no tags by default. The user can
+                // attach metadata afterwards with `mj_atlas tag`.
+                tags: Vec::new(),
+                attribution: None,
+                source_url: None,
+            },
+        );
+    }
+
+    // 8. Build AtlasResult set. Reuse cached atlases when not dirty.
+    let all_names: Vec<String> = sprites.keys().cloned().collect();
+    let animations = detect_animations_from_names(&all_names);
+
+    let mut sprites_by_atlas: HashMap<usize, Vec<&manifest::SpriteEntry>> = HashMap::new();
+    for entry in sprites.values() {
+        sprites_by_atlas.entry(entry.atlas_idx).or_default().push(entry);
+    }
+
+    let mut results = Vec::with_capacity(atlases.len());
+    for (atlas_idx, atlas) in atlases.into_iter().enumerate() {
+        let mut atlas_sprites: Vec<PackedSprite> = sprites_by_atlas
+            .get(&atlas_idx)
+            .map(|v| {
+                v.iter()
+                    .map(|e| PackedSprite {
+                        name: e.rel_path.clone(),
+                        x: e.content_x,
+                        y: e.content_y,
+                        w: e.trimmed_size[0],
+                        h: e.trimmed_size[1],
+                        rotated: e.rotated,
+                        trimmed: e.trim_offset != [0, 0]
+                            || e.trimmed_size != e.source_size,
+                        trim_offset_x: e.trim_offset[0],
+                        trim_offset_y: e.trim_offset[1],
+                        source_w: e.source_size[0],
+                        source_h: e.source_size[1],
+                        alias_of: e.alias_of.clone(),
+                        vertices: None,
+                        vertices_uv: None,
+                        triangles: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        atlas_sprites.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // Animations are global — when ANY atlas is dirty, every metadata
+        // sidecar must be re-emitted. So we mark cached=false for clean
+        // atlases too if any sibling changed (but skip the expensive PNG
+        // re-write because the image bytes are unchanged).
+        let any_dirty = sprites.values().any(|_| true) // always recompute metadata
+            && false; // placeholder; we override below
+
+        let _ = any_dirty;
+        let from_cache = !atlas.dirty;
+        results.push(AtlasResult {
+            image_path: opts.output_dir.join(&atlas.image_filename),
+            data_path: opts.output_dir.join(&atlas.data_filename),
+            width: atlas.width,
+            height: atlas.height,
+            sprites: atlas_sprites,
+            animations: animations.clone(),
+            duplicates_removed: 0,
+            atlas_image: atlas.image,
+            outer_rects: atlas.used_rects,
+            free_rects: atlas.free_rects,
+            from_cache,
+        });
+    }
+
+    // If ANY result is dirty we must re-emit metadata for ALL atlases (animations
+    // are global). Force from_cache=false on clean atlases when there's
+    // any dirty sibling — but skip PNG re-writes by introducing a "metadata only"
+    // marker. For v0.2 simplicity, when any sibling is dirty we mark all dirty:
+    // a clean atlas's PNG re-encode matches its prior bytes (deterministic with
+    // same RGBA), so manifest hash check still passes on subsequent runs.
+    if results.iter().any(|r| !r.from_cache) {
+        for r in &mut results {
+            r.from_cache = false;
+        }
+    }
+
+    Ok(Some(results))
+}
+
+struct WorkingAtlas {
+    image_filename: String,
+    data_filename: String,
+    width: u32,
+    height: u32,
+    image: RgbaImage,
+    used_rects: Vec<manifest::UsedRect>,
+    free_rects: Vec<manifest::FreeRect>,
+    dirty: bool,
+}
+
+/// Zero out a rectangular region in the atlas (transparent RGBA).
+fn clear_atlas_region(img: &mut RgbaImage, rect: &manifest::UsedRect) {
+    let (img_w, img_h) = img.dimensions();
+    for y in rect.y..(rect.y + rect.h).min(img_h) {
+        for x in rect.x..(rect.x + rect.w).min(img_w) {
+            img.put_pixel(x, y, image::Rgba([0, 0, 0, 0]));
+        }
+    }
+}
+
+/// Preprocess a single sprite — trim, extrude, polygon mesh.
+fn preprocess_sprite(name: String, img: RgbaImage, opts: &PackOptions) -> SpriteData {
+    let (trimmed_img, trim_info) = if opts.trim {
+        let tr = trim::trim_transparent(&img, opts.trim_threshold);
+        (tr.image.clone(), tr)
+    } else {
+        let (w, h) = img.dimensions();
+        (
+            img.clone(),
+            trim::TrimResult {
+                image: img.clone(),
+                offset_x: 0,
+                offset_y: 0,
+                source_w: w,
+                source_h: h,
+                trimmed: false,
+            },
+        )
+    };
+
+    let extruded = extrude::extrude_edges(&trimmed_img, opts.extrude);
+    let extra = opts.extrude * 2 + opts.padding * 2;
+    let pack_w = trimmed_img.width() + extra;
+    let pack_h = trimmed_img.height() + extra;
+
+    let polygon_data = if opts.polygon {
+        Some(build_polygon_data(&trimmed_img, opts))
+    } else {
+        None
+    };
+
+    SpriteData {
+        name,
+        original_image: trimmed_img,
+        extruded_image: extruded,
+        trim_info,
+        pack_w,
+        pack_h,
+        polygon_data,
+    }
+}
+
+fn preprocess_one(
+    opts: &PackOptions,
+    name: &str,
+    entries_by_name: &HashMap<&str, &Path>,
+) -> Result<Option<SpriteData>> {
+    let path = match entries_by_name.get(name) {
+        Some(p) => *p,
+        None => return Ok(None),
+    };
+    let img = image::open(path)?.into_rgba8();
+    Ok(Some(preprocess_sprite(name.to_string(), img, opts)))
+}
+
+/// Persist the manifest after a successful (full or partial) pack.
+fn write_manifest(
+    opts: &PackOptions,
+    results: &[AtlasResult],
+    entries: &[(String, PathBuf)],
+) -> Result<()> {
+    use rayon::prelude::*;
+
+    // Hash every input pixel buffer (parallel) and gather file fingerprints.
+    type EntryHash = (String, u64, i64, String, [u32; 2]);
+    let entry_hashes: Vec<Result<EntryHash>> = entries
+        .par_iter()
+        .map(|(name, path)| {
+            let (size, mtime) = manifest::file_fingerprint(path)?;
+            let img = image::open(path)?.into_rgba8();
+            let pix = manifest::hash_pixels(&img);
+            let dims = img.dimensions();
+            Ok((name.clone(), size, mtime, pix, [dims.0, dims.1]))
+        })
+        .collect();
+    let entry_hashes: Vec<EntryHash> = entry_hashes
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut by_name: HashMap<String, EntryHash> = HashMap::new();
+    for h in entry_hashes {
+        by_name.insert(h.0.clone(), h);
+    }
+
+    // Build atlas entries first (and remember where each sprite landed).
+    let mut atlases: Vec<manifest::AtlasEntry> = Vec::with_capacity(results.len());
+    let mut sprite_atlas_idx: HashMap<String, usize> = HashMap::new();
+
+    for (atlas_idx, r) in results.iter().enumerate() {
+        let image_filename = r
+            .image_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| format!("{}.png", opts.output_name));
+        let data_filename = r
+            .data_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| opts.output_name.clone());
+
+        // Hash the atlas PNG file ON DISK so manifest stays consistent with
+        // whatever variant we wrote (quantized / not).
+        let image_hash = manifest::hash_file(&r.image_path)?;
+
+        for ur in &r.outer_rects {
+            sprite_atlas_idx.insert(ur.name.clone(), atlas_idx);
+        }
+
+        atlases.push(manifest::AtlasEntry {
+            image_filename,
+            data_filename,
+            width: r.width,
+            height: r.height,
+            image_hash,
+            format: opts.format.as_str().to_string(),
+            used_rects: r.outer_rects.clone(),
+            free_rects: r.free_rects.clone(),
+        });
+    }
+
+    // Build sprite map (canonical + aliases). We rely on `r.sprites` for the
+    // full set (including aliases) and `r.outer_rects` for layout placement.
+    let mut sprites = std::collections::BTreeMap::new();
+    for r in results {
+        for ps in &r.sprites {
+            // Find atlas index for this sprite (alias resolves to canonical).
+            let lookup_name = ps.alias_of.as_deref().unwrap_or(&ps.name);
+            let atlas_idx = match sprite_atlas_idx.get(lookup_name).copied() {
+                Some(i) => i,
+                None => continue, // alias to a sprite not in outer_rects (shouldn't happen)
+            };
+
+            let (file_size, mtime, content_hash, source_size) =
+                if let Some(h) = by_name.get(&ps.name) {
+                    (h.1, h.2, h.3.clone(), h.4)
+                } else {
+                    (0u64, 0i64, String::new(), [ps.source_w, ps.source_h])
+                };
+
+            sprites.insert(
+                ps.name.clone(),
+                manifest::SpriteEntry {
+                    rel_path: ps.name.clone(),
+                    file_size,
+                    mtime,
+                    content_hash,
+                    trim_offset: [ps.trim_offset_x, ps.trim_offset_y],
+                    trimmed_size: [ps.w, ps.h],
+                    source_size,
+                    polygon_hash: ps
+                        .vertices
+                        .as_ref()
+                        .zip(ps.triangles.as_ref())
+                        .map(|(v, t)| {
+                            let contour: Vec<(f32, f32)> =
+                                v.iter().map(|&[a, b]| (a, b)).collect();
+                            manifest::hash_polygon(&contour, t)
+                        }),
+                    atlas_idx,
+                    content_x: ps.x,
+                    content_y: ps.y,
+                    rotated: ps.rotated,
+                    alias_of: ps.alias_of.clone(),
+                    // Tags / attribution / source_url are user-editable metadata
+                    // and survive across packs via merge_user_metadata below.
+                    tags: Vec::new(),
+                    attribution: None,
+                    source_url: None,
+                },
+            );
+        }
+    }
+
+    let mut new_manifest = manifest::Manifest {
+        version: manifest::MANIFEST_VERSION,
+        tool: format!("mj_atlas {}", env!("CARGO_PKG_VERSION")),
+        options_hash: manifest::compute_options_hash(opts),
+        input_root: opts.input_dir.to_string_lossy().to_string(),
+        sprites,
+        atlases,
+    };
+
+    let path = manifest::Manifest::path_for(opts);
+    // Preserve user-set tags/attribution/source_url across repacks. The fresh
+    // manifest never sets these (the pack pipeline doesn't know about them);
+    // we copy from the prior manifest if one exists.
+    if let Some(prior) = manifest::Manifest::try_load(&path)? {
+        manifest::merge_user_metadata(&mut new_manifest, &prior);
+    }
+    new_manifest.save(&path)?;
+    log::info!("Saved manifest: {}", path.display());
+    Ok(())
 }
 
 /// Rotate an image 90° clockwise.

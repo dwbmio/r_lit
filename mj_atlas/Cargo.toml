@@ -1,8 +1,8 @@
 [package]
 name = "mj_atlas"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
-description = "MJAtlas — game-ready texture atlas packer (trim, extrude, rotate, multi-bin, polygon mesh, Godot native output)"
+description = "MJAtlas — game-ready texture atlas packer (UV-stable incremental, multi-component polygon mesh, manifest as first-class artifact: inspect/diff/verify/tag, Godot native output)"
 
 [features]
 default = []

@@ -107,6 +107,11 @@ struct SpriteInfo {
     rotated: bool,
     source_w: f32,
     source_h: f32,
+    /// Polygon mesh — atlas-space vertex positions (verticesUV from json output).
+    /// `None` when the atlas was not packed in polygon mode.
+    mesh_vertices: Option<Vec<[f32; 2]>>,
+    /// Triangle indices into `mesh_vertices`.
+    mesh_triangles: Option<Vec<[usize; 3]>>,
 }
 
 // ─── Alert / Toast system ───
@@ -198,6 +203,8 @@ struct InlinePreview {
     hovered: Option<usize>,
     show_grid: bool,
     show_names: bool,
+    /// Polygon-mesh overlay toggle (only meaningful when atlas was packed with --polygon).
+    show_mesh: bool,
     /// First frame: auto-fit zoom
     needs_fit: bool,
 }
@@ -222,6 +229,7 @@ struct ViewerState {
     selected_sprite: Option<usize>,
     show_grid: bool,
     show_names: bool,
+    show_mesh: bool,
     search_text: String,
     source_path: String,
 }
@@ -1143,10 +1151,14 @@ impl MJAtlasApp {
                 pot: s.pot,
                 recursive: true,
                 incremental: false,
+                force: false,
+                format: output::Format::JsonHash,
                 quantize: s.quantize,
                 quantize_quality: s.quantize_quality,
                 polygon: s.polygon,
                 tolerance: s.tolerance,
+                polygon_shape: pack::PolygonShape::Concave,
+                max_vertices: 0,
             };
 
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1168,6 +1180,8 @@ impl MJAtlasApp {
                                     rotated: sp.rotated,
                                     source_w: sp.source_w as f32,
                                     source_h: sp.source_h as f32,
+                                    mesh_vertices: sp.vertices_uv.clone(),
+                                    mesh_triangles: sp.triangles.clone(),
                                 }
                             }).collect();
                             BackgroundPackResult::Success {
@@ -1221,6 +1235,7 @@ impl MJAtlasApp {
                                 hovered: None,
                                 show_grid: true,
                                 show_names: false,
+                                show_mesh: false,
                                 needs_fit: true,
                             });
                         }
@@ -1633,6 +1648,7 @@ impl MJAtlasApp {
                     ui.add(egui::Slider::new(&mut state.zoom, 0.1..=10.0).logarithmic(true));
                     ui.checkbox(&mut state.show_grid, "Grid");
                     ui.checkbox(&mut state.show_names, "Names");
+                    ui.checkbox(&mut state.show_mesh, "Mesh");
                     if ui.button("Fit").clicked() {
                         state.zoom = 1.0;
                         state.pan_offset = egui::Vec2::ZERO;
@@ -1761,6 +1777,10 @@ impl MJAtlasApp {
                             egui::FontId::proportional(font_size),
                             egui::Color32::WHITE,
                         );
+                    }
+
+                    if state.show_mesh {
+                        draw_sprite_mesh(&painter, sprite, &transform);
                     }
                 }
 
@@ -1978,6 +1998,9 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
         ui.label(format!("{:.0}%", preview.zoom * 100.0));
         ui.checkbox(&mut preview.show_grid, "Grid");
         ui.checkbox(&mut preview.show_names, "Names");
+        // Only meaningful when polygon mesh is present; the checkbox is harmless
+        // otherwise (toggling it just doesn't draw anything).
+        ui.checkbox(&mut preview.show_mesh, "Mesh");
         if ui.button("Fit").clicked() {
             preview.needs_fit = true;
         }
@@ -2090,9 +2113,47 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
             let short = sprite.name.rsplit('/').next().unwrap_or(&sprite.name);
             painter.text(s_tl + egui::vec2(2.0, 2.0), egui::Align2::LEFT_TOP, short, egui::FontId::proportional(font_size), egui::Color32::WHITE);
         }
+
+        if preview.show_mesh {
+            draw_sprite_mesh(&painter, sprite, &xf);
+        }
     }
 
     painter.rect_stroke(atlas_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Outside);
+}
+
+/// Draw the polygon-mesh wireframe overlay for a sprite — semi-transparent
+/// triangle edges in atlas-space, transformed via the canvas mapping function.
+/// No-op when the sprite has no mesh data attached.
+fn draw_sprite_mesh<F: Fn(f32, f32) -> egui::Pos2>(
+    painter: &egui::Painter,
+    sprite: &SpriteInfo,
+    xf: &F,
+) {
+    let verts = match &sprite.mesh_vertices {
+        Some(v) if v.len() >= 3 => v,
+        _ => return,
+    };
+    let tris = match &sprite.mesh_triangles {
+        Some(t) if !t.is_empty() => t,
+        _ => return,
+    };
+
+    let edge_color = egui::Color32::from_rgba_unmultiplied(255, 80, 200, 200);
+    let stroke = egui::Stroke::new(1.0, edge_color);
+
+    for tri in tris {
+        let (a, b, c) = (tri[0], tri[1], tri[2]);
+        if a >= verts.len() || b >= verts.len() || c >= verts.len() {
+            continue;
+        }
+        let pa = xf(verts[a][0], verts[a][1]);
+        let pb = xf(verts[b][0], verts[b][1]);
+        let pc = xf(verts[c][0], verts[c][1]);
+        painter.line_segment([pa, pb], stroke);
+        painter.line_segment([pb, pc], stroke);
+        painter.line_segment([pc, pa], stroke);
+    }
 }
 
 /// Find the common parent directory of a list of file paths.
@@ -2161,6 +2222,7 @@ fn load_atlas_for_viewer(file: &Path) -> Result<ViewerState> {
         selected_sprite: None,
         show_grid: true,
         show_names: false,
+        show_mesh: false,
         search_text: String::new(),
         source_path: file.display().to_string(),
     })
@@ -2186,6 +2248,8 @@ fn parse_tpsheet(
                 rotated: s["rotated"].as_bool().unwrap_or(false),
                 source_w: s["region"]["w"].as_f64()? as f32 + s["margin"]["w"].as_f64().unwrap_or(0.0) as f32,
                 source_h: s["region"]["h"].as_f64()? as f32 + s["margin"]["h"].as_f64().unwrap_or(0.0) as f32,
+                mesh_vertices: parse_mesh_uv(s.get("verticesUV")),
+                mesh_triangles: parse_mesh_triangles(s.get("triangles")),
             })
         })
         .collect();
@@ -2208,10 +2272,44 @@ fn parse_json_hash(
             rotated: v["rotated"].as_bool().unwrap_or(false),
             source_w: v["sourceSize"]["w"].as_f64()? as f32,
             source_h: v["sourceSize"]["h"].as_f64()? as f32,
+            mesh_vertices: parse_mesh_uv(v.get("verticesUV")),
+            mesh_triangles: parse_mesh_triangles(v.get("triangles")),
         })
     }).collect();
     let animations = json.get("animations")
         .and_then(|a| serde_json::from_value::<HashMap<String, Vec<String>>>(a.clone()).ok())
         .unwrap_or_default();
     Ok((image_path, sprites, animations))
+}
+
+/// Parse `verticesUV` (atlas-space mesh vertices) from a sprite metadata entry.
+fn parse_mesh_uv(value: Option<&serde_json::Value>) -> Option<Vec<[f32; 2]>> {
+    let arr = value?.as_array()?;
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let pair = v.as_array()?;
+        if pair.len() < 2 {
+            return None;
+        }
+        out.push([pair[0].as_f64()? as f32, pair[1].as_f64()? as f32]);
+    }
+    Some(out)
+}
+
+/// Parse `triangles` (index triples into mesh vertices).
+fn parse_mesh_triangles(value: Option<&serde_json::Value>) -> Option<Vec<[usize; 3]>> {
+    let arr = value?.as_array()?;
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let tri = v.as_array()?;
+        if tri.len() < 3 {
+            return None;
+        }
+        out.push([
+            tri[0].as_u64()? as usize,
+            tri[1].as_u64()? as usize,
+            tri[2].as_u64()? as usize,
+        ]);
+    }
+    Some(out)
 }
