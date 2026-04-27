@@ -8,6 +8,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::texture_meta::{PaletteSlotMeta, TextureHandle};
+
 pub const DEFAULT_GRID_W: usize = 16;
 pub const DEFAULT_GRID_H: usize = 16;
 /// Lower bound for canvas dimension. Below 4 the output stops reading as an asset.
@@ -230,6 +232,19 @@ pub struct Palette {
     /// is available for reuse"; `Some(color)` is a live color.
     pub colors: Vec<Option<Color>>,
     pub selected: u8,
+    /// Per-slot texture metadata (override prompt + generated
+    /// `TextureHandle`). **Invariant: `slot_meta.len() ==
+    /// colors.len()`** at every observable point. `add` / `delete`
+    /// / `update` maintain this; loaders ([`Palette::ensure_meta_alignment`])
+    /// repair it when a hand-edited or future-versioned file
+    /// arrives with a mismatched length.
+    ///
+    /// Empty / default `PaletteSlotMeta` for a deleted slot is fine —
+    /// the slot is "deleted" by `colors[i] == None`, the meta just
+    /// rides along. We deliberately do *not* nest the meta under
+    /// `Option<...>` to keep `slot_meta[i]` cheaply addressable
+    /// without a None-check on every read.
+    pub slot_meta: Vec<PaletteSlotMeta>,
 }
 
 /// Policy for what should happen to cells that currently use a color
@@ -247,27 +262,47 @@ pub enum DeleteColorMode {
 
 impl Default for Palette {
     fn default() -> Self {
+        let colors = vec![
+            Some(Color::srgb(0.90, 0.30, 0.35)), // red
+            Some(Color::srgb(0.95, 0.60, 0.25)), // orange
+            Some(Color::srgb(0.95, 0.85, 0.35)), // yellow
+            Some(Color::srgb(0.45, 0.80, 0.40)), // green
+            Some(Color::srgb(0.35, 0.70, 0.90)), // sky
+            Some(Color::srgb(0.30, 0.45, 0.85)), // blue
+            Some(Color::srgb(0.65, 0.40, 0.85)), // purple
+            Some(Color::srgb(0.90, 0.75, 0.65)), // sand
+            Some(Color::srgb(0.50, 0.35, 0.25)), // brown
+            Some(Color::srgb(0.25, 0.25, 0.30)), // slate
+            Some(Color::srgb(0.85, 0.85, 0.90)), // bone
+            Some(Color::srgb(0.55, 0.75, 0.55)), // moss
+        ];
+        let slot_meta = vec![PaletteSlotMeta::default(); colors.len()];
         Self {
-            colors: vec![
-                Some(Color::srgb(0.90, 0.30, 0.35)), // red
-                Some(Color::srgb(0.95, 0.60, 0.25)), // orange
-                Some(Color::srgb(0.95, 0.85, 0.35)), // yellow
-                Some(Color::srgb(0.45, 0.80, 0.40)), // green
-                Some(Color::srgb(0.35, 0.70, 0.90)), // sky
-                Some(Color::srgb(0.30, 0.45, 0.85)), // blue
-                Some(Color::srgb(0.65, 0.40, 0.85)), // purple
-                Some(Color::srgb(0.90, 0.75, 0.65)), // sand
-                Some(Color::srgb(0.50, 0.35, 0.25)), // brown
-                Some(Color::srgb(0.25, 0.25, 0.30)), // slate
-                Some(Color::srgb(0.85, 0.85, 0.90)), // bone
-                Some(Color::srgb(0.55, 0.75, 0.55)), // moss
-            ],
+            colors,
             selected: 3,
+            slot_meta,
         }
     }
 }
 
 impl Palette {
+    /// Construct a palette from a sparse color vector. Pads
+    /// `slot_meta` to the right length so the
+    /// `slot_meta.len() == colors.len()` invariant is preserved
+    /// without the caller having to think about it.
+    ///
+    /// Useful in tests and in the project loader (`project.rs`)
+    /// where we already have the `Vec<Option<Color>>` from disk
+    /// but haven't decoded the optional v4 `palette_meta` yet.
+    pub fn from_colors(colors: Vec<Option<Color>>, selected: u8) -> Self {
+        let slot_meta = vec![PaletteSlotMeta::default(); colors.len()];
+        Self {
+            colors,
+            selected,
+            slot_meta,
+        }
+    }
+
     /// Color at the given slot, if live. `None` means either out-of-
     /// bounds or a deleted slot — either way, unsafe to paint with.
     pub fn get(&self, idx: u8) -> Option<Color> {
@@ -295,6 +330,11 @@ impl Palette {
     /// Append a new color, reusing the first vacant slot if any.
     /// Returns the slot index that now holds the new color, or `None`
     /// if the palette is full.
+    ///
+    /// `slot_meta` for the chosen index is reset to default — adding
+    /// a fresh color into a slot that previously held a (deleted)
+    /// color must not silently inherit the old slot's
+    /// `override_hint` / `texture`. v0.10 C onward.
     pub fn add(&mut self, color: Color) -> Option<u8> {
         if let Some((i, slot)) = self
             .colors
@@ -303,10 +343,19 @@ impl Palette {
             .find(|(_, s)| s.is_none())
         {
             *slot = Some(color);
+            // Vacant-slot reuse: paranoid-clear the corresponding
+            // meta. The invariant is `slot_meta.len() == colors.len()`
+            // so the index is in-bounds, but be defensive against a
+            // freshly-constructed `Palette { ... }` literal that
+            // skipped the constructor.
+            if i < self.slot_meta.len() {
+                self.slot_meta[i] = PaletteSlotMeta::default();
+            }
             return Some(i as u8);
         }
         if self.colors.len() < MAX_PALETTE_SLOTS {
             self.colors.push(Some(color));
+            self.slot_meta.push(PaletteSlotMeta::default());
             return Some((self.colors.len() - 1) as u8);
         }
         None
@@ -364,6 +413,15 @@ impl Palette {
         }
 
         self.colors[idx as usize] = None;
+        // Drop meta along with the color. A user who later re-adds
+        // a color into this slot expects to start from a clean
+        // `override_hint` and no stale `TextureHandle` (the cached
+        // PNG on disk is keyed by the prompt, not the slot, so
+        // even if it's still around it's no longer "this slot's"
+        // texture).
+        if let Some(meta) = self.slot_meta.get_mut(idx as usize) {
+            *meta = PaletteSlotMeta::default();
+        }
 
         // If the user deleted the currently-selected slot, snap
         // selection to any remaining live color. If there are none
@@ -375,6 +433,84 @@ impl Palette {
             self.selected = next_live;
         }
         true
+    }
+
+    /// Read-only access to the meta record at `idx`. Returns `None`
+    /// if `idx` is out of bounds; **does not** check whether the
+    /// slot holds a live color — meta of a deleted slot is always
+    /// the default (cleared on delete), but readers shouldn't rely
+    /// on that and should check `is_live` separately when it
+    /// matters.
+    pub fn meta(&self, idx: u8) -> Option<&PaletteSlotMeta> {
+        self.slot_meta.get(idx as usize)
+    }
+
+    /// Mutable access. Mostly used by the GUI's "edit hint" /
+    /// generated-texture-arrived paths; tests use the typed
+    /// helpers ([`Self::set_override_hint`] /
+    /// [`Self::set_texture`]) instead so the v0.10 C undo wiring
+    /// (D-1) has a single chokepoint to hook into.
+    pub fn meta_mut(&mut self, idx: u8) -> Option<&mut PaletteSlotMeta> {
+        self.slot_meta.get_mut(idx as usize)
+    }
+
+    /// Set the per-slot override hint, returning the previous
+    /// value. Empty / whitespace-only strings collapse to `None`
+    /// so we don't silently store user-fingertip whitespace as
+    /// "the user really wants an empty prompt".
+    ///
+    /// Returns `None` if `idx` is out-of-bounds. Live-vs-deleted
+    /// is *not* enforced — historically users pre-write a hint on
+    /// a slot they're about to add, and the UI shouldn't have to
+    /// wait for `add()` to land first.
+    pub fn set_override_hint(&mut self, idx: u8, hint: Option<String>) -> Option<Option<String>> {
+        let normalised = hint.and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+        let meta = self.slot_meta.get_mut(idx as usize)?;
+        let prev = std::mem::take(&mut meta.override_hint);
+        meta.override_hint = normalised;
+        Some(prev)
+    }
+
+    /// Set the per-slot generated-texture handle, returning the
+    /// previous value. The bytes themselves are owned by
+    /// `~/.cache/maquette/textures/<cache_key>.png`; this method
+    /// just records "which one's mine".
+    pub fn set_texture(
+        &mut self,
+        idx: u8,
+        handle: Option<TextureHandle>,
+    ) -> Option<Option<TextureHandle>> {
+        let meta = self.slot_meta.get_mut(idx as usize)?;
+        let prev = std::mem::take(&mut meta.texture);
+        meta.texture = handle;
+        Some(prev)
+    }
+
+    /// Restore the `slot_meta.len() == colors.len()` invariant
+    /// after an external rewrite (i.e. project file load). Pads
+    /// with default meta when too short, truncates when too long.
+    /// Logs a debug line if a fix-up was needed so a forensic
+    /// re-load of a malformed file is auditable.
+    ///
+    /// Idempotent: calling on an already-aligned palette is a no-op.
+    pub fn ensure_meta_alignment(&mut self) {
+        let n = self.colors.len();
+        if self.slot_meta.len() == n {
+            return;
+        }
+        log::debug!(
+            "palette: realigning slot_meta {} → {}",
+            self.slot_meta.len(),
+            n
+        );
+        self.slot_meta.resize(n, PaletteSlotMeta::default());
     }
 
     /// How many painted cells currently reference `idx`. Used by the
@@ -423,43 +559,34 @@ mod palette_tests {
 
     #[test]
     fn add_appends_when_no_holes() {
-        let mut p = Palette {
-            colors: vec![Some(red())],
-            selected: 0,
-        };
+        let mut p = Palette::from_colors(vec![Some(red())], 0);
         let idx = p.add(green()).unwrap();
         assert_eq!(idx, 1);
         assert_eq!(p.colors.len(), 2);
         assert_eq!(p.get(1), Some(green()));
+        // Invariant.
+        assert_eq!(p.slot_meta.len(), p.colors.len());
     }
 
     #[test]
     fn add_reuses_first_vacant_slot_before_growing() {
-        let mut p = Palette {
-            colors: vec![Some(red()), None, Some(blue())],
-            selected: 0,
-        };
+        let mut p = Palette::from_colors(vec![Some(red()), None, Some(blue())], 0);
         let idx = p.add(green()).unwrap();
         assert_eq!(idx, 1, "should fill the hole, not append");
         assert_eq!(p.colors.len(), 3);
         assert_eq!(p.get(1), Some(green()));
+        assert_eq!(p.slot_meta.len(), p.colors.len());
     }
 
     #[test]
     fn add_returns_none_when_palette_is_full() {
-        let mut p = Palette {
-            colors: vec![Some(red()); MAX_PALETTE_SLOTS],
-            selected: 0,
-        };
+        let mut p = Palette::from_colors(vec![Some(red()); MAX_PALETTE_SLOTS], 0);
         assert!(p.add(green()).is_none());
     }
 
     #[test]
     fn update_requires_live_slot() {
-        let mut p = Palette {
-            colors: vec![Some(red()), None],
-            selected: 0,
-        };
+        let mut p = Palette::from_colors(vec![Some(red()), None], 0);
         assert!(p.update(0, green()));
         assert_eq!(p.get(0), Some(green()));
         assert!(!p.update(1, green()), "deleted slot should reject update");
@@ -518,10 +645,8 @@ mod palette_tests {
 
     #[test]
     fn delete_snaps_selection_to_first_live_slot() {
-        let mut palette = Palette {
-            colors: vec![Some(red()), Some(green()), Some(blue())],
-            selected: 1,
-        };
+        let mut palette =
+            Palette::from_colors(vec![Some(red()), Some(green()), Some(blue())], 1);
         let mut grid = Grid::with_size(2, 1);
         palette.delete(1, &mut grid, DeleteColorMode::Erase);
         assert_eq!(palette.selected, 0, "selection moved to first live slot");
@@ -533,13 +658,125 @@ mod palette_tests {
 
     #[test]
     fn delete_nonexistent_slot_is_noop() {
-        let mut palette = Palette {
-            colors: vec![Some(red()), None],
-            selected: 0,
-        };
+        let mut palette = Palette::from_colors(vec![Some(red()), None], 0);
         let mut grid = Grid::with_size(1, 1);
         assert!(!palette.delete(1, &mut grid, DeleteColorMode::Erase));
         assert!(!palette.delete(99, &mut grid, DeleteColorMode::Erase));
+    }
+
+    // --- v0.10 C: slot_meta invariant ---
+
+    #[test]
+    fn slot_meta_starts_aligned_with_default_palette() {
+        let p = Palette::default();
+        assert_eq!(p.slot_meta.len(), p.colors.len());
+        for m in &p.slot_meta {
+            assert!(m.is_empty(), "default meta should be empty");
+        }
+    }
+
+    #[test]
+    fn delete_clears_slot_meta_for_that_index() {
+        let mut palette = Palette::default();
+        let mut grid = Grid::with_size(1, 1);
+        // Stash an override hint on slot 0, then delete the slot.
+        // The hint must NOT leak forward to a future caller who
+        // re-adds a color into slot 0.
+        palette
+            .set_override_hint(0, Some("rusty iron".into()))
+            .unwrap();
+        assert_eq!(
+            palette.meta(0).unwrap().override_hint.as_deref(),
+            Some("rusty iron")
+        );
+        palette.delete(0, &mut grid, DeleteColorMode::Erase);
+        assert!(palette.meta(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn add_to_recycled_slot_clears_inherited_meta() {
+        let mut palette = Palette::default();
+        palette
+            .set_override_hint(2, Some("old hint".into()))
+            .unwrap();
+        // Manually wipe color but bypass the public API to forge
+        // a "deleted slot whose meta wasn't cleaned up" scenario
+        // (could happen via a bad serde path on a corrupted file).
+        palette.colors[2] = None;
+        // Now `add` should land on slot 2 (first vacant) and the
+        // override hint must be cleared even though we left it
+        // stale on the slot.
+        let idx = palette.add(Color::srgb(1.0, 0.0, 1.0)).unwrap();
+        assert_eq!(idx, 2);
+        assert!(
+            palette.meta(2).unwrap().is_empty(),
+            "newly added color must not inherit a stale override hint"
+        );
+    }
+
+    #[test]
+    fn ensure_meta_alignment_pads_when_short() {
+        let mut palette = Palette::default();
+        // Forge a length mismatch (could only happen via a
+        // half-loaded file). The realigner pads back to len.
+        palette.slot_meta.truncate(5);
+        palette.ensure_meta_alignment();
+        assert_eq!(palette.slot_meta.len(), palette.colors.len());
+    }
+
+    #[test]
+    fn ensure_meta_alignment_truncates_when_long() {
+        let mut palette = Palette::default();
+        for _ in 0..3 {
+            palette.slot_meta.push(PaletteSlotMeta {
+                override_hint: Some("ignore".into()),
+                texture: None,
+            });
+        }
+        palette.ensure_meta_alignment();
+        assert_eq!(palette.slot_meta.len(), palette.colors.len());
+    }
+
+    #[test]
+    fn set_override_hint_returns_previous_value() {
+        let mut palette = Palette::default();
+        // First set: prev was None.
+        let prev = palette.set_override_hint(0, Some("first".into())).unwrap();
+        assert!(prev.is_none());
+        // Second set: prev was the first hint.
+        let prev = palette.set_override_hint(0, Some("second".into())).unwrap();
+        assert_eq!(prev.as_deref(), Some("first"));
+        // Out-of-bounds returns None.
+        assert!(palette.set_override_hint(99, Some("x".into())).is_none());
+    }
+
+    #[test]
+    fn set_override_hint_normalises_whitespace_to_none() {
+        let mut palette = Palette::default();
+        // Whitespace-only is treated as "no hint" — guards against
+        // a UI text field that user accidentally hit space in.
+        palette.set_override_hint(0, Some("   ".into())).unwrap();
+        assert!(palette.meta(0).unwrap().override_hint.is_none());
+        palette.set_override_hint(0, Some("".into())).unwrap();
+        assert!(palette.meta(0).unwrap().override_hint.is_none());
+    }
+
+    #[test]
+    fn set_texture_returns_previous_handle() {
+        let mut palette = Palette::default();
+        let h1 = TextureHandle {
+            cache_key: "abc".into(),
+            generated_at: 1,
+        };
+        let h2 = TextureHandle {
+            cache_key: "def".into(),
+            generated_at: 2,
+        };
+        let prev = palette.set_texture(0, Some(h1.clone())).unwrap();
+        assert!(prev.is_none());
+        let prev = palette.set_texture(0, Some(h2.clone())).unwrap();
+        assert_eq!(prev.as_ref(), Some(&h1));
+        assert_eq!(palette.meta(0).unwrap().texture.as_ref(), Some(&h2));
     }
 
     #[test]

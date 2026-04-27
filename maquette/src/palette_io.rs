@@ -116,7 +116,7 @@ pub fn read_palette_json(path: &Path) -> Result<Palette, PaletteIoError> {
         .map(|i| i as u8)
         .unwrap_or(0);
 
-    Ok(Palette { colors, selected })
+    Ok(Palette::from_colors(colors, selected))
 }
 
 /// Replace `palette.colors` with the contents of a palette JSON file
@@ -130,6 +130,13 @@ pub fn read_palette_json(path: &Path) -> Result<Palette, PaletteIoError> {
 pub fn import_palette_into(palette: &mut Palette, path: &Path) -> Result<(), PaletteIoError> {
     let loaded = read_palette_json(path)?;
     palette.colors = loaded.colors;
+    // colors length may have changed → restore the
+    // `slot_meta.len() == colors.len()` invariant before we
+    // hand the palette back. Imported color JSON has no
+    // override_hint / texture concept, so any meta beyond the
+    // imported length collapses to default (which is also what
+    // the user would expect — those slots no longer exist).
+    palette.ensure_meta_alignment();
 
     // Snap `selected` if it lost its slot.
     let selected = palette.selected as usize;

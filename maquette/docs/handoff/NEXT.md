@@ -1,29 +1,42 @@
 # NEXT · maquette
 
-**Status, 2026-04-27.** v0.9 A (autosave + crash recovery) shipped
-2026-04-23. A second wave of v0.9 polish + the v0.10 A/B texture
-pipeline shipped this commit (see `v0.9b-complete.md`). Working tree
-is clean, 112 tests + clippy green.
+**Status, 2026-04-27 (late evening).** v0.9 A (autosave + crash
+recovery) shipped 2026-04-23. A second wave of v0.9 polish + the
+v0.10 A/B texture pipeline shipped earlier today
+(see `v0.9b-complete.md`). The same evening **v0.10 B-bis** landed
+(see `v0.10b-bis-complete.md`): the producer is now live-verified
+against sonargrid at `10.100.85.15:12121/ui`, with one
+foreign-reply infinite-loop bug fixed in passing (and the same
+bug in `rustyme-py`'s SDK fixed + regression-tested in the
+sonargrid working tree, awaiting maintainer review). Then
+**v0.10 C-1** landed (see `v0.10c1-complete.md`): lib-side schema
+v4 with `ProjectMeta`, `Palette::slot_meta`, `TextureHandle`,
+`TexturePrefs`, and the `*_with_meta` load/save APIs. Working
+tree is clean, **143 tests + clippy green** (107 lib + 11 history
++ 6 export + 19 CLI; was 118).
 
 Active fronts:
 
 * **v0.9 follow-up (B + C)** — Bevy feature trim and the prefs file
   are still on the v0.9 list. Neither is started.
-* **v0.10 C — schema v4** — *next thing the agent should pick up*.
-  Zero external dependency: we just need to grow the project file
-  format with `model_description`, per-slot `override_hint`,
-  `texture: Option<TextureHandle>`, and a `TexturePrefs` block.
-* **v0.10 B verification (`#TEX-B`)** — blocked on sonargrid Stage 1
-  Echo worker. Producer side is shipped; we cannot prove the wire
-  contract end-to-end until a worker actually answers `texture.gen`.
+* **`#TEX-B` end-to-end** — ✅ unblocked + verified (cpu solid +
+  cpu smart LLM + fal routing + revoke + cache + bug fix). See
+  `v0.10b-bis-complete.md` § 4.
+* **`#TEX-C` lib-side** — ✅ shipped in C-1. The "open v3 → save →
+  re-open" verification clause is satisfied at the lib layer; the
+  remaining "override_hint edit enters undo chain" clause requires
+  a GUI editor and is part of D-1.
+* **v0.10 C-2 / D-1** — *next thing the agent should pick up.*
+  See "Outstanding work" §1 below.
 * **User-side validation backlog** — see `USER-TODO.md`. A bunch of
   v0.9 polish items just landed (`#1c-async`, `#17b`, `#17c`, `#18`,
-  `#19b`, `#20b`, all `#TEX-A` / `#TEX-B` plumbing) and need a
-  human-eyes pass on real hardware.
+  `#19b`, `#20b`, all `#TEX-A` plumbing) and need a human-eyes pass
+  on real hardware.
 
 Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 · `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md` ·
-`v0.9b-complete.md`.
+`v0.9b-complete.md` · `v0.10b-bis-complete.md` ·
+`v0.10c1-complete.md`.
 
 ## Roadmap snapshot
 
@@ -43,8 +56,8 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | Phase | Scope | Status |
 |---|---|---|
 | **A** | `texgen` lib module (trait, types, disk cache) + `MockProvider` (deterministic, offline) + `maquette-cli texture gen` | **shipped 2026-04-24** |
-| **B** | `RustymeProvider` (LPUSH `texture.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** (Maquette side); **sonargrid worker Stage 1** blocks `#TEX-B` end-to-end verification |
-| **C** | Project schema v4: per-project `model_description: String`; per-palette-slot `override_hint: Option<String>` + `texture: Option<TextureHandle>`; `TexturePrefs { view_mode, ignore_color_hint }`; serde forward / backward compat (`#[serde(default)]` on every new field, old `.maq` still opens); undo/redo covers `model_description` and `override_hint` edits as first-class edit events | **not yet — no worker dep, this is the next agent task** |
+| **B** | `RustymeProvider` (LPUSH `texgen.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** + **B-bis 2026-04-27 evening** (live integration with sonargrid `texgen-cpu` / `texgen-fal`, `image_b64` shape, profile env, foreign-reply bug fix). `#TEX-B` end-to-end ✅. |
+| **C** | Project schema v4: per-project `model_description: String`; per-palette-slot `override_hint: Option<String>` + `texture: Option<TextureHandle>`; `TexturePrefs { view_mode, ignore_color_hint }`; serde forward / backward compat (`#[serde(default)]` on every new field, old `.maq` still opens); undo/redo covers `model_description` and `override_hint` edits as first-class edit events | **C-1 (lib) shipped 2026-04-27 evening**; C-2 (GUI undo wiring + autosave migration) lands with D-1 |
 | **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | not yet — **the user-experience milestone**; needs C + worker |
 | **D-2** | Per-slot `[regenerate]` + `[edit hint]` affordances in the palette list; re-uses D-1's single-task path (no group needed). Writes the new `override_hint` through the undo stack | not yet |
 | **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
@@ -60,31 +73,52 @@ wants.
 
 ### Now — start here next session
 
-1. **v0.10 C — schema v4 + project plumbing**. No worker
-   dependency. Land the data model so D-1's GUI can be built on top.
+1. **v0.10 D-1 (+ C-2 sub-tasks) — GUI material panel + autosave
+   migration + EditHistory wiring**. The schema is in place
+   (C-1, see `v0.10c1-complete.md`); the worker is verified
+   (B-bis). What remains is putting it in front of the user.
    Concretely:
-   * `project.rs` — bump schema to v4, add `model_description`,
-     `texture_prefs`, and per-`PaletteSlot` `override_hint` /
-     `texture` fields. Every new field `#[serde(default)]`.
-   * Add at least three regression tests: (a) v3 file loads as v4
-     with defaults, (b) v4 round-trips, (c) `EditHistory` records
-     `model_description` / `override_hint` edits as undoable events.
-   * `TextureHandle` = `{ cache_key: String, generated_at: i64 }` —
-     keep it small; the actual PNG bytes live in `~/.cache/maquette`,
-     resolved through `texgen::cache_get`.
-   * Decide whether to widen `EditEvent` enum or create a sibling
-     `MetaEditEvent` for non-grid edits (lean toward widening — one
-     undo stack is the user's mental model).
+   * **GUI material panel.** Right side panel: "What is this
+     model?" `TextEdit` bound to `ResMut<ProjectMeta>`, plus a
+     `[Generate]` button. On click, fan-out one
+     `texgen.gen` task per non-empty palette slot via Rustyme
+     **Canvas group**, group-id collected from the chord
+     callback the worker emits.
+   * **Per-slot prompt derivation.** Palette colour (RGB) + cell
+     count + top/middle/bottom bias + adjacency → augment the
+     project-wide `model_description` into a per-slot prompt the
+     worker actually sees. `override_hint` (when set) replaces
+     this entirely.
+   * **EditHistory generalisation (the C-2 piece).** Widen
+     `bin/history.rs::PaintOp` into an `EditOp` enum with
+     `Paint(...) | SetModelDescription { before, after } |
+     SetOverrideHint { slot, before, after }`. The lib already
+     hands you the `before` value: `Palette::set_override_hint`
+     and `Palette::set_texture` return the previous value. One
+     undo stack, three event types — keeps the user's mental
+     model intact.
+   * **Autosave migration.** Switch `autosave.rs::write_swap`
+     and `session.rs` Save / SaveAs to
+     `project::write_project_with_meta` (passing the
+     `Res<ProjectMeta>`). Otherwise an autosave between two
+     keystrokes will silently drop a freshly-typed
+     `model_description`.
+   * **Toon shader.** Optional `baseColorTexture` per
+     palette-material; when `TexturePrefs::view_mode == Textured`,
+     all cells of that colour share UVs into the per-slot tile.
+     `Flat` / `Textured` toggle in the View menu.
 
 ### Blocked / external
 
-2. **`#TEX-B` end-to-end verification** — needs sonargrid Stage 1
-   Echo worker. Roadmap is in `docs/texture/rustyme-worker-roadmap.md`;
-   six-line acceptance command is in there too. Until that worker
-   exists, `RustymeProvider` is exercised only by its `--ignored`
-   live test.
-3. **v0.10 D-1** — gated by both #1 (schema) and #2 (worker). When
-   both are green, this is the next big milestone.
+2. **`#TEX-B` worker hardening.** The CPU lane is fully
+   verified; FAL needs `FAL_KEY` set on the sonargrid host
+   before fal lane stops timing out (Maquette already proved
+   the routing + revoke path against an empty-key worker, see
+   `v0.10b-bis-complete.md` § 4 / `USER-TODO.md` `#TEX-B-fal`).
+   Not on Maquette's plate.
+3. **v0.10 D-1** — *is* #1 above (renumbered now that the
+   schema is in place and the worker is verified). The next big
+   milestone whenever the agent has a free session.
 4. **User validation pass** — `USER-TODO.md` has a stack of items
    freshly to-hand: `#1c` shape cycle / `#1c-async` async export /
    `#17b` PIP click / `#17c` PIP colour + axes / `#18` float pose

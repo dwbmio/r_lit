@@ -24,6 +24,9 @@
 //!   without a GPU.
 //! - [`palette_io`] — portable `colors.json` reader/writer for
 //!   sharing palettes across projects.
+//! - [`texture_meta`] — per-palette-slot texture metadata
+//!   (`override_hint`, `texture: TextureHandle`) and project-wide
+//!   `TexturePrefs`. Introduced in schema v4 (v0.10 C).
 
 pub mod export;
 pub mod grid;
@@ -32,3 +35,4 @@ pub mod palette_io;
 pub mod project;
 pub mod render;
 pub mod texgen;
+pub mod texture_meta;
