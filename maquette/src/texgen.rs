@@ -558,11 +558,12 @@ mod tests {
 ///   LPUSH the result back to the agreed result list. We never
 ///   import a worker into our binary.
 ///
-/// ## Worker contract (frozen)
+/// ## Worker contract
 ///
-/// Any worker claiming to handle `task = "texture.gen"` MUST honour
+/// Any worker claiming to handle `task = "texgen.gen"` MUST honour
 /// this shape or Maquette's [`RustymeProvider`] will reject its
-/// output.
+/// output. Authoritative reference (worker-side):
+/// [`sonargrid/docs/texgen-queues.md`][q].
 ///
 /// **Input** — the envelope's `kwargs` object:
 ///
@@ -573,24 +574,43 @@ mod tests {
 ///     "width":     128,
 ///     "height":    128,
 ///     "model":     "fal-ai/flux/schnell",
-///     "cache_key": "a1b2...f4"   // SHA-256 of the request, for
-///                                // worker-side dedup + logging
+///     "cache_key": "a1b2...f4",         // SHA-256 of the request,
+///                                        // for worker-side dedup
+///     "style_mode": "auto"              // optional, cpu lane only:
+///                                        // auto | solid | smart
 /// }
 /// ```
 ///
 /// **Output** — the worker pushes `{task_id, status, result, ...}`
 /// to the result list (Rustyme's framework does the outer envelope;
-/// the worker controls `result`). We expect:
+/// the worker controls `result`). We accept either the new
+/// multi-format shape or the legacy PNG-only shape:
 ///
 /// ```json
 /// {
-///     "png_b64": "<standard base64, RGB or RGBA PNG bytes>"
+///     "image_b64":    "<standard base64 of PNG bytes>",
+///     "format":       "png",
+///     "content_type": "image/png"
 /// }
 /// ```
 ///
-/// Optional extra fields (`elapsed_ms`, `cost_usd`, `upstream_id`)
-/// are logged but not required. Anything with `status != "SUCCESS"`
-/// is surfaced to the caller as [`ProviderError::Remote`].
+/// or, for backward compatibility:
+///
+/// ```json
+/// { "png_b64": "<standard base64 of PNG bytes>" }
+/// ```
+///
+/// We currently only consume PNG: any `format` other than `"png"`
+/// is rejected with a clear error so non-PNG bytes don't end up
+/// in a `.png` cache file. JPEG / WebP support arrives once the
+/// GUI has a decoder that can branch on `content_type`.
+///
+/// Optional extra fields (`elapsed_ms`, `cost_usd`, `style_params`,
+/// `llm`) are logged but not required. Anything with
+/// `status != "SUCCESS"` is surfaced to the caller as
+/// [`ProviderError::Remote`].
+///
+/// [q]: /Users/admin/data0/public_work/sonargrid/docs/texgen-queues.md
 ///
 /// ## What we do / don't do
 ///
@@ -617,6 +637,61 @@ pub mod rustyme {
 
     use super::{ProviderError, TextureBytes, TextureProvider, TextureRequest};
 
+    /// Which sonargrid texgen queue family to talk to.
+    ///
+    /// This is a producer-side convenience — the source of truth for
+    /// the actual queue keys is sonargrid's `envs/rustyme.*.toml`.
+    /// We mirror the deployed naming (`rustyme:texgen-cpu:*` /
+    /// `rustyme:texgen-fal:*`) so a default-configured `cargo run`
+    /// hits the cheap CPU lane.
+    ///
+    /// The user can always override the resolved keys directly with
+    /// `MAQUETTE_RUSTYME_QUEUE_KEY` / `MAQUETTE_RUSTYME_RESULT_KEY` —
+    /// the profile is just a shorthand.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RustymeProfile {
+        /// `texgen-cpu` — programmatic CPU synthesis (free, deterministic
+        /// for `style_mode=solid`, ~30-500 ms). Default.
+        Cpu,
+        /// `texgen-fal` — Fal.ai FLUX schnell (≈ $0.003/img, 3-8 s).
+        /// Use for actual AI imagery; needs `FAL_KEY` set on the
+        /// worker side.
+        Fal,
+    }
+
+    impl RustymeProfile {
+        pub fn queue_key(&self) -> &'static str {
+            match self {
+                Self::Cpu => "rustyme:texgen-cpu:queue",
+                Self::Fal => "rustyme:texgen-fal:queue",
+            }
+        }
+        pub fn result_key(&self) -> &'static str {
+            match self {
+                Self::Cpu => "rustyme:texgen-cpu:result",
+                Self::Fal => "rustyme:texgen-fal:result",
+            }
+        }
+        /// Logical queue name as Rustyme's Admin API knows it
+        /// (`maquette-cli texture purge <name>` writes here).
+        pub fn admin_name(&self) -> &'static str {
+            match self {
+                Self::Cpu => "texgen-cpu",
+                Self::Fal => "texgen-fal",
+            }
+        }
+        /// Parse the value of `MAQUETTE_RUSTYME_PROFILE`. Accepts the
+        /// short forms (`cpu`, `fal`) and the full queue names
+        /// (`texgen-cpu`, `texgen-fal`) for ergonomics.
+        pub fn parse(s: &str) -> Option<Self> {
+            match s.trim().to_ascii_lowercase().as_str() {
+                "cpu" | "texgen-cpu" => Some(Self::Cpu),
+                "fal" | "texgen-fal" => Some(Self::Fal),
+                _ => None,
+            }
+        }
+    }
+
     /// Everything a [`RustymeProvider`] needs to be wired up. All
     /// fields are individually overridable from env vars — see
     /// [`RustymeConfig::from_env`].
@@ -626,7 +701,8 @@ pub mod rustyme {
         /// `QUEUE_N_REDIS_URL` on the Rustyme side.
         pub redis_url: String,
         /// Rustyme's `QUEUE_N_KEY`. What we LPUSH into. Typical
-        /// name: `rustyme:texgen:queue`.
+        /// name: `rustyme:texgen-cpu:queue` (default) or
+        /// `rustyme:texgen-fal:queue`.
         pub queue_key: String,
         /// Rustyme's `QUEUE_N_RESULT_KEY`. What we BRPOP from. Must
         /// be configured on the worker side too — workers won't
@@ -637,18 +713,31 @@ pub mod rustyme {
         /// and purge become no-ops with a warning.
         pub admin_base_url: Option<String>,
         /// Task name routed to the worker. Defaults to
-        /// `texture.gen` but left overridable so multiple
-        /// differently-tuned worker fleets can coexist (e.g.
-        /// `texture.gen.fast` vs `texture.gen.pro`).
+        /// `texgen.gen` (matches sonargrid's deployed Lua hooks);
+        /// left overridable so multiple differently-tuned worker
+        /// fleets can coexist (e.g. `texgen.gen.fast` vs
+        /// `texgen.gen.pro`).
         pub task_name: String,
         /// How long we're willing to wait for a *reply* after
         /// LPUSH. Covers the worker's own API call latency plus
         /// any queueing. 60s default is comfortable for FLUX
-        /// schnell (~2 s) + any retries.
+        /// schnell (~3-8 s) + any retries; CPU lane finishes in
+        /// well under 1 s.
         pub result_timeout: Duration,
         /// Max retries the worker is allowed (carried in the
         /// envelope). Default 3 matches Rustyme's own default.
         pub max_retries: u32,
+        /// Optional `kwargs.style_mode` to send through.
+        ///
+        /// * `auto` (default at the worker side) — Lua hook decides
+        ///   based on prompt length / language.
+        /// * `solid` — strictly deterministic, no LLM call.
+        /// * `smart` — force LLM parse; ~500 ms + tiny cost.
+        ///
+        /// Only consumed by `texgen-cpu`; ignored by `texgen-fal`.
+        /// `None` omits the field from the envelope so the worker
+        /// applies its own default.
+        pub style_mode: Option<String>,
     }
 
     impl RustymeConfig {
@@ -658,23 +747,29 @@ pub mod rustyme {
         ///
         /// Supported vars:
         /// * `MAQUETTE_RUSTYME_REDIS_URL` (required)
-        /// * `MAQUETTE_RUSTYME_QUEUE_KEY` (default `rustyme:texgen:queue`)
-        /// * `MAQUETTE_RUSTYME_RESULT_KEY` (default `rustyme:texgen:result`)
+        /// * `MAQUETTE_RUSTYME_PROFILE` (default `cpu`; values: `cpu` / `fal`)
+        /// * `MAQUETTE_RUSTYME_QUEUE_KEY` (overrides profile-derived default)
+        /// * `MAQUETTE_RUSTYME_RESULT_KEY` (overrides profile-derived default)
         /// * `MAQUETTE_RUSTYME_ADMIN_URL` (optional)
-        /// * `MAQUETTE_RUSTYME_TASK_NAME` (default `texture.gen`)
+        /// * `MAQUETTE_RUSTYME_TASK_NAME` (default `texgen.gen`)
         /// * `MAQUETTE_RUSTYME_RESULT_TIMEOUT_SECS` (default `60`)
         /// * `MAQUETTE_RUSTYME_MAX_RETRIES` (default `3`)
+        /// * `MAQUETTE_RUSTYME_STYLE_MODE` (optional; `auto`/`solid`/`smart`)
         pub fn from_env() -> Option<Self> {
             let redis_url = std::env::var("MAQUETTE_RUSTYME_REDIS_URL").ok()?;
+            let profile = std::env::var("MAQUETTE_RUSTYME_PROFILE")
+                .ok()
+                .and_then(|v| RustymeProfile::parse(&v))
+                .unwrap_or(RustymeProfile::Cpu);
             Some(Self {
                 redis_url,
                 queue_key: std::env::var("MAQUETTE_RUSTYME_QUEUE_KEY")
-                    .unwrap_or_else(|_| "rustyme:texgen:queue".to_string()),
+                    .unwrap_or_else(|_| profile.queue_key().to_string()),
                 result_key: std::env::var("MAQUETTE_RUSTYME_RESULT_KEY")
-                    .unwrap_or_else(|_| "rustyme:texgen:result".to_string()),
+                    .unwrap_or_else(|_| profile.result_key().to_string()),
                 admin_base_url: std::env::var("MAQUETTE_RUSTYME_ADMIN_URL").ok(),
                 task_name: std::env::var("MAQUETTE_RUSTYME_TASK_NAME")
-                    .unwrap_or_else(|_| "texture.gen".to_string()),
+                    .unwrap_or_else(|_| "texgen.gen".to_string()),
                 result_timeout: Duration::from_secs(
                     std::env::var("MAQUETTE_RUSTYME_RESULT_TIMEOUT_SECS")
                         .ok()
@@ -685,6 +780,9 @@ pub mod rustyme {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(3),
+                style_mode: std::env::var("MAQUETTE_RUSTYME_STYLE_MODE")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
             })
         }
     }
@@ -721,9 +819,71 @@ pub mod rustyme {
     }
 
     /// Shape of the `result` field our workers agree to return.
-    #[derive(Deserialize, Debug)]
+    ///
+    /// **Two shapes are accepted on the wire**, in order of
+    /// preference:
+    ///
+    /// 1. **New (sonargrid `texgen-cpu` / `texgen-fal`)**:
+    ///    `{ "image_b64": "...", "format": "png" | "jpeg" | "webp",
+    ///       "content_type": "image/png", ... }`.
+    ///
+    ///    Maquette currently only stores PNG bytes (the disk cache
+    ///    filename is `<sha>.png` and the v0.10 D GUI decoder
+    ///    assumes PNG). If `format` is anything other than `"png"`
+    ///    we surface a [`ProviderError::Remote`] — the caller is
+    ///    expected to either omit `output_format` from the
+    ///    `kwargs` or set it to `"png"` until non-PNG support
+    ///    lands in a later phase.
+    ///
+    /// 2. **Legacy (echo-style worker)**: `{ "png_b64": "..." }` —
+    ///    the original Phase B contract from
+    ///    `docs/texture/rustyme.md`. CPU workers still emit this
+    ///    field for backward compatibility when `format == "png"`,
+    ///    but new code paths shouldn't rely on it.
+    ///
+    /// Both fields are optional at the serde layer so we can fail
+    /// with an actionable error message inside `generate()` rather
+    /// than a generic "missing field" deserialize failure.
+    #[derive(Deserialize, Debug, Default)]
     struct TextureResult {
-        png_b64: String,
+        #[serde(default)]
+        image_b64: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        png_b64: Option<String>,
+    }
+
+    impl TextureResult {
+        /// Pull the raw PNG base64 string out of the worker's
+        /// reply, validating that the format (when declared) is
+        /// `png`. Returns `Err` with a self-explanatory message
+        /// when the worker speaks a shape we can't handle yet.
+        fn decode_png_b64(&self) -> Result<&str, String> {
+            // Prefer the new field when it's present; reject
+            // declared non-PNG formats up front so we don't silently
+            // write JPEG bytes to a `.png` cache file.
+            if let Some(b64) = self.image_b64.as_deref() {
+                let fmt = self.format.as_deref().unwrap_or("png").to_ascii_lowercase();
+                if fmt != "png" {
+                    return Err(format!(
+                        "worker returned format={fmt:?}, but Maquette currently \
+                         only consumes PNG bytes. Omit `output_format` (or set \
+                         it to \"png\") in your kwargs, or wait for the v0.10+ \
+                         multi-format support."
+                    ));
+                }
+                return Ok(b64);
+            }
+            if let Some(b64) = self.png_b64.as_deref() {
+                return Ok(b64);
+            }
+            Err(
+                "worker `result` had neither `image_b64` (new) nor `png_b64` \
+                 (legacy) fields"
+                    .to_string(),
+            )
+        }
     }
 
     /// [`TextureProvider`] talking to a Rustyme cluster.
@@ -758,14 +918,28 @@ pub mod rustyme {
                 .map_err(|e| ProviderError::Remote(format!("redis handshake: {e}")))?;
 
             let task_id = uuid::Uuid::new_v4().to_string();
-            let kwargs = json!({
-                "prompt":    request.prompt,
-                "seed":      request.seed,
-                "width":     request.width,
-                "height":    request.height,
-                "model":     request.model,
-                "cache_key": request.cache_key(),
+            // We pin `output_format=png` because Maquette's disk
+            // cache uses `<sha>.png` and the v0.10 D GUI decoder
+            // assumes PNG. Without this hint, sonargrid's smart
+            // worker is free to return jpeg (e.g. when the LLM
+            // classifies the prompt as "toon base color, no
+            // alpha"), which we'd then reject downstream. Keeping
+            // the constraint at the producer is friendlier than
+            // failing the BRPOP path.
+            let mut kwargs = json!({
+                "prompt":        request.prompt,
+                "seed":          request.seed,
+                "width":         request.width,
+                "height":        request.height,
+                "model":         request.model,
+                "cache_key":     request.cache_key(),
+                "output_format": "png",
             });
+            if let Some(mode) = self.config.style_mode.as_deref() {
+                if let Some(obj) = kwargs.as_object_mut() {
+                    obj.insert("style_mode".to_string(), Value::String(mode.to_string()));
+                }
+            }
             let envelope = TaskEnvelope {
                 id: &task_id,
                 task: &self.config.task_name,
@@ -839,8 +1013,11 @@ pub mod rustyme {
                 let parsed: ResultEnvelope = match serde_json::from_str(&raw) {
                     Ok(p) => p,
                     Err(e) => {
-                        // Don't poison the queue for other clients.
-                        let _: Result<(), _> = conn.rpush(&self.config.result_key, &raw);
+                        // Push back to the *head* (LPUSH), not the
+                        // tail — see the foreign-task_id branch below
+                        // for why. We don't want to poison the queue
+                        // either, so log the bad payload too.
+                        let _: Result<(), _> = conn.lpush(&self.config.result_key, &raw);
                         return Err(ProviderError::Remote(format!(
                             "rustyme: result envelope not JSON: {e} raw={}",
                             truncate_for_log(&raw),
@@ -849,14 +1026,25 @@ pub mod rustyme {
                 };
 
                 if parsed.task_id != task_id {
-                    // Not ours — put it back at the tail so another
-                    // concurrent caller can see it. Match the
-                    // rustyme-py SDK's behaviour exactly.
+                    // Not ours — put it back so another concurrent
+                    // caller can see it. We push to the *head* (LPUSH),
+                    // matching the worker's own write direction, so
+                    // that subsequent BRPOPs (which pop from the tail)
+                    // make progress on **older** elements instead of
+                    // re-popping the same foreign reply forever.
+                    //
+                    // (rustyme-py's `AsyncResult.get()` uses RPUSH
+                    // here, which silently deadlocks when the result
+                    // queue contains stale entries — Maquette would
+                    // hit this any time a previous `texgen-cpu`/`fal`
+                    // client crashed without draining its replies. We
+                    // keep our copy correct and have flagged it
+                    // upstream.)
                     log::debug!(
-                        "texgen: saw result for other task {} — re-pushing",
+                        "texgen: saw result for other task {} — re-pushing to head",
                         parsed.task_id
                     );
-                    let _: Result<(), _> = conn.rpush(&self.config.result_key, &raw);
+                    let _: Result<(), _> = conn.lpush(&self.config.result_key, &raw);
                     continue;
                 }
 
@@ -873,14 +1061,21 @@ pub mod rustyme {
                 let texture: TextureResult = serde_json::from_value(parsed.result.clone())
                     .map_err(|e| {
                         ProviderError::Remote(format!(
-                            "rustyme: worker returned result without `png_b64`: {e} \
+                            "rustyme: failed to parse worker result envelope: {e} \
                              raw_result={}",
                             truncate_for_log(&parsed.result.to_string()),
                         ))
                     })?;
 
+                let png_b64 = texture.decode_png_b64().map_err(|msg| {
+                    ProviderError::Remote(format!(
+                        "rustyme: {msg} (task_id={task_id}, raw_result={})",
+                        truncate_for_log(&parsed.result.to_string()),
+                    ))
+                })?;
+
                 let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(texture.png_b64.as_bytes())
+                    .decode(png_b64.as_bytes())
                     .map_err(|e| {
                         ProviderError::Remote(format!(
                             "rustyme: base64 decode of worker result: {e}"
@@ -1001,12 +1196,13 @@ pub mod rustyme {
         fn cfg() -> RustymeConfig {
             RustymeConfig {
                 redis_url: "redis://127.0.0.1:6379/0".to_string(),
-                queue_key: "rustyme:texgen:queue".to_string(),
-                result_key: "rustyme:texgen:result".to_string(),
+                queue_key: RustymeProfile::Cpu.queue_key().to_string(),
+                result_key: RustymeProfile::Cpu.result_key().to_string(),
                 admin_base_url: Some("http://localhost:12121".to_string()),
-                task_name: "texture.gen".to_string(),
+                task_name: "texgen.gen".to_string(),
                 result_timeout: Duration::from_secs(10),
                 max_retries: 3,
+                style_mode: None,
             }
         }
 
@@ -1024,7 +1220,7 @@ pub mod rustyme {
             });
             let envelope = TaskEnvelope {
                 id: task_id,
-                task: "texture.gen",
+                task: "texgen.gen",
                 args: &[],
                 kwargs: &kwargs,
                 retries: 0,
@@ -1039,7 +1235,7 @@ pub mod rustyme {
             // the worker to reject the task envelope.
             for field in [
                 r#""id":"test-uuid""#,
-                r#""task":"texture.gen""#,
+                r#""task":"texgen.gen""#,
                 r#""max_retries":3"#,
                 r#""priority":"normal""#,
                 r#""unique_for_secs":3600"#,
@@ -1058,17 +1254,77 @@ pub mod rustyme {
         }
 
         #[test]
-        fn result_envelope_round_trip() {
-            // This is the exact shape our workers agree to emit.
-            // Owning the parse path here guarantees a single
-            // source of truth that drifts only on intentional
-            // protocol bumps.
+        fn result_envelope_legacy_png_b64_round_trip() {
+            // Phase B's original shape. Maquette must keep parsing
+            // it for backward compatibility with existing echo
+            // workers and the old smoke harness.
             let raw = r#"{"task_id":"abc","status":"SUCCESS","result":{"png_b64":"aGk="}}"#;
             let env: ResultEnvelope = serde_json::from_str(raw).unwrap();
             assert_eq!(env.task_id, "abc");
             assert_eq!(env.status, "SUCCESS");
             let tex: TextureResult = serde_json::from_value(env.result).unwrap();
-            assert_eq!(tex.png_b64, "aGk=");
+            assert_eq!(tex.decode_png_b64().unwrap(), "aGk=");
+        }
+
+        #[test]
+        fn result_envelope_new_image_b64_round_trip() {
+            // The shape sonargrid's `texgen-cpu` / `texgen-fal`
+            // workers actually emit today (PNG path). We must
+            // accept it and pull the bytes out.
+            let raw = r#"{
+                "task_id":"abc","status":"SUCCESS",
+                "result":{"image_b64":"aGk=","format":"png","content_type":"image/png"}
+            }"#;
+            let env: ResultEnvelope = serde_json::from_str(raw).unwrap();
+            let tex: TextureResult = serde_json::from_value(env.result).unwrap();
+            assert_eq!(tex.decode_png_b64().unwrap(), "aGk=");
+        }
+
+        #[test]
+        fn result_envelope_image_b64_with_explicit_png_round_trip() {
+            // `texgen-cpu` happens to emit *both* fields when
+            // `format == "png"`. Make sure we still pick one
+            // unambiguously.
+            let raw = r#"{
+                "task_id":"abc","status":"SUCCESS",
+                "result":{"image_b64":"aGk=","format":"png","png_b64":"aGk="}
+            }"#;
+            let env: ResultEnvelope = serde_json::from_str(raw).unwrap();
+            let tex: TextureResult = serde_json::from_value(env.result).unwrap();
+            assert_eq!(tex.decode_png_b64().unwrap(), "aGk=");
+        }
+
+        #[test]
+        fn result_envelope_rejects_non_png_format() {
+            // Maquette's disk cache files are named `<sha>.png` and
+            // the v0.10 D GUI decoder assumes PNG. If a worker
+            // returns `format=jpeg` we must surface that as a clear
+            // error rather than silently caching JPEG bytes.
+            let raw = r#"{
+                "task_id":"abc","status":"SUCCESS",
+                "result":{"image_b64":"aGk=","format":"jpeg","content_type":"image/jpeg"}
+            }"#;
+            let env: ResultEnvelope = serde_json::from_str(raw).unwrap();
+            let tex: TextureResult = serde_json::from_value(env.result).unwrap();
+            let err = tex.decode_png_b64().expect_err("non-png must be rejected");
+            assert!(
+                err.contains("png") && err.contains("jpeg"),
+                "error must name both formats; got {err:?}"
+            );
+        }
+
+        #[test]
+        fn result_envelope_rejects_empty_result() {
+            // Worker returned SUCCESS but with neither field — most
+            // likely a misconfigured echo Lua. Don't decode garbage.
+            let raw = r#"{"task_id":"abc","status":"SUCCESS","result":{}}"#;
+            let env: ResultEnvelope = serde_json::from_str(raw).unwrap();
+            let tex: TextureResult = serde_json::from_value(env.result).unwrap();
+            let err = tex.decode_png_b64().expect_err("empty must be rejected");
+            assert!(
+                err.contains("image_b64") && err.contains("png_b64"),
+                "error must mention both accepted shapes; got {err:?}"
+            );
         }
 
         #[test]
@@ -1080,17 +1336,68 @@ pub mod rustyme {
         }
 
         #[test]
+        fn rustyme_profile_parse() {
+            assert_eq!(RustymeProfile::parse("cpu"), Some(RustymeProfile::Cpu));
+            assert_eq!(RustymeProfile::parse("CPU"), Some(RustymeProfile::Cpu));
+            assert_eq!(
+                RustymeProfile::parse("texgen-cpu"),
+                Some(RustymeProfile::Cpu)
+            );
+            assert_eq!(RustymeProfile::parse("fal"), Some(RustymeProfile::Fal));
+            assert_eq!(
+                RustymeProfile::parse("texgen-fal"),
+                Some(RustymeProfile::Fal)
+            );
+            assert_eq!(RustymeProfile::parse("nope"), None);
+            // Match deployed key naming exactly — drift here would
+            // silently send tasks to a queue no one is consuming.
+            assert_eq!(
+                RustymeProfile::Cpu.queue_key(),
+                "rustyme:texgen-cpu:queue"
+            );
+            assert_eq!(
+                RustymeProfile::Cpu.result_key(),
+                "rustyme:texgen-cpu:result"
+            );
+            assert_eq!(
+                RustymeProfile::Fal.queue_key(),
+                "rustyme:texgen-fal:queue"
+            );
+            assert_eq!(
+                RustymeProfile::Fal.result_key(),
+                "rustyme:texgen-fal:result"
+            );
+        }
+
+        #[test]
         fn config_from_env_requires_redis_url() {
             // Not a full e2e; we just verify the "required" field
             // logic so a missing env var doesn't silently produce
             // a wrong config.
             let key = "MAQUETTE_RUSTYME_REDIS_URL";
+            // Profile / queue overrides can pollute neighbouring tests
+            // when run with --test-threads>1; capture and restore them
+            // around this assertion.
+            let prelude_keys = [
+                "MAQUETTE_RUSTYME_PROFILE",
+                "MAQUETTE_RUSTYME_QUEUE_KEY",
+                "MAQUETTE_RUSTYME_RESULT_KEY",
+                "MAQUETTE_RUSTYME_TASK_NAME",
+                "MAQUETTE_RUSTYME_STYLE_MODE",
+            ];
             let saved = std::env::var(key).ok();
+            let saved_prelude: Vec<_> = prelude_keys
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect();
             // SAFETY: test is single-threaded within this cfg(test)
             // binary; removing and restoring the env var can't race
             // with another thread's env read.
             unsafe {
                 std::env::remove_var(key);
+                for k in prelude_keys {
+                    std::env::remove_var(k);
+                }
             }
             assert!(
                 RustymeConfig::from_env().is_none(),
@@ -1101,11 +1408,67 @@ pub mod rustyme {
             }
             let cfg = RustymeConfig::from_env().expect("with redis url set");
             assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
-            assert_eq!(cfg.task_name, "texture.gen");
-            // Restore.
-            match saved {
-                Some(v) => unsafe { std::env::set_var(key, v) },
-                None => unsafe { std::env::remove_var(key) },
+            assert_eq!(cfg.task_name, "texgen.gen");
+            // Default profile is cpu — anyone changing that needs to
+            // also update USER-TODO + docs/texture/rustyme.md.
+            assert_eq!(cfg.queue_key, "rustyme:texgen-cpu:queue");
+            assert_eq!(cfg.result_key, "rustyme:texgen-cpu:result");
+            assert!(cfg.style_mode.is_none());
+            unsafe {
+                match saved {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+                for (k, v) in saved_prelude {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn config_from_env_honours_profile() {
+            let keys = [
+                "MAQUETTE_RUSTYME_REDIS_URL",
+                "MAQUETTE_RUSTYME_PROFILE",
+                "MAQUETTE_RUSTYME_QUEUE_KEY",
+                "MAQUETTE_RUSTYME_RESULT_KEY",
+                "MAQUETTE_RUSTYME_STYLE_MODE",
+            ];
+            let saved: Vec<_> = keys
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect();
+            unsafe {
+                std::env::set_var("MAQUETTE_RUSTYME_REDIS_URL", "redis://127.0.0.1:6379");
+                std::env::set_var("MAQUETTE_RUSTYME_PROFILE", "fal");
+                std::env::remove_var("MAQUETTE_RUSTYME_QUEUE_KEY");
+                std::env::remove_var("MAQUETTE_RUSTYME_RESULT_KEY");
+                std::env::set_var("MAQUETTE_RUSTYME_STYLE_MODE", "smart");
+            }
+            let cfg = RustymeConfig::from_env().expect("redis url set");
+            assert_eq!(cfg.queue_key, "rustyme:texgen-fal:queue");
+            assert_eq!(cfg.result_key, "rustyme:texgen-fal:result");
+            assert_eq!(cfg.style_mode.as_deref(), Some("smart"));
+
+            // Explicit *_KEY overrides win over PROFILE.
+            unsafe {
+                std::env::set_var("MAQUETTE_RUSTYME_QUEUE_KEY", "custom:q");
+                std::env::set_var("MAQUETTE_RUSTYME_RESULT_KEY", "custom:r");
+            }
+            let cfg = RustymeConfig::from_env().expect("redis url set");
+            assert_eq!(cfg.queue_key, "custom:q");
+            assert_eq!(cfg.result_key, "custom:r");
+
+            unsafe {
+                for (k, v) in saved {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
             }
         }
 
