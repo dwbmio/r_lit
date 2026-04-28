@@ -236,18 +236,15 @@ for entry in "${BLOCKS[@]}"; do
     continue
   fi
   if [[ -n "$IMG_RESIZE_BIN" ]]; then
-    # img_resize r_resize has a quirky output convention: it writes
-    # to *cwd* using only the input's file *name* (Path::new(f_name)
-    # drops the dir component), not back to the input's directory.
-    # Workaround: copy master → mobile_png, then cd into mobile_dir
-    # before invoking; the tool then overwrites mobile_png in
-    # place.
+    # img_resize r_resize overwrites the input in-place when no
+    # explicit `--out` is given (since the output-routing fix in
+    # img_resize: file_name + parent dir lookup). So copy master
+    # → mobile_png, then resize mobile_png itself.
     cp "$master_path" "$mobile_png"
-    if (cd "$MOBILE_DIR" && \
-        "$IMG_RESIZE_BIN" r_resize \
-            --rw "$MOBILE_SIZE" --rh "$MOBILE_SIZE" \
-            "$id.png" \
-            >/dev/null 2>&1) \
+    if "$IMG_RESIZE_BIN" r_resize \
+          --rw "$MOBILE_SIZE" --rh "$MOBILE_SIZE" \
+          "$mobile_png" \
+          >/dev/null 2>&1 \
        && [[ -s "$mobile_png" ]]; then
       mobile_bytes=$(wc -c <"$mobile_png" | tr -d ' ')
       TOTAL_MOBILE_PNG_BYTES=$((TOTAL_MOBILE_PNG_BYTES + mobile_bytes))
