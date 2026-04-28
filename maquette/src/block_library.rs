@@ -300,6 +300,7 @@ pub fn snapshot(library: &BlockLibraryState) -> Arc<[BlockMeta]> {
 pub fn source_label_color(source: &BlockMetaSource) -> bevy::color::Color {
     match source {
         BlockMetaSource::Local => bevy::color::Color::srgb(0.55, 0.55, 0.65),
+        BlockMetaSource::LocalDraft { .. } => bevy::color::Color::srgb(0.95, 0.75, 0.40),
         BlockMetaSource::Hfrog { .. } => bevy::color::Color::srgb(0.45, 0.65, 0.95),
     }
 }

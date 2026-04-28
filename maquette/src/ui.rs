@@ -20,6 +20,7 @@ use maquette::grid::{
 
 use bevy::window::PrimaryWindow;
 
+use crate::block_composer::OpenBlockComposer;
 use crate::block_library::{BlockBindAction, BlockLibraryState, SyncBlockLibrary};
 use crate::camera::{
     egui_rect, FitPreviewToModel, PreviewViewportRect, ResetPreviewView, ZoomPreview, ZOOM_STEP,
@@ -48,6 +49,8 @@ pub struct UiMessages<'w> {
     pub block_bind: MessageWriter<'w, BlockBindAction>,
     /// Trigger a hfrog catalog re-fetch.
     pub block_sync: MessageWriter<'w, SyncBlockLibrary>,
+    /// Open the second-window block composer.
+    pub composer_open: MessageWriter<'w, OpenBlockComposer>,
     /// Reactive-rendering wake-up (`WinitSettings::desktop_app()` only
     /// runs `Update` when winit fires an event or someone writes
     /// `RequestRedraw`). After any blocking native dialog we have to
@@ -219,6 +222,7 @@ fn ui_system(
     let jump_ortho_ev = &mut msgs.jump_ortho;
     let block_bind_ev = &mut msgs.block_bind;
     let block_sync_ev = &mut msgs.block_sync;
+    let composer_open_ev = &mut msgs.composer_open;
     let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
@@ -424,6 +428,21 @@ fn ui_system(
                     .changed()
                 {
                     axes.visible = axes_visible;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Window", |ui| {
+                if ui
+                    .button("New Block Composer…")
+                    .on_hover_text(
+                        "Open a second window to design a new block: \
+                         pick a shape, iterate on a texgen prompt, save \
+                         the result locally or publish it to hfrog.",
+                    )
+                    .clicked()
+                {
+                    composer_open_ev.write(OpenBlockComposer);
+                    redraw_ev.write(bevy::window::RequestRedraw);
                     ui.close();
                 }
             });

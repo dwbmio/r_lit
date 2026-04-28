@@ -86,6 +86,18 @@ pub enum BlockMetaSource {
     /// Bundled with the Maquette binary. Cannot be edited from the
     /// GUI; if a user wants a custom one they publish it to hfrog.
     Local,
+    /// User-authored draft sitting in the local block-draft cache
+    /// (`~/.cache/maquette/blocks/local-drafts/<id>.json` plus a
+    /// sibling `.png`). Drafts come out of the Block Composer
+    /// window's "Save Local Draft" path. They show up in the main
+    /// Block Library exactly like local + hfrog blocks, but with a
+    /// `draft` badge so the user can tell which ones are still
+    /// theirs to publish.
+    LocalDraft {
+        /// UNIX epoch second when the draft was first saved.
+        #[serde(default)]
+        created_at: i64,
+    },
     /// Pulled from a hfrog artifact server. The triplet
     /// `(name, ver, runtime)` is the logical identifier on the
     /// server side; `pid` is the row id (useful for the
@@ -107,6 +119,7 @@ impl BlockMetaSource {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Local => "local",
+            Self::LocalDraft { .. } => "draft",
             Self::Hfrog { .. } => "hfrog",
         }
     }
@@ -923,7 +936,11 @@ pub mod hfrog {
         ) -> Result<Option<String>, BlockMetaError> {
             let pid = match &meta.source {
                 BlockMetaSource::Hfrog { pid, .. } => *pid,
-                BlockMetaSource::Local => return Ok(None),
+                BlockMetaSource::Local | BlockMetaSource::LocalDraft { .. } => {
+                    // Drafts and bundled blocks live entirely
+                    // client-side; there's nothing to resolve.
+                    return Ok(None);
+                }
             };
             if meta.preview_s3_key.is_none() {
                 return Ok(None);
@@ -1447,4 +1464,571 @@ pub mod hfrog {
             assert_eq!(cached.id, "stone");
         }
     }
+
+    // =================================================================
+    // HfrogPublisher — write-side client for "Publish to hfrog" path.
+    // =================================================================
+
+    /// Result of a successful `publish_block` call. The pid is the
+    /// row id hfrog assigned; the upload URL (presigned) is what the
+    /// publisher PUTs the PNG to. We surface both so the caller can
+    /// log them — the GUI mostly just shows pid in a toast.
+    #[derive(Debug, Clone)]
+    pub struct PublishOutcome {
+        pub pid: i32,
+        /// Server-assigned `s3_key` — useful for verifying that the
+        /// block actually reached durable storage.
+        pub s3_key: String,
+        /// MD5 we computed locally and sent in the JSON. Echoed back
+        /// so the caller can pin it without recomputing.
+        pub md5: String,
+    }
+
+    /// Talks to hfrog's write side. Construction is cheap; the
+    /// publisher does no network until `publish_block` is called.
+    pub struct HfrogPublisher {
+        cfg: HfrogConfig,
+    }
+
+    impl HfrogPublisher {
+        pub fn new(cfg: HfrogConfig) -> Self {
+            Self { cfg }
+        }
+
+        /// Publish a `BlockMeta` together with its PNG bytes to
+        /// hfrog. Two HTTP calls under the hood:
+        ///
+        /// 1. `PUT /api/artifactory/add` with a JSON
+        ///    `ArtifactoryModel` describing the artefact. The
+        ///    response carries `data.url`, an S3-presigned PUT URL.
+        /// 2. `PUT <presigned URL>` with the PNG bytes as the
+        ///    request body. The MinIO bucket-event hook flips
+        ///    `is_artifactory_ready` to true, after which the
+        ///    record shows up in `list?runtime=maquette-block/v1`.
+        ///
+        /// Yes, the multipart `/add_form_file` route exists on the
+        /// server side too, but it caps at 5 MB *and* still
+        /// double-trips through S3 — going through the presigned
+        /// URL directly is simpler and lets us upload arbitrarily
+        /// large pre-renders later if we ever want to. Same total
+        /// number of HTTP round-trips.
+        pub fn publish_block(
+            &self,
+            meta: &BlockMeta,
+            png_bytes: &[u8],
+        ) -> Result<PublishOutcome, BlockMetaError> {
+            // 1. Compute an md5 of the PNG so the artefact record
+            //    matches what we actually upload. The 32-char hex
+            //    column is `NOT NULL` on the hfrog side so we have
+            //    to send something.
+            let md5 = md5_hex(png_bytes);
+
+            // Pick a default ver. The user may extend this later
+            // (a "ver" field on `ComposerDraft`) — for now,
+            // a timestamped v0 keeps the artefact tuple unique.
+            let ver = format!("0.0.{}", super::unix_seconds());
+            let s3_key = format!("maquette-block/{}/{}.png", meta.id, ver);
+
+            // 2. JSON body for `/add`. Field names mirror hfrog's
+            //    `entity::artifactory::Model`. `is_artifactory_ready`
+            //    starts `false`; the bucket-event hook flips it
+            //    after the S3 PUT succeeds.
+            let tag = HfrogBlockTag {
+                id: Some(meta.id.clone()),
+                display_name: Some(meta.name.clone()),
+                description: Some(meta.description.clone()),
+                shape_hint: Some(match meta.shape_hint {
+                    ShapeKind::Cube => "cube".to_string(),
+                    ShapeKind::Sphere => "sphere".to_string(),
+                }),
+                default_color: Some([
+                    meta.default_color.r,
+                    meta.default_color.g,
+                    meta.default_color.b,
+                ]),
+                texture_hint: if meta.texture_hint.is_empty() {
+                    None
+                } else {
+                    Some(meta.texture_hint.clone())
+                },
+                tags: meta.tags.clone(),
+                preview_s3_key: Some(s3_key.clone()),
+            };
+            let body = serde_json::json!({
+                "name": meta.id,
+                "ver": ver,
+                "runtime": self.cfg.runtime,
+                "md5": md5,
+                "descript": if meta.description.is_empty() {
+                    meta.name.clone()
+                } else {
+                    meta.description.clone()
+                },
+                "tag": tag,
+                "cont_size": png_bytes.len() as i64,
+                "s3_key": s3_key,
+                "s3_inc_id": std::env::var("MAQUETTE_HFROG_S3_INC_ID")
+                    .ok()
+                    .and_then(|s| s.parse::<i32>().ok())
+                    .unwrap_or(0),
+                "is_artifactory_ready": false,
+                "is_raw": false,
+                "key_extension": "png"
+            });
+            let url = format!("{}/api/artifactory/add", self.cfg.base_url);
+            log::info!("hfrog: PUT {url}  body~={}B", body.to_string().len());
+            let response = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(self.cfg.timeout_secs))
+                .build()
+                .put(&url)
+                .set("content-type", "application/json")
+                .send_string(&body.to_string())
+                .map_err(|e| {
+                    BlockMetaError::Remote(format!("PUT {url}: {e}"))
+                })?;
+            let response_body = response.into_string().map_err(|e| {
+                BlockMetaError::Remote(format!("read response body: {e}"))
+            })?;
+            let v: Value = serde_json::from_str(&response_body).map_err(|e| {
+                BlockMetaError::Decode(format!("add response: {e} body={response_body}"))
+            })?;
+            // hfrog wraps errors as `{code: !=0, msg, data: null}`.
+            let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+            if code != 0 {
+                let msg = v
+                    .get("msg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                return Err(BlockMetaError::Remote(format!(
+                    "hfrog refused publish (code={code}): {msg}"
+                )));
+            }
+            let presigned_url = v
+                .get("data")
+                .and_then(|d| d.get("url"))
+                .and_then(|u| u.as_str())
+                .ok_or_else(|| {
+                    BlockMetaError::Decode(format!(
+                        "add response missing data.url: {response_body}"
+                    ))
+                })?
+                .to_string();
+
+            // 3. PUT the PNG bytes to the presigned URL.
+            log::info!(
+                "hfrog: PUT presigned (image/png, {}B)",
+                png_bytes.len()
+            );
+            ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(
+                    self.cfg.timeout_secs.max(60),
+                ))
+                .build()
+                .put(&presigned_url)
+                .set("content-type", "image/png")
+                .send_bytes(png_bytes)
+                .map_err(|e| {
+                    BlockMetaError::Remote(format!(
+                        "PUT presigned (S3): {e}"
+                    ))
+                })?;
+
+            // The pid lives on a follow-up `/find` call; for the
+            // toast we just need *something*. Re-query.
+            let pid = self
+                .lookup_pid(&meta.id, &ver)
+                .unwrap_or(0);
+
+            Ok(PublishOutcome {
+                pid,
+                s3_key,
+                md5,
+            })
+        }
+
+        fn lookup_pid(&self, id: &str, ver: &str) -> Option<i32> {
+            let url = format!(
+                "{}/api/artifactory/find?name={}&ver={}&runtime={}",
+                self.cfg.base_url,
+                urlencode(id),
+                urlencode(ver),
+                urlencode(&self.cfg.runtime),
+            );
+            let resp = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(self.cfg.timeout_secs))
+                .build()
+                .get(&url)
+                .call()
+                .ok()?;
+            let body = resp.into_string().ok()?;
+            let v: Value = serde_json::from_str(&body).ok()?;
+            v.get("data")
+                .and_then(|d| d.get(0).or(Some(d)))
+                .and_then(|row| row.get("pid"))
+                .and_then(|p| p.as_i64())
+                .map(|p| p as i32)
+        }
+    }
+
+    /// Tiny RFC 1321 MD5 — pure Rust, public-domain-style. Inlined
+    /// because we only need it on the publish path; hauling in
+    /// the `md-5` crate just for this is one more dep we'd rather
+    /// not maintain. Constant-time it is not; we don't care
+    /// (PNG bytes aren't a secret).
+    fn md5_hex(input: &[u8]) -> String {
+        let digest = md5_digest(input);
+        let mut out = String::with_capacity(32);
+        for byte in &digest {
+            use std::fmt::Write;
+            let _ = write!(&mut out, "{byte:02x}");
+        }
+        out
+    }
+
+    fn md5_digest(message: &[u8]) -> [u8; 16] {
+        // Per-round shift + sine constants from RFC 1321.
+        const S: [u32; 64] = [
+            7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+            5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+            4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+            6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+        ];
+        const K: [u32; 64] = [
+            0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a,
+            0xa8304613, 0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+            0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340,
+            0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+            0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8,
+            0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+            0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+            0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+            0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92,
+            0xffeff47d, 0x85845dd1, 0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+            0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+        ];
+        // Pre-processing: append 0x80, pad with zeros, append length.
+        let original_bit_length = (message.len() as u64).wrapping_mul(8);
+        let mut padded = message.to_vec();
+        padded.push(0x80);
+        while padded.len() % 64 != 56 {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&original_bit_length.to_le_bytes());
+
+        let mut a0: u32 = 0x67452301;
+        let mut b0: u32 = 0xefcdab89;
+        let mut c0: u32 = 0x98badcfe;
+        let mut d0: u32 = 0x10325476;
+
+        for chunk in padded.chunks_exact(64) {
+            let mut m = [0u32; 16];
+            for (i, w) in m.iter_mut().enumerate() {
+                let off = i * 4;
+                *w = u32::from_le_bytes([
+                    chunk[off],
+                    chunk[off + 1],
+                    chunk[off + 2],
+                    chunk[off + 3],
+                ]);
+            }
+            let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+            for i in 0..64 {
+                let (f, g) = match i {
+                    0..=15 => (((b & c) | (!b & d)), i),
+                    16..=31 => (((d & b) | (!d & c)), (5 * i + 1) % 16),
+                    32..=47 => ((b ^ c ^ d), (3 * i + 5) % 16),
+                    _ => ((c ^ (b | !d)), (7 * i) % 16),
+                };
+                let temp = d;
+                d = c;
+                c = b;
+                b = b.wrapping_add(
+                    a.wrapping_add(f)
+                        .wrapping_add(K[i])
+                        .wrapping_add(m[g])
+                        .rotate_left(S[i]),
+                );
+                a = temp;
+            }
+            a0 = a0.wrapping_add(a);
+            b0 = b0.wrapping_add(b);
+            c0 = c0.wrapping_add(c);
+            d0 = d0.wrapping_add(d);
+        }
+
+        let mut out = [0u8; 16];
+        out[..4].copy_from_slice(&a0.to_le_bytes());
+        out[4..8].copy_from_slice(&b0.to_le_bytes());
+        out[8..12].copy_from_slice(&c0.to_le_bytes());
+        out[12..16].copy_from_slice(&d0.to_le_bytes());
+        out
+    }
+
+    #[cfg(test)]
+    mod publisher_tests {
+        use super::*;
+
+        #[test]
+        fn md5_matches_known_vectors() {
+            // RFC 1321 reference vectors.
+            assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+            assert_eq!(md5_hex(b"a"), "0cc175b9c0f1b6a831c399e269772661");
+            assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+            assert_eq!(
+                md5_hex(b"message digest"),
+                "f96b697d7cb7938d525a2f31aaf161d0"
+            );
+            assert_eq!(
+                md5_hex(b"abcdefghijklmnopqrstuvwxyz"),
+                "c3fcd3d76192e4007dfb496cca67e13b"
+            );
+        }
+    }
+}
+
+// =====================================================================
+// LocalDraftProvider + on-disk drafts cache.
+// =====================================================================
+
+/// User-authored drafts produced by the Block Composer window. Drafts
+/// live alongside the hfrog cache (under a `local-drafts` source
+/// folder) so the same `cache_list` machinery can surface them to
+/// the main Block Library; the GUI badges them differently via
+/// `BlockMetaSource::LocalDraft`.
+pub mod drafts {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        cache_list, cache_put_png, BlockMeta, BlockMetaError, BlockMetaProvider,
+    };
+
+    /// Folder name for drafts under the cache root. Distinct from
+    /// the `hfrog` folder so the two never collide.
+    pub const DRAFT_SOURCE_DIR: &str = "local-drafts";
+
+    /// Logical "runtime" the draft files live under inside the
+    /// cache directory tree. Only ever written by the composer; we
+    /// keep it stable even though there's just one bucket.
+    pub const DRAFT_RUNTIME: &str = "user/v1";
+
+    /// Persist a draft (meta JSON + sibling PNG). Returns the JSON
+    /// path on success.
+    ///
+    /// Drafts intentionally go under `local-drafts/<runtime>/`,
+    /// **not** the `cache_put_meta`-derived path that uses
+    /// `meta.source.label()` (which would be `"draft"`). Keeping the
+    /// folder name explicit + decoupled from the enum label means
+    /// renaming the source-label later doesn't strand on-disk
+    /// drafts under a stale path.
+    pub fn write_draft(
+        cache_dir: &Path,
+        meta: &BlockMeta,
+        png_bytes: &[u8],
+    ) -> std::io::Result<PathBuf> {
+        // `cache_put_meta` would route by `meta.source.label()`; we
+        // need to force the `local-drafts` folder. Easiest way: hand
+        // the routing here ourselves with the same "tmp + rename"
+        // semantics as the shared writer.
+        use std::io::Write as _;
+        let dir = cache_dir.join(DRAFT_SOURCE_DIR).join(DRAFT_RUNTIME);
+        fs::create_dir_all(&dir)?;
+        let final_path = dir.join(format!("{}.json", meta.id));
+        let tmp_path = dir.join(format!("{}.json.tmp", meta.id));
+        {
+            let mut f = fs::File::create(&tmp_path)?;
+            let json = serde_json::to_vec_pretty(meta).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+            })?;
+            f.write_all(&json)?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp_path, &final_path)?;
+        cache_put_png(cache_dir, DRAFT_SOURCE_DIR, DRAFT_RUNTIME, &meta.id, png_bytes)?;
+        Ok(final_path)
+    }
+
+    /// Drop a draft from disk (best-effort; missing entries are not
+    /// errors). Used after a successful `Publish to Hfrog` so the
+    /// draft doesn't sit around as a duplicate.
+    pub fn remove_draft(cache_dir: &Path, id: &str) -> std::io::Result<()> {
+        let dir = cache_dir.join(DRAFT_SOURCE_DIR).join(DRAFT_RUNTIME);
+        for ext in ["json", "png"] {
+            let path = dir.join(format!("{id}.{ext}"));
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the PNG bytes for a draft, if any.
+    #[allow(dead_code)]
+    pub fn read_draft_png(
+        cache_dir: &Path,
+        id: &str,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        let path = cache_dir
+            .join(DRAFT_SOURCE_DIR)
+            .join(DRAFT_RUNTIME)
+            .join(format!("{id}.png"));
+        match fs::read(&path) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Provider that lists every JSON file under
+    /// `<cache_dir>/local-drafts/user/v1/`. Reads off disk on
+    /// every `list()` so a draft saved by the composer becomes
+    /// visible the next frame without a cache invalidation step.
+    pub struct LocalDraftProvider {
+        cache_dir: Option<PathBuf>,
+    }
+
+    impl LocalDraftProvider {
+        pub fn new() -> Self {
+            Self {
+                cache_dir: super::default_cache_dir(),
+            }
+        }
+        #[allow(dead_code)]
+        pub fn with_cache_dir(mut self, dir: Option<PathBuf>) -> Self {
+            self.cache_dir = dir;
+            self
+        }
+
+        /// Merge drafts into an existing block list. `existing`
+        /// is typically the GUI's current `BlockLibraryState.blocks`.
+        /// Drafts override on id collision (so editing a draft of
+        /// `grass` shows up in the library instead of the bundled
+        /// `grass`).
+        pub fn merge_into_library(
+            &self,
+            existing: &[BlockMeta],
+        ) -> Result<Vec<BlockMeta>, BlockMetaError> {
+            let drafts = self.list()?;
+            let draft_ids: std::collections::HashSet<&str> =
+                drafts.iter().map(|b| b.id.as_str()).collect();
+            let mut merged: Vec<BlockMeta> = existing
+                .iter()
+                .filter(|b| !draft_ids.contains(b.id.as_str()))
+                .cloned()
+                .collect();
+            merged.extend(drafts);
+            merged.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(merged)
+        }
+    }
+
+    impl Default for LocalDraftProvider {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl BlockMetaProvider for LocalDraftProvider {
+        fn name(&self) -> &'static str {
+            "local-drafts"
+        }
+        fn list(&self) -> Result<Vec<BlockMeta>, BlockMetaError> {
+            let Some(dir) = &self.cache_dir else {
+                return Ok(Vec::new());
+            };
+            cache_list(dir, DRAFT_SOURCE_DIR, DRAFT_RUNTIME)
+                .map_err(BlockMetaError::Io)
+        }
+        fn get(&self, id: &str) -> Result<BlockMeta, BlockMetaError> {
+            self.list()?
+                .into_iter()
+                .find(|b| b.id == id)
+                .ok_or_else(|| BlockMetaError::NotFound(id.to_string()))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::block_meta::{BlockMetaSource, RgbaColor};
+        use crate::grid::ShapeKind;
+        use tempfile::tempdir;
+
+        fn fixture(id: &str) -> BlockMeta {
+            BlockMeta {
+                id: id.to_string(),
+                name: format!("Draft {id}"),
+                description: "draft description".into(),
+                shape_hint: ShapeKind::Cube,
+                default_color: RgbaColor::rgb(0.5, 0.5, 0.5),
+                texture_hint: "draft hint".into(),
+                tags: vec![],
+                source: BlockMetaSource::LocalDraft { created_at: 1 },
+                preview_s3_key: None,
+            }
+        }
+
+        #[test]
+        fn write_then_list_round_trip() {
+            let dir = tempdir().unwrap();
+            write_draft(dir.path(), &fixture("my_block"), b"\x89PNG\r\n\x1a\n").unwrap();
+            let provider = LocalDraftProvider::new()
+                .with_cache_dir(Some(dir.path().to_path_buf()));
+            let listed = provider.list().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, "my_block");
+        }
+
+        #[test]
+        fn remove_draft_drops_both_files() {
+            let dir = tempdir().unwrap();
+            write_draft(dir.path(), &fixture("x"), b"\x89PNG\r\n\x1a\n").unwrap();
+            remove_draft(dir.path(), "x").unwrap();
+            let provider = LocalDraftProvider::new()
+                .with_cache_dir(Some(dir.path().to_path_buf()));
+            assert!(provider.list().unwrap().is_empty());
+            assert!(read_draft_png(dir.path(), "x").unwrap().is_none());
+        }
+
+        #[test]
+        fn remove_missing_draft_is_noop() {
+            let dir = tempdir().unwrap();
+            // No draft was ever written; remove must not error.
+            remove_draft(dir.path(), "ghost").unwrap();
+        }
+
+        #[test]
+        fn merge_drafts_override_collisions() {
+            let dir = tempdir().unwrap();
+            write_draft(dir.path(), &fixture("grass"), b"\x89PNG\r\n\x1a\n").unwrap();
+            let bundled = vec![BlockMeta {
+                id: "grass".into(),
+                name: "Bundled grass".into(),
+                description: "bundled".into(),
+                shape_hint: ShapeKind::Cube,
+                default_color: RgbaColor::rgb(0.4, 0.8, 0.4),
+                texture_hint: "bundled hint".into(),
+                tags: vec![],
+                source: BlockMetaSource::Local,
+                preview_s3_key: None,
+            }];
+            let provider = LocalDraftProvider::new()
+                .with_cache_dir(Some(dir.path().to_path_buf()));
+            let merged = provider.merge_into_library(&bundled).unwrap();
+            assert_eq!(merged.len(), 1, "draft must override the bundled grass");
+            assert_eq!(merged[0].name, "Draft grass");
+            assert!(matches!(merged[0].source, BlockMetaSource::LocalDraft { .. }));
+        }
+    }
+}
+
+/// Internal helper exposed to the GUI binary.
+pub(crate) fn unix_seconds() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

@@ -1,27 +1,18 @@
 # NEXT · maquette
 
-**Status, 2026-04-28 (morning).** v0.9 A (autosave + crash
-recovery) shipped 2026-04-23. A second wave of v0.9 polish + the
-v0.10 A/B texture pipeline shipped 2026-04-27
-(see `v0.9b-complete.md`). The same evening **v0.10 B-bis** landed
-(see `v0.10b-bis-complete.md`): the producer is now live-verified
-against sonargrid at `10.100.85.15:12121/ui`, with one
-foreign-reply infinite-loop bug fixed in passing (and the same
-bug in `rustyme-py`'s SDK fixed + regression-tested in the
-sonargrid working tree, awaiting maintainer review). Then
-**v0.10 C-1** landed (see `v0.10c1-complete.md`): lib-side schema
-v4 with `ProjectMeta`, `Palette::slot_meta`, `TextureHandle`,
-`TexturePrefs`, and the `*_with_meta` load/save APIs. Now
-**v0.10 C-2** lands (see `v0.10c2-blockmeta-complete.md`): block
-*content* layer — `BlockMeta`, `LocalProvider` (12 bundled
-blocks), `HfrogProvider` (HTTP client for the artifact server at
-`https://starlink.youxi123.com/hfrog`), `Palette::set_block_id`,
-`derive_texture_prompt` (single-source-of-truth prompt chain),
-`maquette-cli block list/get/sync` (incl. 6 integration tests),
-and the GUI right-side Block Library panel + slot context-menu
-"Bind block…" submenu + bound-slot blue corner badge. Working
-tree is clean, **183 tests + clippy green** (141 lib + 11 history
-+ 6 export + 25 CLI; was 143).
+**Status, 2026-04-28 (afternoon).** Wave order: v0.9 A
+(autosave + crash recovery) 2026-04-23 → v0.9 polish + v0.10 A/B
+2026-04-27 → v0.10 B-bis live integration with sonargrid
+(`v0.10b-bis-complete.md`) → v0.10 C-1 schema v4 + ProjectMeta
+(`v0.10c1-complete.md`) → v0.10 C-2 BlockMeta + LocalProvider +
+HfrogProvider + Block Library GUI panel
+(`v0.10c2-blockmeta-complete.md`) → **v0.10 C-3 just landed**:
+Block Composer second window with iterative texgen prompt
+console + Save Local Draft + Publish to Hfrog
+(`v0.10c3-block-composer.md`). `BlockMetaSource::LocalDraft` and
+`HfrogPublisher` are both live. Working tree is clean, **188
+tests + clippy green** (146 lib + 11 history + 6 export + 25
+CLI; was 183).
 
 Active fronts:
 
@@ -34,13 +25,19 @@ Active fronts:
   re-open" verification clause is satisfied at the lib layer; the
   remaining "override_hint edit enters undo chain" clause requires
   a GUI editor and is part of D-1.
-* **`#BLOCK` (new dashboard item)** — ✅ shipped in C-2. CLI
+* **`#BLOCK` (dashboard item)** — ✅ shipped in C-2. CLI
   `block list/get/sync` works (CLI smoke ≈ 3 min); GUI right
   panel + slot binding works (GUI smoke ≈ 3 min). Real-network
   `block sync` against `starlink.youxi123.com/hfrog` returns
   `0 blocks` because the server has no `maquette-block/v1`
-  records yet — see `v0.10c2-blockmeta-complete.md` § 8 for the
-  one-liner curl that bootstraps the first record.
+  records yet — but see C-3 below: the *Block Composer* now
+  publishes them directly without needing a curl bootstrap.
+* **`#COMPOSER` (new dashboard item)** — ✅ shipped in C-3. The
+  user can `Window → New Block Composer…`, iterate on prompts
+  through the cpu / fal / mock provider lanes, save the result
+  as a local draft (instantly visible in the main library), or
+  publish straight to hfrog. Two new 3-min smoke tests
+  (`#COMPOSER-mock`, `#COMPOSER-publish`) in USER-TODO.md.
 * **v0.10 D-1** — *next thing the agent should pick up.*
   See "Outstanding work" §1 below.
 * **User-side validation backlog** — see `USER-TODO.md`. A bunch of
@@ -51,7 +48,8 @@ Active fronts:
 Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 · `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md` ·
 `v0.9b-complete.md` · `v0.10b-bis-complete.md` ·
-`v0.10c1-complete.md` · `v0.10c2-blockmeta-complete.md`.
+`v0.10c1-complete.md` · `v0.10c2-blockmeta-complete.md` ·
+`v0.10c3-block-composer.md`.
 
 ## Roadmap snapshot
 
@@ -72,7 +70,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 |---|---|---|
 | **A** | `texgen` lib module (trait, types, disk cache) + `MockProvider` (deterministic, offline) + `maquette-cli texture gen` | **shipped 2026-04-24** |
 | **B** | `RustymeProvider` (LPUSH `texgen.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** + **B-bis 2026-04-27 evening** (live integration with sonargrid `texgen-cpu` / `texgen-fal`, `image_b64` shape, profile env, foreign-reply bug fix). `#TEX-B` end-to-end ✅. |
-| **C** | Project schema v4 + block-meta content layer | **C-1 (lib schema v4) shipped 2026-04-27 evening · C-2 (BlockMeta + LocalProvider + HfrogProvider + GUI Block Library panel) shipped 2026-04-28 morning** · undo wiring + autosave migration deferred to D-1 |
+| **C** | Project schema v4 + block-meta content layer + block authoring tool | **C-1 (lib schema v4) 2026-04-27 evening · C-2 (BlockMeta + Library panel) 2026-04-28 morning · C-3 (Block Composer second-window + Save Draft + Publish to Hfrog) 2026-04-28 afternoon** · undo wiring + autosave migration deferred to D-1 |
 | **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | not yet — **the user-experience milestone**; needs C + worker |
 | **D-2** | Per-slot `[regenerate]` + `[edit hint]` affordances in the palette list; re-uses D-1's single-task path (no group needed). Writes the new `override_hint` through the undo stack | not yet |
 | **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
