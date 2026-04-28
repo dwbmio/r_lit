@@ -343,7 +343,22 @@ impl PackerState {
     }
 }
 
-/// Load Inter + JetBrains Mono fonts into egui.
+/// Load Inter + JetBrains Mono fonts into egui, plus the first available
+/// system CJK font as a fallback for both families.
+///
+/// Why scan system paths instead of embedding a CJK font:
+///   - A full Noto Sans CJK adds ~10 MB to the binary (currently ~1.5 MB).
+///     Even subsets are 2-5 MB. The only reliable answer is "use whatever
+///     the OS already has".
+///   - macOS / Windows / mainstream Linux desktops all ship a CJK font at
+///     a known path. We just read the first one that exists.
+///   - Zero new dependencies (no font-kit / fontdb / sysfonts crate).
+///   - When NOTHING is found (rare — headless CI containers), the fallback
+///     is the existing tofu rendering plus a clear warning in the runlog.
+///
+/// The CJK font is appended LAST in each family's fallback list so Latin
+/// glyphs always go through Inter / JetBrains Mono first; egui's text
+/// shaper falls through to the next font only for missing glyphs.
 fn load_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
@@ -366,21 +381,100 @@ fn load_fonts(ctx: &egui::Context) {
             .into(),
     );
 
-    // Set Inter as primary proportional font (before defaults for fallback)
+    // Primary fonts: Inter for proportional, JetBrains Mono for monospace.
     fonts
         .families
         .entry(egui::FontFamily::Proportional)
         .or_default()
         .insert(0, "inter".to_owned());
-
-    // Set JetBrains Mono as primary monospace
     fonts
         .families
         .entry(egui::FontFamily::Monospace)
         .or_default()
         .insert(0, "jetbrains".to_owned());
 
+    // CJK fallback: scan OS-installed fonts and use the first available.
+    // Append to BOTH families so monospace text (file paths, sprite names)
+    // also renders Chinese / Japanese / Korean correctly when those chars
+    // appear inline.
+    if let Some((handle, label)) = load_system_cjk_font() {
+        fonts.font_data.insert("cjk".to_owned(), handle.into());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("cjk".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("cjk".to_owned());
+        log::info!("loaded CJK fallback font: {}", label);
+    } else {
+        log::warn!(
+            "no system CJK font found at known paths; Chinese / Japanese / \
+             Korean text will render as tofu (□). Install Noto Sans CJK or a \
+             distro-equivalent to fix."
+        );
+    }
+
     ctx.set_fonts(fonts);
+}
+
+/// Try to read a system CJK font from a list of well-known platform paths.
+/// Returns the font bytes wrapped in `egui::FontData` plus a human label
+/// for the runlog, or `None` if no candidate file exists.
+fn load_system_cjk_font() -> Option<(egui::FontData, String)> {
+    // Order matters: prefer Sans over Serif, prefer Light/Regular weights
+    // (Light renders well at small UI sizes), prefer broader-coverage
+    // collections (CJK over SC-only). `.ttc` files are TrueType collections;
+    // egui FontData's default index 0 picks the first font in the file —
+    // that's "PingFang SC Regular" on macOS, "Microsoft YaHei UI Regular" on
+    // Windows, "Noto Sans CJK SC Regular" on Linux. All acceptable for UI.
+    let candidates: &[(&str, &str)] = &[
+        // macOS — PingFang lived at /System/Library/Fonts/PingFang.ttc on
+        // older releases but moved to Supplemental/ on macOS 14+, while older
+        // installs may not have it at all. STHeiti is shipped on every
+        // version since 10.6 and renders cleanly as a Sans fallback.
+        ("/System/Library/Fonts/Supplemental/PingFang.ttc", "PingFang (macOS Supplemental)"),
+        ("/System/Library/Fonts/PingFang.ttc", "PingFang (macOS)"),
+        ("/System/Library/Fonts/STHeiti Light.ttc", "STHeiti Light (macOS)"),
+        ("/System/Library/Fonts/STHeiti Medium.ttc", "STHeiti Medium (macOS)"),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", "Hiragino Sans GB (macOS)"),
+        ("/System/Library/Fonts/Supplemental/Songti.ttc", "Songti (macOS Supplemental)"),
+        // Windows 10 / 11
+        ("C:/Windows/Fonts/msyh.ttc", "Microsoft YaHei (Windows)"),
+        ("C:/Windows/Fonts/msyh.ttf", "Microsoft YaHei (Windows)"),
+        ("C:/Windows/Fonts/simhei.ttf", "SimHei (Windows)"),
+        ("C:/Windows/Fonts/simsun.ttc", "SimSun (Windows)"),
+        ("C:/Windows/Fonts/Deng.ttf", "DengXian (Windows)"),
+        // Linux — ordered by typical "universal" availability
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK (Linux)"),
+        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK (Linux)"),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", "Noto Sans CJK (Linux)"),
+        ("/usr/share/fonts/wqy-microhei/wqy-microhei.ttc", "WenQuanYi Micro Hei (Linux)"),
+        ("/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc", "WenQuanYi Zen Hei (Linux)"),
+        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "WenQuanYi Micro Hei (Linux)"),
+        // ~/.fonts and ~/.local/share/fonts are user-local conventions on Linux;
+        // skipping them here — if the user installed CJK only there, we'll log
+        // the warning and they can copy or symlink to a system path.
+    ];
+
+    for (path, label) in candidates {
+        if !std::path::Path::new(path).is_file() {
+            continue;
+        }
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                return Some((egui::FontData::from_owned(bytes), label.to_string()));
+            }
+            Err(e) => {
+                log::debug!("CJK candidate {} unreadable: {}", path, e);
+                continue;
+            }
+        }
+    }
+    None
 }
 
 /// Apply a clean light theme inspired by Zed / One Light.
