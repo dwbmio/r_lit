@@ -50,8 +50,13 @@ just install_loc <tool> release
 
 - **错误处理:** 各 crate 在 `error.rs` 中用 `thiserror` 定义错误枚举 + `Result<T>` 别名。禁止 `unwrap()`，用 `?`。
 - **CLI:** `clap` derive 宏 + `--json` 全局标志 + 子命令架构 + 中英双语帮助。
-- **日志:** `fern` + `log`，RFC3339 时间戳。
+- **日志:** `log` crate；推荐自定义 `Log` 实现把 INFO+ 转 stdout、全级别捕获到内存 buffer，运行结束 flush 到 `<output>.log` 边车文件（参考实现 `mj_atlas/src/runlog.rs`，依赖 `log` + `humantime`）。RFC3339 时间戳。
 - **Release profile:** `lto = true, panic = "abort", strip = true, opt-level = "z"`
+
+## Troubleshooting / 排查问题
+
+报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `_ai/troubleshooting.md`。
+mj_atlas 已落地这套；其他短时 CLI 工具新增 / 改造时复用 `mj_atlas/src/runlog.rs` 的双 sink logger。
 
 ## Release Process
 

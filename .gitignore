@@ -8,6 +8,7 @@
 !README_CN.md
 !CLAUDE.md
 !docs/**/*.md
+!_ai/**/*.md
 **/workbench_data_*/
 crates/murmur/data/
 *.bak
