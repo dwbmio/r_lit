@@ -1248,9 +1248,14 @@ fn palette_bar(
     block_bind_ev: &mut MessageWriter<BlockBindAction>,
 ) {
     ui.label(egui::RichText::new("Palette").strong());
-    ui.add_space(4.0);
+    ui.add_space(2.0);
+    // Compact swatches — 22 px is the smallest size where a 1.5 px
+    // selection ring + a 3 px draft/block-binding badge still read
+    // cleanly. Smaller and the badge swallows the colour itself.
+    let original_spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);
     ui.horizontal_wrapped(|ui| {
-        let swatch_size = egui::vec2(32.0, 32.0);
+        let swatch_size = egui::vec2(22.0, 22.0);
 
         // Snapshot the live slots upfront so we can mutably borrow
         // `palette` inside per-slot callbacks (context menus, the
@@ -1371,11 +1376,13 @@ fn palette_bar(
                 }
             });
 
-            // Bottom-right corner badge "B" if a block is bound — gives
-            // the user a visual cue at-a-glance, no hover needed.
+            // Bottom-right corner badge "B" if a block is bound —
+            // visible at-a-glance, no hover. Sized to read at the
+            // 22 px swatch without dominating the colour fill.
             if bound_block_id.is_some() {
-                let badge_radius = 5.0;
-                let badge_pos = rect.right_bottom() - egui::vec2(badge_radius + 2.0, badge_radius + 2.0);
+                let badge_radius = 3.0;
+                let badge_pos = rect.right_bottom()
+                    - egui::vec2(badge_radius + 1.5, badge_radius + 1.5);
                 painter.circle_filled(badge_pos, badge_radius, egui::Color32::from_rgb(120, 180, 255));
             }
         }
@@ -1405,7 +1412,7 @@ fn palette_bar(
             add_rect.center(),
             egui::Align2::CENTER_CENTER,
             "+",
-            egui::FontId::proportional(18.0),
+            egui::FontId::proportional(14.0),
             egui::Color32::from_gray(220),
         );
         add_response
@@ -1425,6 +1432,9 @@ fn palette_bar(
                 }
             });
     });
+    // Restore the surrounding panel's spacing for whatever lays
+    // out next.
+    ui.spacing_mut().item_spacing = original_spacing;
 }
 
 /// Delete-color confirmation modal. Called once per frame from
@@ -1658,90 +1668,112 @@ fn block_library_drawer(
                 });
                 return;
             }
+            // Tighten vertical spacing inside the list so each row
+            // feels like a single-line entry rather than a card.
+            ui.spacing_mut().item_spacing.y = 2.0;
             for b in &library.blocks {
                 let is_current_for_selected =
                     bound_block_id.as_deref() == Some(&b.id);
-                ui.add_space(4.0);
-                let frame = egui::Frame::group(ui.style())
-                    .stroke(if is_current_for_selected {
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255))
-                    } else {
-                        egui::Stroke::new(1.0, egui::Color32::from_gray(80))
-                    });
-                frame.show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // Color swatch — gives visual feedback even without
-                        // the (post-D-1) preview thumbnail.
-                        let (sw_rect, _resp) = ui.allocate_exact_size(
-                            egui::vec2(28.0, 28.0),
-                            egui::Sense::hover(),
-                        );
-                        let painter = ui.painter_at(sw_rect);
-                        let c = b.default_color;
-                        painter.rect_filled(
+                let row_resp = ui.horizontal(|ui| {
+                    // 16 px swatch — readable at-a-glance, doesn't
+                    // dominate the row.
+                    let (sw_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(16.0, 16.0),
+                        egui::Sense::hover(),
+                    );
+                    let painter = ui.painter_at(sw_rect);
+                    let c = b.default_color;
+                    painter.rect_filled(
+                        sw_rect,
+                        3.0,
+                        egui::Color32::from_rgba_unmultiplied(
+                            (c.r.clamp(0.0, 1.0) * 255.0) as u8,
+                            (c.g.clamp(0.0, 1.0) * 255.0) as u8,
+                            (c.b.clamp(0.0, 1.0) * 255.0) as u8,
+                            255,
+                        ),
+                    );
+                    if is_current_for_selected {
+                        painter.rect_stroke(
                             sw_rect,
-                            4.0,
-                            egui::Color32::from_rgba_unmultiplied(
-                                (c.r.clamp(0.0, 1.0) * 255.0) as u8,
-                                (c.g.clamp(0.0, 1.0) * 255.0) as u8,
-                                (c.b.clamp(0.0, 1.0) * 255.0) as u8,
-                                255,
+                            3.0,
+                            egui::Stroke::new(
+                                1.5,
+                                egui::Color32::from_rgb(120, 180, 255),
                             ),
+                            egui::epaint::StrokeKind::Outside,
                         );
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(b.label()).strong());
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "id: {} · {}",
-                                    b.id,
-                                    b.source.label()
+                    }
+                    // Name + id · source on a single line.
+                    ui.label(
+                        egui::RichText::new(b.label()).strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · {}",
+                            b.id,
+                            b.source.label()
+                        ))
+                        .small()
+                        .color(egui::Color32::from_gray(150)),
+                    );
+                    // Right-aligned action button so labels don't
+                    // jitter when the button text changes.
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if is_current_for_selected {
+                                if ui
+                                    .small_button("Unbind")
+                                    .on_hover_text("Clear this slot's block binding")
+                                    .clicked()
+                                {
+                                    block_bind_ev.write(BlockBindAction::Unbind {
+                                        slot: selected_slot,
+                                    });
+                                }
+                            } else if ui
+                                .small_button("Bind")
+                                .on_hover_text(format!(
+                                    "Bind to slot #{selected_slot}"
                                 ))
-                                .small()
-                                .color(egui::Color32::from_gray(170)),
-                            );
-                        });
-                    });
-                    if !b.tags.is_empty() {
-                        ui.label(
-                            egui::RichText::new(b.tags.join(" · ")).small().color(
-                                egui::Color32::from_rgb(140, 170, 200),
-                            ),
-                        );
-                    }
-                    if !b.texture_hint.is_empty() {
-                        ui.label(
-                            egui::RichText::new(&b.texture_hint).small().italics(),
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        let bind_label = if is_current_for_selected {
-                            "✔ Bound"
-                        } else {
-                            "Bind to selected slot"
-                        };
-                        if ui
-                            .add_enabled(
-                                !is_current_for_selected,
-                                egui::Button::new(bind_label),
-                            )
-                            .clicked()
-                        {
-                            block_bind_ev.write(BlockBindAction::Bind {
-                                slot: selected_slot,
-                                block_id: b.id.clone(),
-                            });
-                        }
-                        if is_current_for_selected
-                            && ui.button("Unbind").clicked()
-                        {
-                            block_bind_ev.write(BlockBindAction::Unbind {
-                                slot: selected_slot,
-                            });
-                        }
-                    });
+                                .clicked()
+                            {
+                                block_bind_ev.write(BlockBindAction::Bind {
+                                    slot: selected_slot,
+                                    block_id: b.id.clone(),
+                                });
+                            }
+                        },
+                    );
                 });
+                // Tooltip on the whole row so users don't need to
+                // hunt for a hover target. Carries the long-form
+                // information (description + texture hint + tags)
+                // that used to crowd the card layout.
+                let row = row_resp.response;
+                let tooltip = compose_block_tooltip(b);
+                if !tooltip.is_empty() {
+                    row.on_hover_text(tooltip);
+                }
             }
         });
+}
+
+/// Build the multi-line tooltip shown on each Block Library row.
+/// Pulled out as a helper so the row layout stays readable.
+fn compose_block_tooltip(b: &maquette::block_meta::BlockMeta) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !b.description.is_empty() {
+        parts.push(b.description.clone());
+    }
+    if !b.tags.is_empty() {
+        parts.push(format!("tags: {}", b.tags.join(", ")));
+    }
+    if !b.texture_hint.is_empty() {
+        parts.push(format!("hint: {}", b.texture_hint));
+    }
+    parts.join("\n\n")
 }
 
 /// Floating brush HUD — sits in the canvas's top-left corner
