@@ -1,6 +1,6 @@
 [package]
 name = "mj_atlas"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "MJAtlas — game-ready texture atlas packer (UV-stable incremental, multi-component polygon mesh, manifest as first-class artifact: inspect/diff/verify/tag, Godot native output)"
 

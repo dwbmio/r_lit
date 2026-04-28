@@ -1522,9 +1522,17 @@ impl MJAtlasApp {
                         ui.checkbox(&mut state.auto_pack, "Auto-pack on change");
                         if state.preview.is_some() {
                             if let Some(p) = &state.preview {
-                                ui.label(egui::RichText::new(
-                                    format!("Atlas: {}x{}, {} sprites", p.atlas_w, p.atlas_h, p.sprites.len())
-                                ).small().color(egui::Color32::GRAY));
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Atlas: {}x{}, {} sprites",
+                                        p.atlas_w,
+                                        p.atlas_h,
+                                        p.sprites.len()
+                                    ))
+                                    .small()
+                                    .monospace()
+                                    .color(egui::Color32::GRAY),
+                                );
                             }
                         }
 
@@ -1781,14 +1789,17 @@ impl MJAtlasApp {
                                 continue;
                             }
                             let is_selected = state.selected_sprite == Some(i);
-                            let label = format!(
+                            // Monospace so wide names + dimensions stay
+                            // column-aligned across rows. Easier to scan.
+                            let label = egui::RichText::new(format!(
                                 "{} ({}x{}{})",
                                 sprite.name,
                                 sprite.w as u32,
                                 sprite.h as u32,
                                 if sprite.rotated { " R" } else { "" }
-                            );
-                            if ui.selectable_label(is_selected, &label).clicked() {
+                            ))
+                            .monospace();
+                            if ui.selectable_label(is_selected, label).clicked() {
                                 state.selected_sprite = Some(i);
                                 state.pan_offset = egui::vec2(
                                     -(sprite.x + sprite.w / 2.0),
@@ -1836,7 +1847,9 @@ impl MJAtlasApp {
                             )
                         })
                         .unwrap_or_default();
-                    ui.label(hover_text);
+                    // Coords and dimensions in monospace so they don't jiggle
+                    // when the mouse moves between sprites of different sizes.
+                    ui.label(egui::RichText::new(hover_text).monospace());
                 });
             });
 
@@ -2078,31 +2091,40 @@ fn draw_sprite_list(
     _thumbnails: &mut HashMap<String, (egui::TextureHandle, u32, u32)>,
 ) -> bool {
     let mut changed = false;
+    // Header row: heading only. The search box and buttons go on their own
+    // row below so a narrow panel can't cause widgets to overlap (pre-v0.3.6
+    // the header packed heading + search + 2 buttons in a single row, which
+    // visibly collided once the user dragged the divider down to ~250 px).
+    ui.heading(format!("Sprites ({})", project.sprites.len()));
     ui.horizontal(|ui| {
-        ui.heading(format!("Sprites ({})", project.sprites.len()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Clear").clicked() {
-                project.sprites.clear();
+        // Buttons take fixed (intrinsic) width; the search box claims whatever
+        // is left. Reserve ~140 px for the buttons + a small margin.
+        let buttons_reserved = 140.0;
+        let search_w = (ui.available_width() - buttons_reserved).max(80.0);
+        ui.add_sized(
+            [search_w, 22.0],
+            egui::TextEdit::singleline(search_text).hint_text("Search..."),
+        );
+        if ui.button("+ Add").clicked() {
+            if let Some(files) = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "gif", "tga", "webp"])
+                .pick_files()
+            {
+                for path in &files {
+                    let ps = path.display().to_string();
+                    if !project.sprites.contains(&ps) {
+                        project.sprites.push(ps);
+                    }
+                }
                 *dirty = true;
                 changed = true;
             }
-            if ui.button("+ Add").clicked() {
-                if let Some(files) = rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "gif", "tga", "webp"])
-                    .pick_files()
-                {
-                    for path in &files {
-                        let ps = path.display().to_string();
-                        if !project.sprites.contains(&ps) {
-                            project.sprites.push(ps);
-                        }
-                    }
-                    *dirty = true;
-                    changed = true;
-                }
-            }
-            ui.add_sized([100.0, 18.0], egui::TextEdit::singleline(search_text).hint_text("Search..."));
-        });
+        }
+        if ui.button("Clear").clicked() {
+            project.sprites.clear();
+            *dirty = true;
+            changed = true;
+        }
     });
     ui.separator();
 
@@ -2130,7 +2152,10 @@ fn draw_sprite_list(
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                 ui.painter().circle_filled(rect.center(), 4.0, dot_color);
 
-                ui.label(&filename);
+                // Filenames render in JetBrains Mono so paths line up
+                // visually — much easier to scan a long sprite list when
+                // every character occupies the same column width.
+                ui.label(egui::RichText::new(&filename).monospace());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("x").clicked() {
@@ -2180,11 +2205,14 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
     // varying the label text.
     ui.horizontal(|ui| {
         ui.set_min_height(24.0);
-        ui.label(format!("{}x{}", preview.atlas_w, preview.atlas_h));
+        // Numeric / dimension labels in monospace so digits line up across
+        // panels and zoom levels (e.g. "256x256" vs "1024x512" don't shift
+        // surrounding widgets when the user re-packs at a different size).
+        ui.label(egui::RichText::new(format!("{}x{}", preview.atlas_w, preview.atlas_h)).monospace());
         ui.separator();
         ui.label("Zoom:");
         ui.add(egui::Slider::new(&mut preview.zoom, 0.01..=10.0).logarithmic(true).show_value(false));
-        ui.label(format!("{:.0}%", preview.zoom * 100.0));
+        ui.label(egui::RichText::new(format!("{:>3.0}%", preview.zoom * 100.0)).monospace());
         ui.checkbox(&mut preview.show_grid, "Grid");
         ui.checkbox(&mut preview.show_names, "Names");
         // Only meaningful when polygon mesh is present; the checkbox is harmless
@@ -2199,7 +2227,7 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
             .and_then(|i| preview.sprites.get(i))
             .map(|s| format!("{} ({}x{})", s.name, s.w as u32, s.h as u32))
             .unwrap_or_default();
-        ui.label(egui::RichText::new(hover_text).small());
+        ui.label(egui::RichText::new(hover_text).monospace().small());
     });
 
     // Canvas
