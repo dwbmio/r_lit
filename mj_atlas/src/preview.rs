@@ -1781,8 +1781,14 @@ impl MJAtlasApp {
                 });
 
             // ── Bottom controls ──
+            //
+            // Same stabilization pattern as the inline preview toolbar: always
+            // allocate the hover info slot, otherwise TopBottomPanel auto-sizes
+            // by content height and the central canvas above it shifts with
+            // each hover transition.
             egui::TopBottomPanel::bottom("viewer_controls").show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    ui.set_min_height(24.0);
                     ui.label("Zoom:");
                     ui.add(egui::Slider::new(&mut state.zoom, 0.1..=10.0).logarithmic(true));
                     ui.checkbox(&mut state.show_grid, "Grid");
@@ -1794,16 +1800,24 @@ impl MJAtlasApp {
                         state.selected_sprite = None;
                     }
 
-                    if let Some(idx) = state.hovered_sprite {
-                        let s = &state.sprites[idx];
-                        ui.separator();
-                        ui.label(format!(
-                            "{} @ ({},{}) {}x{} src:{}x{}",
-                            s.name, s.x as u32, s.y as u32,
-                            s.w as u32, s.h as u32,
-                            s.source_w as u32, s.source_h as u32
-                        ));
-                    }
+                    ui.separator();
+                    let hover_text = state
+                        .hovered_sprite
+                        .and_then(|i| state.sprites.get(i))
+                        .map(|s| {
+                            format!(
+                                "{} @ ({},{}) {}x{} src:{}x{}",
+                                s.name,
+                                s.x as u32,
+                                s.y as u32,
+                                s.w as u32,
+                                s.h as u32,
+                                s.source_w as u32,
+                                s.source_h as u32
+                            )
+                        })
+                        .unwrap_or_default();
+                    ui.label(hover_text);
                 });
             });
 
@@ -2129,7 +2143,16 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
     }
 
     // Toolbar
+    //
+    // Stability note: the hover info label MUST always be allocated, even
+    // when there's no hover, otherwise the toolbar's row height fluctuates
+    // by 1-2 px per frame depending on hover state. That fluctuation cascaded
+    // into `ui.available_size()` for the canvas below, shifting the rendered
+    // atlas every time the mouse crossed a sprite boundary — a visible jitter
+    // (v0.3.3 bug). We pin the row height AND always render the slot, only
+    // varying the label text.
     ui.horizontal(|ui| {
+        ui.set_min_height(24.0);
         ui.label(format!("{}x{}", preview.atlas_w, preview.atlas_h));
         ui.separator();
         ui.label("Zoom:");
@@ -2143,13 +2166,13 @@ fn draw_inline_preview(ui: &mut egui::Ui, preview: &mut InlinePreview) {
         if ui.button("Fit").clicked() {
             preview.needs_fit = true;
         }
-        if let Some(idx) = preview.hovered {
-            ui.separator();
-            let s = &preview.sprites[idx];
-            ui.label(egui::RichText::new(format!(
-                "{} ({}x{})", s.name, s.w as u32, s.h as u32
-            )).small());
-        }
+        ui.separator();
+        let hover_text = preview
+            .hovered
+            .and_then(|i| preview.sprites.get(i))
+            .map(|s| format!("{} ({}x{})", s.name, s.w as u32, s.h as u32))
+            .unwrap_or_default();
+        ui.label(egui::RichText::new(hover_text).small());
     });
 
     // Canvas
