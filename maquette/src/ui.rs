@@ -691,25 +691,14 @@ fn ui_system(
         ui_state.show_about = open;
     }
 
-    // Block Library (right side). Mounts before the left canvas
-    // panel so its width is settled by the time `available_rect`
-    // is read; egui side panels are evaluated in declaration
-    // order, and the canvas's preview viewport sync wants the
-    // *remaining* central area.
-    egui::SidePanel::right("block_library_panel")
-        .default_width(280.0)
-        .min_width(220.0)
-        .show(ctx, |ui| {
-            block_library_panel(
-                ui,
-                &palette,
-                &library,
-                &mut *block_bind_ev,
-                &mut *block_sync_ev,
-                &mut *redraw_ev,
-            );
-        });
-
+    // Layout decision (2026-04-28): the Block Library used to live
+    // in a right SidePanel, but right-side anchored floats — preview
+    // toolbar, PIP labels, toasts — kept colliding with it visually
+    // (and even the post-fix layout left the central 3-D area
+    // squeezed). Solution: stack everything on the left side. The
+    // left SidePanel now carries Canvas + Palette + a *collapsible*
+    // Block Library drawer at the bottom; the entire right half of
+    // the window goes back to being the 3-D preview + PIPs + toolbar.
     let canvas_rect = egui::SidePanel::left("canvas_panel")
         .default_width(520.0)
         .min_width(360.0)
@@ -727,6 +716,27 @@ fn ui_system(
             ui.add_space(10.0);
             ui.separator();
             palette_bar(ui, &mut palette, &mut ui_state, &library, &mut *block_bind_ev);
+            ui.add_space(10.0);
+            ui.separator();
+            // Drawer style: default open so the user sees their
+            // catalog at a glance; collapsing it reclaims the
+            // bottom of the left column for the canvas above.
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!("Block Library  ({})", library.blocks.len()))
+                    .strong(),
+            )
+            .id_salt("block_library_drawer")
+            .default_open(true)
+            .show(ui, |ui| {
+                block_library_drawer(
+                    ui,
+                    &palette,
+                    &library,
+                    &mut *block_bind_ev,
+                    &mut *block_sync_ev,
+                    &mut *redraw_ev,
+                );
+            });
             rect
         })
         .inner;
@@ -1544,16 +1554,23 @@ fn delete_color_modal(
     }
 }
 
-/// Right side panel: the Block Library. Lists every block known to
-/// the in-memory `BlockLibraryState` (LocalProvider + cached hfrog),
-/// shows source / color / texture-hint per row, and surfaces the
-/// "Sync hfrog" button at the top so the user has a single obvious
-/// path to refresh the catalog.
+/// Block Library drawer that hangs off the bottom of the left
+/// SidePanel inside an `egui::CollapsingHeader`. Lists every block
+/// known to `BlockLibraryState` (LocalProvider + cached hfrog +
+/// LocalDraft via `LocalDraftProvider`), shows source / color /
+/// texture-hint per row, and surfaces the `Sync hfrog` button on
+/// top.
+///
+/// Earlier revisions (v0.10 C-2) lived in a right SidePanel; the
+/// refactor to "drawer in the left column" came after the
+/// preview-toolbar / PIP / toast collisions reported on the main
+/// editor screenshot. Keeping all panels on the left lets the right
+/// half of the window be 100 % 3-D + its right-anchored floats.
 ///
 /// Read-only on the resource — actual mutations go through the
 /// `BlockBindAction` / `SyncBlockLibrary` messages handled in
-/// `block_library.rs`. Keeps this panel a pure projection of state.
-fn block_library_panel(
+/// `block_library.rs`. Keeps this drawer a pure projection of state.
+fn block_library_drawer(
     ui: &mut egui::Ui,
     palette: &Palette,
     library: &BlockLibraryState,
@@ -1561,8 +1578,8 @@ fn block_library_panel(
     block_sync_ev: &mut MessageWriter<SyncBlockLibrary>,
     redraw_ev: &mut MessageWriter<bevy::window::RequestRedraw>,
 ) {
-    ui.heading("Block Library");
-    ui.add_space(4.0);
+    // Heading is owned by the outer `CollapsingHeader`, so we
+    // dive straight into the action row.
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
@@ -1619,8 +1636,14 @@ fn block_library_panel(
     );
     ui.add_space(4.0);
 
+    // Cap the scroll viewport so the canvas above isn't pushed
+    // off-screen on a tall library: 300 logical px ≈ 4 cards. The
+    // canvas above will still get visible scroll bars on a small
+    // window — that's intentional, the canvas itself is the most
+    // important thing in the editor.
     egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
+        .max_height(300.0)
         .show(ui, |ui| {
             if library.blocks.is_empty() {
                 ui.add_space(20.0);
