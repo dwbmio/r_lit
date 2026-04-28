@@ -67,17 +67,20 @@
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::RenderTarget;
+use bevy::camera::{RenderTarget, Viewport};
+use bevy::ecs::schedule::ScheduleLabel;
 use bevy::image::Image;
+use bevy::math::UVec2;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::ecs::schedule::ScheduleLabel;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::window::{
     PrimaryWindow, RequestRedraw, WindowClosed, WindowRef, WindowResolution,
 };
 use bevy_egui::{egui, EguiContext, EguiContexts, EguiMultipassSchedule};
 use bevy_panorbit_camera::PanOrbitCamera;
+
+use crate::camera::egui_rect;
 
 /// Schedule label that runs the composer window's egui pass. Per
 /// `bevy_egui` 0.39's multi-pass guidance: the second window needs
@@ -103,6 +106,17 @@ use crate::notify::Toasts;
 // ---------------------------------------------------------------------
 // Resource + form types
 // ---------------------------------------------------------------------
+
+/// Logical-pixel rectangle the composer's 3-D camera should occupy
+/// inside the second window. Mirrors [`crate::camera::PreviewViewportRect`]
+/// for the main editor — written by `composer_ui_system` after egui
+/// has claimed its panels, read by `sync_composer_viewport` to
+/// scissor the camera. `None` = first frame / second window not
+/// open.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct ComposerViewportRect {
+    pub rect: Option<egui_rect::Rect>,
+}
 
 /// Top-level composer state. One instance per app — the second window
 /// either renders this state or doesn't exist. Closing the window
@@ -334,6 +348,7 @@ pub struct BlockComposerPlugin;
 impl Plugin for BlockComposerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BlockComposerState>()
+            .init_resource::<ComposerViewportRect>()
             .add_message::<OpenBlockComposer>()
             .add_message::<CloseBlockComposer>()
             .add_message::<ComposerSetShape>()
@@ -357,6 +372,7 @@ impl Plugin for BlockComposerPlugin {
                     poll_generate_tasks,
                     poll_save_tasks,
                     poll_publish_tasks,
+                    sync_composer_viewport,
                 )
                     .chain(),
             )
@@ -457,10 +473,20 @@ fn apply_visibility(
 
         // Render target camera. Parked on a fixed orbit looking at
         // the world origin where we put the preview block.
-        // `EguiMultipassSchedule` tells bevy_egui to drive the
-        // `ComposerContextPass` schedule for *this* camera's
-        // context. Without it, the camera renders fine but the
-        // second window's egui never gets a chance to run.
+        //
+        // * `EguiMultipassSchedule` tells bevy_egui to drive the
+        //   `ComposerContextPass` schedule for *this* camera's
+        //   context. Without it, the camera renders fine but the
+        //   second window's egui never gets a chance to run.
+        // * `viewport: Some(1×1 placeholder)` matches the main
+        //   preview's startup pattern (`camera::spawn_camera`):
+        //   bevy keeps the camera around even when its viewport
+        //   covers a single pixel, so on the very first frame —
+        //   before `composer_ui_system` has reported the central
+        //   rect — we render a single-pixel splash instead of
+        //   filling the entire window underneath the side panel.
+        //   The next frame `sync_composer_viewport` resizes us
+        //   into the real central rect.
         commands.spawn((
             Name::new("Block Composer Camera"),
             Camera3d::default(),
@@ -468,6 +494,11 @@ fn apply_visibility(
                 clear_color: bevy::camera::ClearColorConfig::Custom(
                     bevy::color::Color::srgb(0.10, 0.10, 0.12),
                 ),
+                viewport: Some(Viewport {
+                    physical_position: UVec2::ZERO,
+                    physical_size: UVec2::new(1, 1),
+                    ..default()
+                }),
                 ..default()
             },
             RenderTarget::Window(WindowRef::Entity(window)),
@@ -1195,6 +1226,7 @@ pub struct ComposerMessages<'w> {
 fn composer_ui_system(
     mut contexts: Query<&mut EguiContext, With<BlockComposerWindow>>,
     mut state: ResMut<BlockComposerState>,
+    mut viewport_rect: ResMut<ComposerViewportRect>,
     mut msgs: ComposerMessages,
 ) {
     let Ok(mut ctx_handle) = contexts.single_mut() else {
@@ -1575,11 +1607,80 @@ fn composer_ui_system(
 
     // The CentralPanel has nothing to draw — the 3D preview camera
     // owns the back of the window. We still need to claim the
-    // central area so egui doesn't fight it for layout: a fully
-    // transparent panel does the trick.
-    egui::CentralPanel::default()
+    // central area (a) so egui doesn't fight it for layout, and
+    // (b) so we can capture its `available_rect_before_wrap()` —
+    // *that* rectangle becomes the camera viewport, scissoring
+    // the 3D render to exactly the leftover central region.
+    let central_rect = egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
-        .show(ctx, |_ui| {});
+        .show(ctx, |ui| ui.available_rect_before_wrap())
+        .inner;
+
+    // Stash the rect so `sync_composer_viewport` can read it next
+    // frame. We deliberately update *every* frame (no
+    // `is_changed()` guard) because `available_rect_before_wrap`
+    // is a fresh pointer-derived value each frame; comparing for
+    // change would be cheap but the resource write itself is too,
+    // so spend the cycles for code clarity.
+    *viewport_rect = ComposerViewportRect {
+        rect: Some(egui_rect::Rect {
+            min_x: central_rect.min.x,
+            min_y: central_rect.min.y,
+            max_x: central_rect.max.x,
+            max_y: central_rect.max.y,
+        }),
+    };
+}
+
+/// Mirror of [`crate::camera::sync_main_viewport`] for the composer
+/// camera. Without this the second window's `Camera3d` renders into
+/// the entire window — including the area covered by the right
+/// `SidePanel` — which is exactly the "right side looks chaotic"
+/// symptom: 3-D content drawn behind egui leaks through wherever the
+/// SidePanel has any transparency, and the orbit center sits at the
+/// physical-window middle (well to the right of where the user sees
+/// "the preview area").
+fn sync_composer_viewport(
+    rect: Res<ComposerViewportRect>,
+    state: Res<BlockComposerState>,
+    windows: Query<&Window, With<BlockComposerWindow>>,
+    mut cams: Query<&mut Camera, With<BlockComposerCamera>>,
+) {
+    if !state.visible {
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok(mut cam) = cams.single_mut() else {
+        return;
+    };
+
+    let scale = window.scale_factor();
+    let phys = window.physical_size();
+
+    // Same fallback shape as the main viewport sync: if egui hasn't
+    // reported a rect yet, occupy the whole window so the user sees
+    // *something* rather than the 1×1 splash spawn placeholder.
+    let (pos, size) = match rect.rect {
+        Some(r) if r.max_x > r.min_x && r.max_y > r.min_y => {
+            let px = (r.min_x * scale).round().max(0.0) as u32;
+            let py = (r.min_y * scale).round().max(0.0) as u32;
+            let pw = ((r.max_x - r.min_x) * scale).round().max(1.0) as u32;
+            let ph = ((r.max_y - r.min_y) * scale).round().max(1.0) as u32;
+            let pw = pw.min(phys.x.saturating_sub(px)).max(1);
+            let ph = ph.min(phys.y.saturating_sub(py)).max(1);
+            (UVec2::new(px, py), UVec2::new(pw, ph))
+        }
+        _ => (UVec2::ZERO, phys.max(UVec2::new(1, 1))),
+    };
+
+    if let Some(vp) = cam.viewport.as_mut() {
+        if vp.physical_position != pos || vp.physical_size != size {
+            vp.physical_position = pos;
+            vp.physical_size = size;
+        }
+    }
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
