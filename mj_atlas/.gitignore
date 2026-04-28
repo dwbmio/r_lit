@@ -6,6 +6,9 @@
 /examples/sprites/
 /examples/out/
 
+# Runlog fallback file (when invoked from this dir without a clear output path)
+/mj_atlas.log
+
 # Re-include human-readable docs that the root .gitignore would otherwise hide
 # (the root rule is "*.md" with a small whitelist).
 !README.md

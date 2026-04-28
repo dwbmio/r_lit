@@ -1,8 +1,8 @@
 [package]
 name = "mj_atlas"
-version = "0.3.6"
+version = "0.4.0"
 edition = "2021"
-description = "MJAtlas — game-ready texture atlas packer (UV-stable incremental, multi-component polygon mesh, manifest as first-class artifact: inspect/diff/verify/tag, Godot native output)"
+description = "MJAtlas — game-ready texture atlas packer (UV-stable incremental, multi-component polygon mesh, manifest as first-class artifact: inspect/diff/verify/tag, optional hfrog mirror, Godot native output)"
 
 [features]
 default = []
@@ -13,6 +13,7 @@ clap = { version = "^4", features = ["cargo", "derive"] }
 thiserror = "^2"
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
+toml = "0.8"
 log = "0.4"
 humantime = "2"
 tokio = { version = "^1", features = ["macros", "rt-multi-thread"] }
@@ -25,6 +26,10 @@ imagequant = "4"
 lodepng = "3"
 earcut = "0.4"
 rayon = "1"
+
+# hfrog mirror (always compiled — feature is opt-in via config.toml)
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "blocking", "rustls-tls"] }
+dirs = "5"
 
 # GUI preview (optional) — egui + eframe with wgpu backend
 eframe = { version = "0.31", optional = true, default-features = false, features = ["default_fonts", "wgpu"] }

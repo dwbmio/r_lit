@@ -1,5 +1,7 @@
 mod cmd;
+mod config;
 mod error;
+mod hfrog;
 mod output;
 mod pack;
 #[cfg(feature = "gui")]
@@ -416,6 +418,24 @@ fn compute_log_path(cli: &Cli) -> Option<PathBuf> {
     }
 }
 
+/// Derive the hfrog `ver` field from a fresh pack result. We use the SHA-256
+/// of the first atlas's image bytes (truncated to 12 hex chars) — a stable,
+/// content-addressed identifier that:
+///   - matches across re-packs of the same input (idempotent uploads)
+///   - changes whenever the actual pixels change
+///   - doesn't require the user to manually bump a version
+fn mirror_version_for(results: &[pack::AtlasResult]) -> String {
+    use sha2::{Digest, Sha256};
+    let first = match results.first() {
+        Some(r) => r,
+        None => return "0".to_string(),
+    };
+    let mut h = Sha256::new();
+    h.update(first.atlas_image.as_raw());
+    let digest = h.finalize();
+    digest.iter().take(6).map(|b| format!("{:02x}", b)).collect()
+}
+
 /// Resolve the manifest from a user-supplied path, then map it to a sibling
 /// `<atlas>.log` so the same name applies across all manifest subcommands.
 fn log_path_from_anchor(input: &PathBuf) -> Option<PathBuf> {
@@ -631,6 +651,28 @@ fn run(cli: &Cli) -> Result<()> {
             }
 
             pack::persist_manifest(&opts, &results)?;
+
+            // Optional hfrog mirror — best-effort, never blocks the local
+            // pipeline. Reads the user config (~/.config/mj_atlas/config.toml);
+            // skips silently when the mirror is disabled or unconfigured.
+            // Loaded lazily so a malformed config can't kill an otherwise
+            // healthy pack — we just log and move on.
+            match config::Config::load() {
+                Ok(cfg) if cfg.hfrog.is_active() => {
+                    let ver = mirror_version_for(&results);
+                    hfrog::mirror_pack_artifacts(
+                        &cfg.hfrog,
+                        output, // project name = output_name
+                        &ver,
+                        &opts.output_dir,
+                        output,
+                        results.len() > 1,
+                        results.len(),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("hfrog: skipping mirror — config load failed: {}", e),
+            }
 
             if cli.json {
                 let total_dups: usize = results.iter().map(|r| r.duplicates_removed).sum();

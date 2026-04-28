@@ -260,6 +260,43 @@ mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 mj_atlas gui
 ```
 
+## hfrog Mirror (v0.4+)
+
+Optional integration that pushes a copy of saved projects / exported atlases /
+refreshed manifests to an hfrog artifact registry. Per-user opt-in via
+`~/.config/mj_atlas/config.toml`:
+
+```toml
+[hfrog]
+enabled = true                  # default false
+endpoint = "https://hfrog.example.com"
+token = ""                      # bearer token; empty = unauthenticated
+default_runtime = "asset-pack"
+s3_inc_id = 0
+```
+
+Naming on hfrog:
+- `name`: `<project_name>.<file_kind>` where file_kind is one of
+  `tpproj` / `atlas-png` / `atlas-json` / `manifest` / `atlas-tpsheet`
+- `ver`: 12-hex-char SHA-256 prefix of atlas pixels (CLI pack); `save-<unix>` /
+  `export-<unix>` for GUI Save / Export
+- `s3_key`: `mj_atlas/<project>/<ver>/<filename>`
+
+Triggers:
+- `mj_atlas pack` (CLI) → mirrors `.png` + `.json` + `.manifest.json` after
+  local save_to_disk completes (best-effort, never blocks)
+- GUI File → Save Project → mirrors `.tpproj`
+- GUI File → Export As (viewer mode) → mirrors the exported file
+
+Failed uploads do NOT abort the local pipeline. Errors land in `<atlas>.log`
+with a summary line `hfrog: mirror complete — N ok, M failed`.
+
+Wire format: `PUT <endpoint>/artifactory/add_form_file` with multipart form
+(`json` text part + `file` binary part). Server returns hfrog's RespRet
+envelope; codes 0 and 1001 (AlreadyExist) are treated as success.
+
+See `docs/HFROG.md` for full wire-protocol details and CI integration patterns.
+
 ## Run Log (.log)
 
 Every CLI invocation (and every GUI pack) writes a fresh `<output>.log`

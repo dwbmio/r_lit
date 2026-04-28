@@ -249,6 +249,14 @@ struct MJAtlasApp {
     recent_files: Vec<PathBuf>,
     dark_mode: bool,
     fonts_loaded: bool,
+    /// Per-user config (hfrog mirror settings, etc). Loaded once on startup;
+    /// the settings panel writes back through `crate::config::Config::save`
+    /// when the user clicks "Save settings".
+    config: crate::config::Config,
+    /// Buffer values shown in the hfrog panel before the user hits "Save".
+    /// Kept separate from `config.hfrog` so canceling/discarding edits is
+    /// trivial — just re-read from `config`.
+    config_dirty: bool,
 }
 
 const FORMAT_NAMES: &[(&str, &str)] = &[
@@ -262,6 +270,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl Default for MJAtlasApp {
     fn default() -> Self {
+        // Best-effort config load — first run / parse error both fall back
+        // to defaults rather than crashing the GUI.
+        let config = crate::config::Config::load().unwrap_or_else(|e| {
+            log::warn!("config: load failed, using defaults: {}", e);
+            crate::config::Config::default()
+        });
         Self {
             mode: AppMode::Packer(PackerState::new_empty()),
             toasts: Vec::new(),
@@ -269,6 +283,8 @@ impl Default for MJAtlasApp {
             recent_files: Vec::new(),
             dark_mode: false,
             fonts_loaded: false,
+            config,
+            config_dirty: false,
         }
     }
 }
@@ -789,6 +805,31 @@ impl MJAtlasApp {
                             format!("Saved: {}", path.display()),
                             ToastKind::Success,
                         ));
+
+                        // Best-effort hfrog mirror — runs synchronously here
+                        // because save() already wrote to disk, so even if
+                        // the upload hangs/fails the user's data is safe.
+                        // The toast above already confirmed local success;
+                        // we don't add a second toast on mirror failure (the
+                        // runlog captures details for `_ai/troubleshooting`).
+                        let cfg = self.config.clone();
+                        if cfg.hfrog.is_active() {
+                            let project_name = path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("project")
+                                .to_string();
+                            let ver = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| format!("save-{}", d.as_secs()))
+                                .unwrap_or_else(|_| "save-0".to_string());
+                            crate::hfrog::mirror_paths(
+                                &cfg.hfrog,
+                                &project_name,
+                                &ver,
+                                &[(path.clone(), "tpproj")],
+                            );
+                        }
                     }
                     Err(e) => {
                         self.toasts.push(Toast::new(
@@ -1059,20 +1100,49 @@ impl MJAtlasApp {
             .add_filter("Output", &[ext])
             .save_file()
         {
-            if let AppMode::Viewer(state) = &self.mode {
-                // Re-read the source file and re-export
-                let source = PathBuf::from(&state.source_path);
-                if let Ok(content) = std::fs::read_to_string(&source) {
-                    // For now, just copy/convert — a simple re-export
-                    if let Err(e) = std::fs::write(&path, &content) {
-                        self.toast(format!("Export failed: {}", e), ToastKind::Error);
-                    } else {
-                        self.toast(
-                            format!("Exported to {}", path.display()),
-                            ToastKind::Success,
-                        );
-                    }
+            // Snapshot the source path so we can release the &self.mode
+            // borrow before reaching for self.config / self.toast.
+            let source_path = match &self.mode {
+                AppMode::Viewer(state) => Some(PathBuf::from(&state.source_path)),
+                _ => None,
+            };
+            let Some(source) = source_path else {
+                return;
+            };
+            let content = match std::fs::read_to_string(&source) {
+                Ok(c) => c,
+                Err(e) => {
+                    self.toast(format!("Export read failed: {}", e), ToastKind::Error);
+                    return;
                 }
+            };
+            if let Err(e) = std::fs::write(&path, &content) {
+                self.toast(format!("Export failed: {}", e), ToastKind::Error);
+                return;
+            }
+            self.toast(
+                format!("Exported to {}", path.display()),
+                ToastKind::Success,
+            );
+
+            // Best-effort hfrog mirror — same pattern as save_project.
+            let cfg = self.config.clone();
+            if cfg.hfrog.is_active() {
+                let project_name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("export")
+                    .to_string();
+                let ver = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| format!("export-{}", d.as_secs()))
+                    .unwrap_or_else(|_| "export-0".to_string());
+                let kind = match format {
+                    "tpsheet" => "atlas-tpsheet",
+                    "json-array" => "atlas-json-array",
+                    _ => "atlas-json",
+                };
+                crate::hfrog::mirror_paths(&cfg.hfrog, &project_name, &ver, &[(path.clone(), kind)]);
             }
         }
     }
@@ -1335,6 +1405,13 @@ impl MJAtlasApp {
         let is_packing_now = matches!(&self.mode, AppMode::Packer(s) if s.pack_rx.is_some());
         let list_changed = std::cell::Cell::new(false);
 
+        // Deferred flags from the settings panel's hfrog "Save settings"
+        // button. We can't call `self.toast()` from inside the panel closure
+        // because `self.mode` is borrowed; we capture the result here and
+        // surface a toast after the closure ends.
+        let mut save_config_ok = false;
+        let mut save_config_err: Option<String> = None;
+
         if let AppMode::Packer(state) = &mut self.mode {
             let is_packing = state.pack_rx.is_some();
             let s = &mut state.project.settings;
@@ -1559,6 +1636,83 @@ impl MJAtlasApp {
                         if is_packing {
                             ui.spinner();
                         }
+
+                        ui.add_space(12.0);
+                        ui.separator();
+
+                        // ── hfrog mirror section ──
+                        // Editable in-place; persists to ~/.config/mj_atlas/
+                        // config.toml on click of "Save settings". Empty
+                        // endpoint = mirror disabled even when checkbox is on.
+                        ui.heading("hfrog Mirror");
+                        ui.add_space(4.0);
+                        if ui
+                            .checkbox(
+                                &mut self.config.hfrog.enabled,
+                                "Mirror to hfrog on Save / Export",
+                            )
+                            .changed()
+                        {
+                            self.config_dirty = true;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Endpoint:");
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.config.hfrog.endpoint)
+                                        .hint_text("https://hfrog.example.com"),
+                                )
+                                .changed()
+                            {
+                                self.config_dirty = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Token:   ");
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.config.hfrog.token)
+                                        .password(true)
+                                        .hint_text("Bearer token (optional)"),
+                                )
+                                .changed()
+                            {
+                                self.config_dirty = true;
+                            }
+                        });
+                        if self.config_dirty {
+                            ui.horizontal(|ui| {
+                                if ui.button("Save settings").clicked() {
+                                    match self.config.save() {
+                                        Ok(()) => {
+                                            self.config_dirty = false;
+                                            save_config_ok = true;
+                                        }
+                                        Err(e) => {
+                                            save_config_err = Some(format!("{}", e));
+                                        }
+                                    }
+                                }
+                                if ui.small_button("Reset").clicked() {
+                                    if let Ok(loaded) = crate::config::Config::load() {
+                                        self.config = loaded;
+                                        self.config_dirty = false;
+                                    }
+                                }
+                            });
+                        }
+                        let status_text = if self.config.hfrog.is_active() {
+                            "● mirror active"
+                        } else if self.config.hfrog.enabled {
+                            "○ enabled but endpoint missing"
+                        } else {
+                            "○ mirror disabled"
+                        };
+                        ui.label(
+                            egui::RichText::new(status_text)
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
                     });
                 });
 
@@ -1669,6 +1823,14 @@ impl MJAtlasApp {
                     state.needs_auto_pack = true;
                 }
             }
+        }
+
+        // ── React to config save attempts (deferred from settings panel) ──
+        if save_config_ok {
+            self.toast("Settings saved", ToastKind::Success);
+        }
+        if let Some(e) = save_config_err {
+            self.toast(format!("Settings save failed: {}", e), ToastKind::Error);
         }
 
         // ── Drag hover overlay ──

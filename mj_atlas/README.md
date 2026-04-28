@@ -160,6 +160,20 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 JSON output (`--json`) is available on every subcommand for CI / dashboards.
 
+## hfrog Mirror (optional)
+
+If you run an [hfrog](https://github.com/dingcode-icu/hfrog) artifact registry, mj_atlas can push every saved project / exported atlas / refreshed manifest there in addition to the local files. Disabled by default; opt-in via `~/.config/mj_atlas/config.toml`:
+
+```toml
+[hfrog]
+enabled = true
+endpoint = "https://hfrog.example.com"
+token = ""                      # leave empty for unauthenticated
+default_runtime = "asset-pack"
+```
+
+The GUI exposes the same settings under the "hfrog Mirror" section in the Settings panel. Failed uploads never abort the local pipeline — they're logged to `<atlas>.log` for review. See [`docs/HFROG.md`](docs/HFROG.md) for wire format, naming convention, and failure semantics.
+
 ## Run Log Sidecar
 
 Every invocation (CLI or GUI) writes `<output>.log` next to the atlas/manifest, overwriting the previous one. Header records the full argv and resolved options; body captures every INFO/WARN/ERROR/DEBUG line — including DEBUG diagnostics that never reach stdout. Failed runs get the most informative sidecar; just `cat ./out/atlas.log` to share what happened.

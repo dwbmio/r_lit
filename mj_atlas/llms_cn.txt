@@ -261,6 +261,35 @@ mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 mj_atlas gui
 ```
 
+## hfrog 制品镜像 (v0.4+)
+
+可选功能：把保存的项目 / 导出的 atlas / 刷新后的 manifest 推一份到 hfrog 制品仓库。每用户单独配置（`~/.config/mj_atlas/config.toml`），默认关闭：
+
+```toml
+[hfrog]
+enabled = true                  # 默认 false
+endpoint = "https://hfrog.example.com"
+token = ""                      # bearer token，留空即不带鉴权
+default_runtime = "asset-pack"
+s3_inc_id = 0
+```
+
+hfrog 上的命名规则：
+- `name`: `<项目名>.<文件类型>`，类型枚举为 `tpproj` / `atlas-png` / `atlas-json` / `manifest` / `atlas-tpsheet`
+- `ver`: CLI pack 用 atlas 像素 SHA-256 前 12 位；GUI Save/Export 用 `save-<unix>` / `export-<unix>`
+- `s3_key`: `mj_atlas/<项目>/<ver>/<文件名>`
+
+触发时机：
+- `mj_atlas pack`（CLI）→ 本地写盘完成后，镜像 `.png` + `.json` + `.manifest.json`（best-effort）
+- GUI File → Save Project → 镜像 `.tpproj`
+- GUI File → Export As（viewer 模式）→ 镜像导出的文件
+
+**上传失败永不阻塞本地流程**。错误记到 `<atlas>.log`，结尾有汇总行 `hfrog: mirror complete — N ok, M failed`。
+
+线协议：`PUT <endpoint>/artifactory/add_form_file`，multipart 表单（`json` 文本部分 + `file` 二进制部分）。服务器返回 hfrog 的 `RespRet` 信封；`code=0` 与 `code=1001` (`AlreadyExist`) 都视为成功。
+
+详细线协议、命名规则、CI 集成示例见 `docs/HFROG.md`。
+
 ## 运行日志 (.log)
 
 每次 CLI 调用（以及每次 GUI 触发的 pack）都会在 atlas / manifest 旁边写一个 `<output>.log` 边车文件，覆盖上一次的。结构：

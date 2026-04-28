@@ -160,6 +160,20 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 每个子命令都支持 `--json` 输出，方便 CI 和 dashboard 消费。
 
+## hfrog 制品镜像（可选）
+
+如果你跑了一个 [hfrog](https://github.com/dingcode-icu/hfrog) 制品仓库，mj_atlas 在本地保存的同时还能把每次的项目 / 导出 atlas / 刷新后的 manifest 同步推一份到 hfrog。默认关闭，需要在 `~/.config/mj_atlas/config.toml` 里手动启用：
+
+```toml
+[hfrog]
+enabled = true
+endpoint = "https://hfrog.example.com"
+token = ""                      # 不需要鉴权时留空
+default_runtime = "asset-pack"
+```
+
+GUI 的 Settings 面板底部有 "hfrog Mirror" 区域可以直接编辑配置。**上传失败永不阻塞本地流水**——错误写到 `<atlas>.log` 供事后查看。线协议、命名规则、失败处理见 [`docs/HFROG.md`](docs/HFROG.md)。
+
 ## 运行日志 sidecar
 
 每次调用（CLI 或 GUI）都会在 atlas / manifest 旁边写一份 `<output>.log`，覆盖上次的。文件头部记录完整 argv 和解析后的选项；正文捕获本次运行的全部 INFO/WARN/ERROR/DEBUG 行——包括平时不到 stdout 的 DEBUG 诊断信息。失败的运行反而会留下信息最完整的 sidecar；出问题时把 `./out/atlas.log` 直接发出来就行。
