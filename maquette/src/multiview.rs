@@ -25,6 +25,8 @@ use bevy::camera::{ClearColorConfig, ScalingMode, Viewport};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use crate::camera::PreviewViewportRect;
+
 /// Whether the three ortho PIPs are rendered and how big they are.
 /// Resource kept in `UiState` siblinghood, tweakable via the
 /// menu. Default = `enabled = true` so new installs see the feature
@@ -260,11 +262,20 @@ fn apply_enabled(state: Res<MultiViewState>, mut cams: Query<&mut Camera, With<O
     }
 }
 
-/// Place the three PIPs in the bottom-right corner every frame. Cheap
-/// (3 entities), and running unconditionally means the PIPs follow
-/// window resizes without a `WindowResized` subscription.
+/// Place the three PIPs in the bottom-right corner of the central
+/// preview area every frame. Cheap (3 entities), and running
+/// unconditionally means the PIPs follow window resizes without a
+/// `WindowResized` subscription.
+///
+/// "Central preview area" is what's left after egui's panels (left
+/// canvas, right Block Library, menu bar, status bar) have claimed
+/// their slices — `PreviewViewportRect` is populated by
+/// `ui::ui_system` from `ctx.available_rect()`. Without consulting
+/// that resource the PIPs would overlap the right SidePanel, which
+/// is the v0.10 C-2 regression that prompted this rewrite.
 fn sync_viewports(
     state: Res<MultiViewState>,
+    central: Res<PreviewViewportRect>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cams: Query<(&mut Camera, &OrthoView)>,
 ) {
@@ -281,23 +292,41 @@ fn sync_viewports(
     let gap_px = ((state.gap as f32) * scale) as u32;
     let bottom_px = ((state.bottom_reserved as f32) * scale) as u32;
 
-    // Guard against freshly-created windows where physical size is 0.
-    if phys.x < panel_px || phys.y < panel_px + bottom_px {
+    // Right / bottom edges of the central area, in physical pixels.
+    // Falls back to the full window when the UI hasn't reported a
+    // rect yet (first frame).
+    let (central_right_px, central_bottom_px) = match central.rect {
+        Some(r) if r.max_x > r.min_x && r.max_y > r.min_y => {
+            let rx = (r.max_x * scale).round().max(1.0) as u32;
+            let by = (r.max_y * scale).round().max(1.0) as u32;
+            (rx.min(phys.x), by.min(phys.y))
+        }
+        _ => (phys.x, phys.y),
+    };
+
+    // Guard against freshly-created windows where physical size is 0
+    // and the degenerate case where the central area is too narrow
+    // to fit even one PIP. Both paths skip the update rather than
+    // produce a 0-sized viewport that bevy rejects.
+    if central_right_px < panel_px + gap_px
+        || central_bottom_px < panel_px + bottom_px
+    {
         return;
     }
 
-    let y = phys.y.saturating_sub(bottom_px + panel_px);
-    // Three panels anchored to the right edge.
-    let right_edge = phys.x.saturating_sub(gap_px);
+    let y = central_bottom_px.saturating_sub(bottom_px + panel_px);
+    let right_edge = central_right_px.saturating_sub(gap_px);
 
     for (mut cam, view) in &mut cams {
         // Columns go right-to-left: index 0 sits furthest from the
         // edge. That keeps the "Side" (index 2) panel pinned to the
-        // window corner — which is the view the user glances at most
-        // when painting on the 2D canvas on the left.
+        // central-area's bottom-right corner — which is the view
+        // the user glances at most when painting on the 2D canvas
+        // on the left.
         let col = view.kind.column();
         let panels_from_edge = 3 - col;
-        let x_right = right_edge.saturating_sub(panels_from_edge.saturating_sub(1) * (panel_px + gap_px));
+        let x_right = right_edge
+            .saturating_sub(panels_from_edge.saturating_sub(1) * (panel_px + gap_px));
         let x_left = x_right.saturating_sub(panel_px);
 
         if let Some(vp) = cam.viewport.as_mut() {
@@ -320,13 +349,26 @@ fn placeholder_viewport() -> Viewport {
 /// Returns the on-screen rectangle each PIP occupies in **logical**
 /// (egui) pixels. Used by the UI to draw labels above each panel
 /// without re-deriving the math from the physical-pixel viewport.
-pub fn pip_logical_rects(window: &Window, state: &MultiViewState) -> [PipRect; 3] {
-    let w = window.width();
-    let h = window.height();
+///
+/// `central_right_logical` / `central_bottom_logical` describe
+/// where the egui central region ends — i.e. the rightmost /
+/// bottommost columns the PIPs are allowed to occupy without
+/// running underneath a SidePanel or status bar. Pass
+/// `window.width() / window.height()` when no central rect is
+/// known yet (the result is then identical to the pre-v0.10 C-2
+/// behaviour).
+pub fn pip_logical_rects(
+    window: &Window,
+    state: &MultiViewState,
+    central_right_logical: f32,
+    central_bottom_logical: f32,
+) -> [PipRect; 3] {
+    let w = central_right_logical.min(window.width()).max(0.0);
+    let h = central_bottom_logical.min(window.height()).max(0.0);
     let size = compute_panel_size(state, w);
     let gap = state.gap as f32;
     let bottom = state.bottom_reserved as f32;
-    let y_top = h - bottom - size;
+    let y_top = (h - bottom - size).max(0.0);
 
     let mut out = [PipRect {
         kind: OrthoKind::Top,
@@ -340,7 +382,7 @@ pub fn pip_logical_rects(window: &Window, state: &MultiViewState) -> [PipRect; 3
     {
         let panels_from_edge = 3 - kind.column();
         let x_right = w - gap - (panels_from_edge.saturating_sub(1) as f32) * (size + gap);
-        let x_left = x_right - size;
+        let x_left = (x_right - size).max(0.0);
         out[i] = PipRect {
             kind,
             x: x_left,

@@ -195,10 +195,16 @@ fn render_toasts(
     }
     let ctx = ctx.ctx_mut()?;
 
-    // Anchor below the preview toolbar (which sits at +40 from the
-    // top-right). The toast column grows downward from there.
-    let mut y_offset = 90.0;
+    // Right-align toasts to the *central* (non-panel) area so they
+    // don't sit on top of the right SidePanel (Block Library, added
+    // in v0.10 C-2). `available_rect` here reflects everything that
+    // SidePanel/TopBottomPanel calls have claimed by the time
+    // `render_toasts` runs (it's chained after `ui_system`).
+    let central = ctx.available_rect();
+    let toast_right_x = central.max.x - 12.0;
+    let toast_first_y = central.min.y + 90.0;
     let mut dismiss_indices: Vec<usize> = Vec::new();
+    let mut y_offset = 0.0_f32;
 
     for (i, toast) in toasts.items.iter().enumerate() {
         let opacity = toast.opacity();
@@ -207,8 +213,10 @@ fn render_toasts(
         }
 
         let id = egui::Id::new(("toast", i));
+        let toast_pos = egui::pos2(toast_right_x, toast_first_y + y_offset);
         let area = egui::Area::new(id)
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, y_offset))
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(toast_pos)
             .interactable(true)
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {

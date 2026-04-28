@@ -738,14 +738,24 @@ fn ui_system(
     // panel.
     brush_overlay(ctx, canvas_rect, &mut ui_state);
 
+    // Snapshot the central area *before* any floating overlay
+    // (PIP labels, preview toolbar, toasts) draws — this is what's
+    // left after every SidePanel + TopBottomPanel claimed its slice.
+    // Right-anchored overlays must read this and *not*
+    // `ctx.screen_rect()`, otherwise they sit on top of the right
+    // SidePanel (Block Library) — the v0.10 C-2 regression that
+    // produced the "right side is chaos" report.
+    let central = ctx.available_rect();
+
     if multiview.enabled {
         if let Ok(window) = windows.single() {
-            paint_pip_labels(ctx, window, &multiview, &mut *jump_ortho_ev);
+            paint_pip_labels(ctx, window, &multiview, central, &mut *jump_ortho_ev);
         }
     }
 
     preview_toolbar(
         ctx,
+        central,
         &mut *reset_view_ev,
         &mut *fit_view_ev,
         &mut *zoom_view_ev,
@@ -1820,21 +1830,30 @@ fn brush_overlay(ctx: &egui::Context, canvas_rect: egui::Rect, ui_state: &mut Ui
 }
 
 /// A small floating button row anchored to the top-right corner of
-/// the window. Hosts viewport actions (reset, fit, multi-view
-/// toggle) so they're discoverable without hunting through the
-/// menu bar — the v0.7 status bar hint "Drag preview: turn · Scroll
-/// preview: zoom" was doing discovery work the UI itself should do.
+/// the **central preview area** (NOT the entire window — that
+/// would put it on top of the Block Library right SidePanel that
+/// landed in v0.10 C-2). Hosts viewport actions (reset, fit,
+/// multi-view toggle) so they're discoverable without hunting
+/// through the menu bar.
 #[allow(clippy::too_many_arguments)]
 fn preview_toolbar(
     ctx: &egui::Context,
+    central: egui::Rect,
     reset_view_ev: &mut MessageWriter<ResetPreviewView>,
     fit_view_ev: &mut MessageWriter<FitPreviewToModel>,
     zoom_view_ev: &mut MessageWriter<ZoomPreview>,
     multiview: &mut MultiViewState,
     float_state: &mut FloatPreviewState,
 ) {
+    // We anchor the toolbar `LEFT_TOP` and *position* it via
+    // `fixed_pos`. Anchoring `RIGHT_TOP` would line it up to the
+    // window's right edge, not the central rect's; even with a
+    // negative offset egui's anchor math doesn't know about the
+    // SidePanel.
+    let toolbar_pos = egui::pos2(central.max.x - 12.0, central.min.y + 8.0);
     egui::Area::new(egui::Id::new("preview_toolbar"))
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 40.0))
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(toolbar_pos)
         .interactable(true)
         .show(ctx, |ui| {
             egui::Frame::new()
@@ -1977,9 +1996,14 @@ fn paint_pip_labels(
     ctx: &egui::Context,
     window: &Window,
     state: &MultiViewState,
+    central: egui::Rect,
     jump_ortho_ev: &mut MessageWriter<JumpToOrthoView>,
 ) {
-    let rects = pip_logical_rects(window, state);
+    // PIPs sit at the bottom-right of the *central* (non-panel)
+    // area. The egui-side layout match what `multiview::sync_viewports`
+    // does on the renderer side; both read from the same available
+    // rect so labels and 3-D content stay aligned.
+    let rects = pip_logical_rects(window, state, central.max.x, central.max.y);
     let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("multiview_labels"));
     let painter = ctx.layer_painter(layer);
     let hover_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255));
