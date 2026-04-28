@@ -1352,9 +1352,15 @@ impl MJAtlasApp {
             });
 
             // ── Right panel: settings ──
+            //
+            // min_width(280): the polygon-mesh tolerance row needs ~270 px to
+            //   show its label + DragValue without truncation.
+            // max_width(400): prevents the user from dragging the divider so
+            //   far that the central canvas collapses to nothing.
             egui::SidePanel::right("settings_panel")
                 .default_width(300.0)
-                .min_width(250.0)
+                .min_width(280.0)
+                .max_width(400.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Output
@@ -1554,9 +1560,12 @@ impl MJAtlasApp {
 
             // When we have a preview in horizontal mode, use a left SidePanel for sprite list
             if has_preview && split == SplitDir::Horizontal {
+                // max_width(400): same rationale as the settings panel — keep
+                // the central canvas from being squeezed to a sliver.
                 egui::SidePanel::left("sprite_list_panel")
                     .default_width(280.0)
                     .min_width(200.0)
+                    .max_width(400.0)
                     .resizable(true)
                     .show(ctx, |ui| {
                         if draw_sprite_list(ui, &mut state.project, &mut state.search_text, &mut state.dirty, &mut state.thumbnails) {
@@ -1570,9 +1579,14 @@ impl MJAtlasApp {
                     }
                 });
             } else if has_preview && split == SplitDir::Vertical {
+                // max_height(60% of viewport) keeps the canvas at least 40%
+                // of vertical space — same anti-collapse rationale as the
+                // horizontal split's max_width.
+                let vp = ctx.screen_rect().height();
                 egui::TopBottomPanel::top("sprite_list_panel_v")
                     .default_height(200.0)
                     .min_height(100.0)
+                    .max_height((vp * 0.6).max(200.0))
                     .resizable(true)
                     .show(ctx, |ui| {
                         if draw_sprite_list(ui, &mut state.project, &mut state.search_text, &mut state.dirty, &mut state.thumbnails) {
@@ -1721,8 +1735,13 @@ impl MJAtlasApp {
             }
 
             // ── Left panel ──
+            // Same min/max strategy as the packer's left panel: clamp the
+            // resizable handle so dragging can't make either side disappear.
             egui::SidePanel::left("sprite_list")
                 .default_width(260.0)
+                .min_width(200.0)
+                .max_width(400.0)
+                .resizable(true)
                 .show(ctx, |ui| {
                     ui.heading(format!(
                         "{} ({}x{})",
@@ -2005,11 +2024,18 @@ impl eframe::App for MJAtlasApp {
 
 // ─── Launch functions ───
 
+// Window minimum: roughly 1:2:1 aspect across sprite-list / canvas / settings.
+// At this floor each side panel sits at its min_width (200 + 280) leaving
+// ~480 px for the central canvas — enough for a useful preview. Any smaller
+// and the canvas would degenerate to a sliver, so we refuse to shrink past it.
+const MIN_WINDOW_INNER_SIZE: [f32; 2] = [960.0, 600.0];
+
 pub fn run_gui() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("mj_atlas v{}", VERSION))
-            .with_inner_size([1100.0, 750.0]),
+            .with_inner_size([1100.0, 750.0])
+            .with_min_inner_size(MIN_WINDOW_INNER_SIZE),
         ..Default::default()
     };
     eframe::run_native(
@@ -2026,7 +2052,8 @@ pub fn run_preview(file: &Path) -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("mj_atlas v{} — {}", VERSION, file.display()))
-            .with_inner_size([1200.0, 800.0]),
+            .with_inner_size([1200.0, 800.0])
+            .with_min_inner_size(MIN_WINDOW_INNER_SIZE),
         ..Default::default()
     };
     eframe::run_native(
