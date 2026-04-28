@@ -11,6 +11,7 @@ mod block_library;
 mod camera;
 mod export_dialog;
 mod float_window;
+mod fonts;
 mod history;
 mod multiview;
 mod notify;

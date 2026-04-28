@@ -226,6 +226,12 @@ fn ui_system(
     let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
+    // First-frame-only: install a CJK-aware font set so block
+    // names like "草地块 / Grass" and the project's Chinese
+    // descriptions render correctly. Idempotent — see
+    // `fonts::apply_cjk_fonts_to_ctx`.
+    crate::fonts::apply_cjk_fonts_to_ctx(ctx);
+
     handle_shortcuts(
         ctx,
         &mut ui_state,

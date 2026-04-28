@@ -1234,6 +1234,12 @@ fn composer_ui_system(
     };
     let ctx = ctx_handle.get_mut();
 
+    // First-frame-only per-context: install CJK fonts. Each egui
+    // `Context` keeps its own font atlas, so the second window
+    // needs its own pass — bevy_egui doesn't share fonts across
+    // contexts.
+    crate::fonts::apply_cjk_fonts_to_ctx(ctx);
+
     // ---- Floating "Shape" picker over the 3D preview (left side) ----
     egui::Area::new(egui::Id::new("composer_shape_picker"))
         .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, 16.0))
