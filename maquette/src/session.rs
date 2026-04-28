@@ -36,6 +36,7 @@ use maquette::project::{self, FILE_EXT};
 use crate::autosave::{self, RecoveryPrompt};
 use crate::history::EditHistory;
 use crate::notify::Toasts;
+use maquette::project::ProjectMeta;
 
 /// Where the current in-memory canvas lives on disk (if at all) and
 /// whether it has unsaved edits.
@@ -81,6 +82,7 @@ impl Plugin for ProjectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CurrentProject>()
             .init_resource::<PendingProjectDialog>()
+            .init_resource::<ProjectMeta>()
             .add_message::<ProjectAction>()
             .add_systems(
                 Update,
@@ -174,6 +176,7 @@ fn handle_project_action(
     mut grid: ResMut<Grid>,
     mut palette: ResMut<Palette>,
     mut current: ResMut<CurrentProject>,
+    mut meta: ResMut<ProjectMeta>,
     mut history: ResMut<EditHistory>,
     mut toasts: ResMut<Toasts>,
     mut redraw: MessageWriter<RequestRedraw>,
@@ -199,6 +202,10 @@ fn handle_project_action(
                 // the new project — surprising behaviour for the
                 // user.
                 *palette = Palette::default();
+                // Same reasoning for the project-level meta: a
+                // typed `model_description` from the previous file
+                // should not shadow the freshly-blank canvas.
+                *meta = ProjectMeta::default();
                 current.path = None;
                 current.unsaved = false;
                 history.clear();
@@ -211,7 +218,14 @@ fn handle_project_action(
                 // — never pops a dialog, so it stays on the fast
                 // synchronous path.
                 match current.path.clone() {
-                    Some(path) => apply_save(&path, &grid, &palette, &mut current, &mut toasts),
+                    Some(path) => apply_save(
+                        &path,
+                        &grid,
+                        &palette,
+                        &meta,
+                        &mut current,
+                        &mut toasts,
+                    ),
                     None => pending.spawn_save(default_save_name(&current), /* untitled */ true),
                 }
             }
@@ -232,6 +246,7 @@ fn poll_pending_project_dialog(
     mut grid: ResMut<Grid>,
     mut palette: ResMut<Palette>,
     mut current: ResMut<CurrentProject>,
+    mut meta: ResMut<ProjectMeta>,
     mut history: ResMut<EditHistory>,
     mut toasts: ResMut<Toasts>,
     mut recovery: ResMut<RecoveryPrompt>,
@@ -275,13 +290,14 @@ fn poll_pending_project_dialog(
             &path,
             &mut grid,
             &mut palette,
+            &mut meta,
             &mut current,
             &mut history,
             &mut toasts,
             &mut recovery,
         ),
         Resolved::SaveAs(Some(path)) | Resolved::SaveUntitled(Some(path)) => {
-            apply_save(&path, &grid, &palette, &mut current, &mut toasts);
+            apply_save(&path, &grid, &palette, &meta, &mut current, &mut toasts);
         }
         Resolved::Open(None) => log::info!("project dialog: Open cancelled"),
         Resolved::SaveAs(None) => log::info!("project dialog: Save As cancelled"),
@@ -299,10 +315,12 @@ enum Resolved {
 // I/O helpers (pure business logic, no dialog)
 // ---------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn apply_open(
     path: &std::path::Path,
     grid: &mut Grid,
     palette: &mut Palette,
+    meta: &mut ProjectMeta,
     current: &mut CurrentProject,
     history: &mut EditHistory,
     toasts: &mut Toasts,
@@ -315,7 +333,12 @@ fn apply_open(
     // valid project instead of a blank canvas.
     let has_recovery = project::swap_is_newer(path) == Some(true);
 
-    match project::apply_to_grid_and_palette(path, grid, palette) {
+    // v0.10 D-1: switched from `apply_to_grid_and_palette` (which
+    // dropped project meta on the floor) to the `_with_meta`
+    // variant. v3 / v4-default files still load identically; v4
+    // files with a typed `model_description` / `texture_prefs`
+    // now keep those across Open → Save cycles.
+    match project::apply_to_grid_palette_meta(path, grid, palette, meta) {
         Ok(()) => {
             let name = file_name_or(path, "project").to_string();
             let path_buf = path.to_path_buf();
@@ -338,10 +361,14 @@ fn apply_save(
     path: &std::path::Path,
     grid: &Grid,
     palette: &Palette,
+    meta: &ProjectMeta,
     current: &mut CurrentProject,
     toasts: &mut Toasts,
 ) {
-    match project::write_project(path, grid, palette) {
+    // Same migration as `apply_open`: write through
+    // `write_project_with_meta` so the user's `model_description`
+    // and `texture_prefs` actually land on disk.
+    match project::write_project_with_meta(path, grid, palette, meta) {
         Ok(()) => {
             let name = file_name_or(path, "project").to_string();
             current.path = Some(path.to_path_buf());

@@ -17,6 +17,8 @@ use maquette::grid::{
     DeleteColorMode, Grid, Palette, ShapeKind, DEFAULT_GRID_H, DEFAULT_GRID_W, MAX_GRID, MAX_HEIGHT,
     MIN_GRID, MIN_HEIGHT,
 };
+use maquette::project::ProjectMeta;
+use maquette::texture_meta::PaletteViewMode;
 
 use bevy::window::PrimaryWindow;
 
@@ -27,10 +29,23 @@ use crate::camera::{
 };
 use crate::export_dialog::PendingExportDialog;
 use crate::float_window::FloatPreviewState;
-use crate::history::{EditHistory, HistoryAction, PaintOp};
+use crate::history::{EditHistory, HistoryAction, MetaEdit, PaintOp};
+use crate::slot_texgen::{GenerateSlotTexture, SlotTexgenProvider};
 use crate::multiview::{pip_logical_rects, JumpToOrthoView, MultiViewState};
 use crate::scene::WorldAxesState;
 use crate::session::{CurrentProject, PendingProjectDialog, ProjectAction};
+
+/// Bundle the project-level mutable state for `ui_system`. Two
+/// resources that always travel together (the current `.maq`
+/// path / dirty bit + the project-wide `model_description` etc).
+/// Grouping keeps the system's top-level parameter count under
+/// Bevy's 16-slot ceiling — adding `ProjectMeta` after the v0.10
+/// D-1 wiring would otherwise have pushed us over.
+#[derive(SystemParam)]
+pub struct ProjectState<'w> {
+    pub current: ResMut<'w, CurrentProject>,
+    pub meta: ResMut<'w, ProjectMeta>,
+}
 
 /// Bundle the outbound message writers for `ui_system` so we stay
 /// under Bevy's 16-parameter limit on systems. Every field is a
@@ -51,6 +66,10 @@ pub struct UiMessages<'w> {
     pub block_sync: MessageWriter<'w, SyncBlockLibrary>,
     /// Open the second-window block composer.
     pub composer_open: MessageWriter<'w, OpenBlockComposer>,
+    /// Per-slot texture generation request (v0.10 D-1). Right-click
+    /// the palette swatch → `Generate texture →` → pick a provider
+    /// lane; the `slot_texgen::SlotTexgenPlugin` does the rest.
+    pub slot_texgen: MessageWriter<'w, GenerateSlotTexture>,
     /// Reactive-rendering wake-up (`WinitSettings::desktop_app()` only
     /// runs `Update` when winit fires an event or someone writes
     /// `RequestRedraw`). After any blocking native dialog we have to
@@ -198,7 +217,7 @@ fn ui_system(
     mut ctx: EguiContexts,
     mut grid: ResMut<Grid>,
     mut palette: ResMut<Palette>,
-    mut current: ResMut<CurrentProject>,
+    mut project: ProjectState,
     mut ui_state: ResMut<UiState>,
     mut history: ResMut<EditHistory>,
     mut multiview: ResMut<MultiViewState>,
@@ -213,7 +232,19 @@ fn ui_system(
     mut msgs: UiMessages,
 ) -> Result {
     // Local aliases so the rest of the (quite long) function reads
-    // the same as before the SystemParam refactor.
+    // the same as before the SystemParam refactor. `current` /
+    // `meta` are reborrowed from the `ProjectState` bundle
+    // introduced alongside v0.10 D-1's Material drawer (the bundle
+    // is what keeps ui_system under bevy_ecs's 16-param ceiling).
+    // Deref through the Bevy `ResMut`s so the rest of the function
+    // sees plain `&mut CurrentProject` / `&mut ProjectMeta`.
+    // Rust auto-reborrows `&mut CurrentProject` / `&mut
+    // ProjectMeta` at each callsite, so the alias bindings stay
+    // valid across the multiple uses below without an explicit
+    // `&mut` reborrow at each callsite (which clippy would flag
+    // as `needless_borrow`).
+    let current: &mut CurrentProject = &mut project.current;
+    let meta: &mut ProjectMeta = &mut project.meta;
     let project_ev = &mut msgs.project;
     let reset_view_ev = &mut msgs.reset_view;
     let fit_view_ev = &mut msgs.fit_view;
@@ -223,6 +254,7 @@ fn ui_system(
     let block_bind_ev = &mut msgs.block_bind;
     let block_sync_ev = &mut msgs.block_sync;
     let composer_open_ev = &mut msgs.composer_open;
+    let slot_texgen_ev = &mut msgs.slot_texgen;
     let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
@@ -659,7 +691,7 @@ fn ui_system(
             });
     }
 
-    delete_color_modal(ctx, &mut ui_state, &mut grid, &mut palette, &mut current);
+    delete_color_modal(ctx, &mut ui_state, &mut grid, &mut palette, current);
 
     if ui_state.show_about {
         let mut open = ui_state.show_about;
@@ -715,14 +747,38 @@ fn ui_system(
                 ui,
                 &mut grid,
                 &palette,
-                &mut current,
+                current,
                 &mut history,
                 &mut ui_state,
             );
             ui.add_space(10.0);
             ui.separator();
-            palette_bar(ui, &mut palette, &mut ui_state, &library, &mut *block_bind_ev);
+            palette_bar(
+                ui,
+                &mut palette,
+                &mut ui_state,
+                &library,
+                &mut *block_bind_ev,
+                &mut *slot_texgen_ev,
+            );
             ui.add_space(10.0);
+            ui.separator();
+            // Material drawer: where the user types the
+            // model-wide texgen prompt + flips Flat/Textured /
+            // ignore_color_hint. Edits get recorded onto the
+            // unified undo stack via `EditHistory::record_meta`.
+            // Collapsed by default — the canvas + palette are the
+            // primary interaction surface; texturing comes after
+            // the user's done a first sketch.
+            egui::CollapsingHeader::new(
+                egui::RichText::new("Material").strong(),
+            )
+            .id_salt("material_drawer")
+            .default_open(false)
+            .show(ui, |ui| {
+                material_drawer(ui, meta, &mut history);
+            });
+            ui.add_space(6.0);
             ui.separator();
             // Drawer style: default open so the user sees their
             // catalog at a glance; collapsing it reclaims the
@@ -1252,6 +1308,7 @@ fn palette_bar(
     ui_state: &mut UiState,
     library: &BlockLibraryState,
     block_bind_ev: &mut MessageWriter<BlockBindAction>,
+    slot_texgen_ev: &mut MessageWriter<GenerateSlotTexture>,
 ) {
     ui.label(egui::RichText::new("Palette").strong());
     ui.add_space(2.0);
@@ -1367,6 +1424,57 @@ fn palette_bar(
                         ui.separator();
                         if ui.button("Unbind").clicked() {
                             block_bind_ev.write(BlockBindAction::Unbind { slot: slot_idx });
+                            ui.close();
+                        }
+                    }
+                });
+
+                // v0.10 D-1: per-slot texture generation. Three
+                // lanes mirror the Block Composer:
+                //   • Mock — instant offline noise; useful smoke
+                //     test for the cache + handle round-trip.
+                //   • Rustyme CPU — `texgen-cpu` queue, programmatic
+                //     Lua. Cheap.
+                //   • Rustyme Fal — `texgen-fal` queue, Fal.ai
+                //     FLUX schnell. Best quality, costs Fal credits.
+                //
+                // The actual prompt is computed in the
+                // SlotTexgenPlugin from
+                // (project.model_description, slot.color,
+                // slot.override_hint, bound_block.texture_hint,
+                // prefs.ignore_color_hint) — see
+                // `texture_meta::derive_texture_prompt`.
+                ui.menu_button("Generate texture", |ui| {
+                    let providers = [
+                        SlotTexgenProvider::Mock,
+                        SlotTexgenProvider::RustymeCpu,
+                        SlotTexgenProvider::RustymeFal,
+                    ];
+                    for prov in providers {
+                        if ui
+                            .button(prov.label())
+                            .on_hover_text(match prov {
+                                SlotTexgenProvider::Mock => {
+                                    "Offline deterministic noise — \
+                                     no Rustyme worker needed."
+                                }
+                                SlotTexgenProvider::RustymeCpu => {
+                                    "Rustyme texgen-cpu queue — \
+                                     requires MAQUETTE_RUSTYME_REDIS_URL."
+                                }
+                                SlotTexgenProvider::RustymeFal => {
+                                    "Rustyme texgen-fal queue → Fal.ai \
+                                     FLUX schnell — requires \
+                                     MAQUETTE_RUSTYME_REDIS_URL + \
+                                     MAQUETTE_RUSTYME_MODEL=fal-ai/flux/schnell."
+                                }
+                            })
+                            .clicked()
+                        {
+                            slot_texgen_ev.write(GenerateSlotTexture {
+                                slot: slot_idx,
+                                provider: prov,
+                            });
                             ui.close();
                         }
                     }
@@ -1568,6 +1676,125 @@ fn delete_color_modal(
             ui_state.delete_color_modal = Some(draft);
         }
     }
+}
+
+/// Material drawer — top-most edit point for the project-wide
+/// `ProjectMeta`. Three controls:
+///
+/// 1. **Model description** — multi-line `TextEdit`. The user
+///    types here once per project ("a Minecraft-style grass
+///    dirt block"); Maquette feeds it as the prompt seed for
+///    every per-slot texture generation in
+///    `derive_texture_prompt`.
+/// 2. **Ignore color hint** — checkbox flipping
+///    `texture_prefs.ignore_color_hint`. When on, the
+///    auto-derived prompt skips the slot's RGB phrase, useful
+///    for A/B-ing "is the model wrong?" vs "is the palette
+///    wrong?".
+/// 3. **View mode** — Flat / Textured radio. v0.10 D-1 only
+///    persists the choice; the toon-shader hookup that actually
+///    samples generated textures lands in D-1.D.
+///
+/// Edits commit to `EditHistory` via `MetaEdit` so Ctrl+Z / Ctrl+Y
+/// flow through the same `HistoryAction` events that handle paint
+/// strokes — strict LIFO across both kinds.
+fn material_drawer(
+    ui: &mut egui::Ui,
+    meta: &mut ProjectMeta,
+    history: &mut EditHistory,
+) {
+    ui.label(
+        egui::RichText::new(
+            "Single project-wide prompt that drives every per-slot \
+             texture generation. Bound blocks add their own \
+             texture_hint on top.",
+        )
+        .small()
+        .color(egui::Color32::from_gray(160)),
+    );
+    ui.add_space(4.0);
+
+    // Multi-line textarea for `model_description`. egui's
+    // `TextEdit::multiline` is value-bound (we hand it `&mut
+    // String`) so every keystroke mutates the resource. Recording
+    // each keystroke onto the undo stack would be useless noise;
+    // commit on lost-focus / Enter instead. We snapshot the
+    // *previous* value at the start of the edit and diff it on
+    // commit.
+    //
+    // egui's `Response` exposes `lost_focus()` which fires on
+    // both blur and Enter (with multiline TextEdit, Enter inserts
+    // a newline; the Cmd+Enter shortcut is what users use to
+    // commit). For now we treat any blur as commit.
+    let id = egui::Id::new("material_model_description_pre_edit");
+    let prev = ui
+        .ctx()
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| meta.model_description.clone());
+    let response = ui.add(
+        egui::TextEdit::multiline(&mut meta.model_description)
+            .hint_text("e.g. Minecraft-style grass dirt block, vibrant low-poly")
+            .desired_rows(2)
+            .desired_width(f32::INFINITY),
+    );
+    if response.gained_focus() {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(id, meta.model_description.clone());
+        });
+    }
+    if response.lost_focus() && prev != meta.model_description {
+        history.record_meta(MetaEdit::SetModelDescription {
+            before: prev,
+            after: meta.model_description.clone(),
+        });
+        ui.ctx().data_mut(|d| {
+            d.remove::<String>(id);
+        });
+    }
+
+    ui.add_space(4.0);
+
+    // Two booleans + an enum live in `texture_prefs`. Snapshot,
+    // mutate via egui widgets, then diff and record. No focus
+    // dance needed — these are single-click toggles.
+    let prev_ignore = meta.texture_prefs.ignore_color_hint;
+    if ui
+        .checkbox(
+            &mut meta.texture_prefs.ignore_color_hint,
+            "Ignore color hint in prompts",
+        )
+        .on_hover_text(
+            "When checked, per-slot prompts skip the slot's RGB \
+             color phrase. Useful for comparing 'is the model \
+             prompt wrong?' against 'is the palette wrong?'.",
+        )
+        .changed()
+    {
+        history.record_meta(MetaEdit::SetIgnoreColorHint {
+            before: prev_ignore,
+            after: meta.texture_prefs.ignore_color_hint,
+        });
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("View:");
+        let prev_mode = meta.texture_prefs.view_mode;
+        let mut mode = prev_mode;
+        ui.radio_value(&mut mode, PaletteViewMode::Flat, "Flat");
+        ui.radio_value(&mut mode, PaletteViewMode::Textured, "Textured")
+            .on_hover_text(
+                "Render generated textures on the 3-D preview. \
+                 (D-1.D wires the toon shader; until then the \
+                 toggle just persists.)",
+            );
+        if mode != prev_mode {
+            meta.texture_prefs.view_mode = mode;
+            history.record_meta(MetaEdit::SetViewMode {
+                before: prev_mode,
+                after: mode,
+            });
+        }
+    });
 }
 
 /// Block Library drawer that hangs off the bottom of the left

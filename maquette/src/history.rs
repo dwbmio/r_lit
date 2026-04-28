@@ -20,6 +20,8 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use maquette::grid::{Cell, Grid};
+use maquette::project::ProjectMeta;
+use maquette::texture_meta::PaletteViewMode;
 
 use crate::session::CurrentProject;
 
@@ -58,10 +60,56 @@ impl Stroke {
     }
 }
 
+/// One step on the undo / redo timeline. Either a paint stroke
+/// (the v0.6 grouping of cell-paint ops) or a project-meta edit
+/// (introduced in v0.10 D-1 alongside the GUI Material drawer).
+///
+/// Keeping both flavours in a single `VecDeque<EditEntry>` is what
+/// gives Ctrl+Z strict LIFO semantics across paint + meta — the
+/// user expects "undo whatever I last did" regardless of whether
+/// that was a brush stroke or typing in the model description.
+#[derive(Clone, Debug)]
+pub enum EditEntry {
+    Paint(Stroke),
+    Meta(MetaEdit),
+}
+
+/// Project-level field flips that should enter the undo stack.
+/// All variants carry the *previous* value as `before` so undo
+/// can write it straight back without re-reading the resource.
+///
+/// All variants share a `Set…` prefix on purpose — these are
+/// "setter" undo records and the prefix matches the imperative
+/// shape a future reader expects ("set this field to that
+/// value, here's what it used to be"). Stripping the prefix
+/// would make the variants read as nouns
+/// (`MetaEdit::ModelDescription`) which is awkward for a verb.
+#[allow(clippy::enum_variant_names)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MetaEdit {
+    /// `ProjectMeta::model_description` changed. Single-shot —
+    /// the GUI commits one of these per text-edit defocus / Enter,
+    /// not per keystroke.
+    SetModelDescription { before: String, after: String },
+    /// `ProjectMeta::texture_prefs::ignore_color_hint` toggle.
+    SetIgnoreColorHint { before: bool, after: bool },
+    /// `ProjectMeta::texture_prefs::view_mode` toggle.
+    SetViewMode {
+        before: PaletteViewMode,
+        after: PaletteViewMode,
+    },
+}
+
 #[derive(Resource, Default)]
 pub struct EditHistory {
-    undo: VecDeque<Stroke>,
-    redo: VecDeque<Stroke>,
+    /// Unified undo timeline — paint strokes and meta edits in
+    /// strict LIFO order. v0.10 D-1 reshape: was
+    /// `VecDeque<Stroke>` pre-D-1; meta edits had no place to
+    /// live. The internal `VecDeque` is private; producers go
+    /// through `record` / `record_meta` and `Undo` /
+    /// `Redo` HistoryAction events.
+    undo: VecDeque<EditEntry>,
+    redo: VecDeque<EditEntry>,
     /// Currently-open stroke, if any. `record` appends here while
     /// this is `Some`, falls back to a single-op stroke otherwise.
     open: Option<Stroke>,
@@ -121,10 +169,44 @@ impl EditHistory {
         if self.undo.len() == MAX_UNDO {
             self.undo.pop_front();
         }
-        self.undo.push_back(stroke);
+        self.undo.push_back(EditEntry::Paint(stroke));
         // Any committed stroke — stroke-group OR bare `record` — is
         // a potential autosave trigger. Ticking here (rather than in
         // `end_stroke`) covers the single-op-stroke path too.
+        self.strokes_committed = self.strokes_committed.saturating_add(1);
+    }
+
+    /// Record a meta edit on the undo timeline. Discards the redo
+    /// stack (matches `push_stroke`'s "any new edit clears redo"
+    /// semantics; mirrors VS Code / Photoshop / every text editor).
+    /// No-op when `before == after`.
+    pub fn record_meta(&mut self, edit: MetaEdit) {
+        // Skip identity flips so a focus-loss on an unchanged
+        // textarea doesn't pollute the undo stack with empty
+        // entries.
+        if let MetaEdit::SetModelDescription { before, after } = &edit {
+            if before == after {
+                return;
+            }
+        }
+        if let MetaEdit::SetIgnoreColorHint { before, after } = &edit {
+            if before == after {
+                return;
+            }
+        }
+        if let MetaEdit::SetViewMode { before, after } = &edit {
+            if before == after {
+                return;
+            }
+        }
+        self.redo.clear();
+        if self.undo.len() == MAX_UNDO {
+            self.undo.pop_front();
+        }
+        self.undo.push_back(EditEntry::Meta(edit));
+        // Meta edits also count toward "the user did something" —
+        // autosave should treat a typed `model_description` as a
+        // dirty edit that warrants a swap flush.
         self.strokes_committed = self.strokes_committed.saturating_add(1);
     }
 
@@ -161,12 +243,40 @@ impl EditHistory {
         self.open.is_some()
     }
 
-    fn take_undo_stroke(&mut self) -> Option<Stroke> {
+    /// Pop the most recent undo entry (paint stroke or meta edit).
+    /// LIFO across both kinds. Returns `None` when the stack is
+    /// empty.
+    fn take_undo_entry(&mut self) -> Option<EditEntry> {
         self.undo.pop_back()
     }
 
-    fn take_redo_stroke(&mut self) -> Option<Stroke> {
+    /// Pop the most recent redo entry. Mirror of
+    /// [`Self::take_undo_entry`].
+    fn take_redo_entry(&mut self) -> Option<EditEntry> {
         self.redo.pop_back()
+    }
+
+    /// Test-only convenience: pop the most recent **paint** stroke
+    /// off the undo stack, skipping past meta edits. Kept so the
+    /// pre-D-1 unit tests don't have to learn the new enum.
+    /// Production code uses [`Self::take_undo_entry`].
+    #[cfg(test)]
+    fn take_undo_stroke(&mut self) -> Option<Stroke> {
+        // Walk back from the tail; pop the first PaintStroke we
+        // see and re-push everything we walked past in original
+        // order so the timeline isn't disturbed.
+        let mut popped_meta: Vec<EditEntry> = Vec::new();
+        let result = loop {
+            match self.undo.pop_back() {
+                Some(EditEntry::Paint(s)) => break Some(s),
+                Some(other @ EditEntry::Meta(_)) => popped_meta.push(other),
+                None => break None,
+            }
+        };
+        for entry in popped_meta.into_iter().rev() {
+            self.undo.push_back(entry);
+        }
+        result
     }
 }
 
@@ -190,6 +300,7 @@ fn handle_history_action(
     mut events: MessageReader<HistoryAction>,
     mut history: ResMut<EditHistory>,
     mut grid: ResMut<Grid>,
+    mut meta: ResMut<ProjectMeta>,
     mut current: ResMut<CurrentProject>,
 ) {
     for action in events.read() {
@@ -199,24 +310,64 @@ fn handle_history_action(
                 // while dragging), commit it first so Ctrl+Z reaches a
                 // well-defined state.
                 history.end_stroke();
-                if let Some(stroke) = history.take_undo_stroke() {
-                    for op in stroke.ops.iter().rev() {
-                        apply_cell(&mut grid, op.x, op.y, op.before);
+                if let Some(entry) = history.take_undo_entry() {
+                    match &entry {
+                        EditEntry::Paint(stroke) => {
+                            for op in stroke.ops.iter().rev() {
+                                apply_cell(&mut grid, op.x, op.y, op.before);
+                            }
+                        }
+                        EditEntry::Meta(edit) => apply_meta_undo(&mut meta, edit),
                     }
-                    history.redo.push_back(stroke);
+                    history.redo.push_back(entry);
                     current.mark_dirty();
                 }
             }
             HistoryAction::Redo => {
                 history.end_stroke();
-                if let Some(stroke) = history.take_redo_stroke() {
-                    for op in stroke.ops.iter() {
-                        apply_cell(&mut grid, op.x, op.y, op.after);
+                if let Some(entry) = history.take_redo_entry() {
+                    match &entry {
+                        EditEntry::Paint(stroke) => {
+                            for op in stroke.ops.iter() {
+                                apply_cell(&mut grid, op.x, op.y, op.after);
+                            }
+                        }
+                        EditEntry::Meta(edit) => apply_meta_redo(&mut meta, edit),
                     }
-                    history.undo.push_back(stroke);
+                    history.undo.push_back(entry);
                     current.mark_dirty();
                 }
             }
+        }
+    }
+}
+
+/// Roll a meta edit back to its `before` snapshot.
+fn apply_meta_undo(meta: &mut ProjectMeta, edit: &MetaEdit) {
+    match edit {
+        MetaEdit::SetModelDescription { before, .. } => {
+            meta.model_description = before.clone();
+        }
+        MetaEdit::SetIgnoreColorHint { before, .. } => {
+            meta.texture_prefs.ignore_color_hint = *before;
+        }
+        MetaEdit::SetViewMode { before, .. } => {
+            meta.texture_prefs.view_mode = *before;
+        }
+    }
+}
+
+/// Re-apply a meta edit's `after` snapshot.
+fn apply_meta_redo(meta: &mut ProjectMeta, edit: &MetaEdit) {
+    match edit {
+        MetaEdit::SetModelDescription { after, .. } => {
+            meta.model_description = after.clone();
+        }
+        MetaEdit::SetIgnoreColorHint { after, .. } => {
+            meta.texture_prefs.ignore_color_hint = *after;
+        }
+        MetaEdit::SetViewMode { after, .. } => {
+            meta.texture_prefs.view_mode = *after;
         }
     }
 }
@@ -257,6 +408,17 @@ mod tests {
         }
     }
 
+    /// Test-only helper: pluck the stroke at `idx` out of the undo
+    /// queue, panicking if the entry is a meta edit instead. Lets
+    /// the pre-D-1 paint-stroke tests keep their indexing without
+    /// learning the new `EditEntry` enum.
+    fn paint_at(h: &EditHistory, idx: usize) -> &Stroke {
+        match &h.undo[idx] {
+            EditEntry::Paint(s) => s,
+            EditEntry::Meta(_) => panic!("expected Paint entry at {idx}"),
+        }
+    }
+
     #[test]
     fn record_outside_stroke_commits_single_op_stroke() {
         let mut h = EditHistory::default();
@@ -264,7 +426,7 @@ mod tests {
         assert!(h.can_undo());
         assert!(!h.can_redo());
         assert_eq!(h.undo.len(), 1);
-        assert_eq!(h.undo[0].len(), 1);
+        assert_eq!(paint_at(&h, 0).len(), 1);
     }
 
     #[test]
@@ -276,7 +438,7 @@ mod tests {
         h.record(op(2, 0, None, Some(1)));
         h.end_stroke();
         assert_eq!(h.undo.len(), 1, "3 ops should coalesce into 1 stroke");
-        assert_eq!(h.undo[0].len(), 3);
+        assert_eq!(paint_at(&h, 0).len(), 3);
     }
 
     #[test]
@@ -299,8 +461,8 @@ mod tests {
         h.record(op(1, 1, None, Some(2)));
         h.end_stroke();
         assert_eq!(h.undo.len(), 2, "each stroke should survive");
-        assert_eq!(h.undo[0].len(), 1);
-        assert_eq!(h.undo[1].len(), 1);
+        assert_eq!(paint_at(&h, 0).len(), 1);
+        assert_eq!(paint_at(&h, 1).len(), 1);
     }
 
     #[test]
@@ -313,7 +475,7 @@ mod tests {
         // into the redo queue. We're testing the history data model
         // here, not the Bevy system that would apply the ops.
         let s = h.take_undo_stroke().unwrap();
-        h.redo.push_back(s);
+        h.redo.push_back(EditEntry::Paint(s));
         assert!(h.can_redo());
 
         // Any new record call after an undo must drop the redo
@@ -405,5 +567,81 @@ mod tests {
         // Autosave relies on this monotonicity — File → New must
         // not make the counter appear to go backwards.
         assert_eq!(h.strokes_committed(), before);
+    }
+
+    // ----- v0.10 D-1: meta-edit tests --------------------------------
+
+    #[test]
+    fn record_meta_lands_on_undo_stack_and_ticks_counter() {
+        let mut h = EditHistory::default();
+        let edit = MetaEdit::SetModelDescription {
+            before: String::new(),
+            after: "a grass block".to_string(),
+        };
+        let before_count = h.strokes_committed();
+        h.record_meta(edit.clone());
+        assert!(h.can_undo());
+        assert_eq!(h.undo.len(), 1);
+        assert!(matches!(h.undo[0], EditEntry::Meta(_)));
+        // Meta edits count toward "the user did something" so
+        // autosave wakes up on description-only changes too.
+        assert_eq!(h.strokes_committed(), before_count + 1);
+    }
+
+    #[test]
+    fn record_meta_skips_identity_flips() {
+        let mut h = EditHistory::default();
+        h.record_meta(MetaEdit::SetModelDescription {
+            before: "same".to_string(),
+            after: "same".to_string(),
+        });
+        h.record_meta(MetaEdit::SetIgnoreColorHint {
+            before: false,
+            after: false,
+        });
+        h.record_meta(MetaEdit::SetViewMode {
+            before: PaletteViewMode::Flat,
+            after: PaletteViewMode::Flat,
+        });
+        assert!(!h.can_undo(), "no-op edits must not pollute undo stack");
+        assert_eq!(h.strokes_committed(), 0);
+    }
+
+    #[test]
+    fn record_meta_clears_redo_stack() {
+        // Same "any new edit drops redo" semantics as paint strokes.
+        let mut h = EditHistory::default();
+        h.record(op(0, 0, None, Some(1)));
+        let s = h.take_undo_stroke().unwrap();
+        h.redo.push_back(EditEntry::Paint(s));
+        assert!(h.can_redo());
+
+        h.record_meta(MetaEdit::SetModelDescription {
+            before: String::new(),
+            after: "new".to_string(),
+        });
+        assert!(!h.can_redo(), "meta edit must clear redo just like a paint");
+    }
+
+    #[test]
+    fn lifo_is_strict_across_paint_and_meta() {
+        // The whole point of unifying Stroke + MetaEdit into one
+        // VecDeque<EditEntry>: Ctrl+Z respects the user's actual
+        // chronological order.
+        let mut h = EditHistory::default();
+        h.record(op(0, 0, None, Some(1)));
+        h.record_meta(MetaEdit::SetModelDescription {
+            before: String::new(),
+            after: "a".to_string(),
+        });
+        h.record(op(1, 0, None, Some(2)));
+
+        // Top of undo stack is the latest paint.
+        assert!(matches!(h.take_undo_entry().unwrap(), EditEntry::Paint(_)));
+        // Then the meta edit.
+        assert!(matches!(h.take_undo_entry().unwrap(), EditEntry::Meta(_)));
+        // Then the first paint.
+        assert!(matches!(h.take_undo_entry().unwrap(), EditEntry::Paint(_)));
+        assert!(h.take_undo_entry().is_none());
     }
 }

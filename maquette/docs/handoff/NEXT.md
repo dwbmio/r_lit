@@ -38,8 +38,19 @@ Active fronts:
   as a local draft (instantly visible in the main library), or
   publish straight to hfrog. Two new 3-min smoke tests
   (`#COMPOSER-mock`, `#COMPOSER-publish`) in USER-TODO.md.
-* **v0.10 D-1** — *next thing the agent should pick up.*
-  See "Outstanding work" §1 below.
+* **v0.10 D-1 — A + B subset shipped 2026-04-28 evening.**
+  Material drawer (model_description / ignore_color_hint / view_mode
+  toggle) lives in the left panel between palette and Block Library;
+  ProjectMeta resource is wired through Open / Save / autosave / recovery;
+  EditHistory unified into a `EditEntry::{Paint | Meta}` LIFO stack so
+  Ctrl+Z respects strict chronological order across paint strokes and
+  meta edits; per-slot `Generate texture →` right-click menu spawns a
+  `SlotTexgenPlugin` task per swatch (Mock / Rustyme CPU / Rustyme Fal),
+  PNG lands in `~/.cache/maquette/textures/<sha>.png`,
+  `PaletteSlotMeta::texture` populated. See `v0.10d1-complete.md`.
+  **D-1.C** (palette-wide `Generate all` + Canvas-group fan-out) and
+  **D-1.D** (`Flat / Textured` actually flipping toon-shader behaviour)
+  are the remaining slices — see "Outstanding work" §1.
 * **User-side validation backlog** — see `USER-TODO.md`. A bunch of
   v0.9 polish items just landed (`#1c-async`, `#17b`, `#17c`, `#18`,
   `#19b`, `#20b`, all `#TEX-A` plumbing) and need a human-eyes pass
@@ -49,7 +60,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 · `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md` ·
 `v0.9b-complete.md` · `v0.10b-bis-complete.md` ·
 `v0.10c1-complete.md` · `v0.10c2-blockmeta-complete.md` ·
-`v0.10c3-block-composer.md`.
+`v0.10c3-block-composer.md` · `v0.10d1-complete.md`.
 
 ## Roadmap snapshot
 
@@ -71,7 +82,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | **A** | `texgen` lib module (trait, types, disk cache) + `MockProvider` (deterministic, offline) + `maquette-cli texture gen` | **shipped 2026-04-24** |
 | **B** | `RustymeProvider` (LPUSH `texgen.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** + **B-bis 2026-04-27 evening** (live integration with sonargrid `texgen-cpu` / `texgen-fal`, `image_b64` shape, profile env, foreign-reply bug fix). `#TEX-B` end-to-end ✅. |
 | **C** | Project schema v4 + block-meta content layer + block authoring tool | **C-1 (lib schema v4) 2026-04-27 evening · C-2 (BlockMeta + Library panel) 2026-04-28 morning · C-3 (Block Composer second-window + Save Draft + Publish to Hfrog) 2026-04-28 afternoon** · undo wiring + autosave migration deferred to D-1 |
-| **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | not yet — **the user-experience milestone**; needs C + worker |
+| **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | **A + B shipped 2026-04-28** (Material drawer + per-slot Generate via right-click; see `v0.10d1-complete.md`). **C** (Generate all → Canvas-group fan-out) and **D** (toon-shader Textured rendering) pending |
 | **D-2** | Per-slot `[regenerate]` + `[edit hint]` affordances in the palette list; re-uses D-1's single-task path (no group needed). Writes the new `override_hint` through the undo stack | not yet |
 | **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
 | **E** | glTF baking: per-palette material with `pbrMetallicRoughness.baseColorTexture`; single tile per slot, outline mesh kept compatible | not yet |
@@ -86,40 +97,35 @@ wants.
 
 ### Now — start here next session
 
-1. **v0.10 D-1 (+ C-2 sub-tasks) — GUI material panel + autosave
-   migration + EditHistory wiring**. The schema is in place
-   (C-1, see `v0.10c1-complete.md`); the worker is verified
-   (B-bis). What remains is putting it in front of the user.
-   Concretely:
-   * **GUI material panel.** Right side panel: "What is this
-     model?" `TextEdit` bound to `ResMut<ProjectMeta>`, plus a
-     `[Generate]` button. On click, fan-out one
-     `texgen.gen` task per non-empty palette slot via Rustyme
-     **Canvas group**, group-id collected from the chord
-     callback the worker emits.
-   * **Per-slot prompt derivation.** Palette colour (RGB) + cell
-     count + top/middle/bottom bias + adjacency → augment the
-     project-wide `model_description` into a per-slot prompt the
-     worker actually sees. `override_hint` (when set) replaces
-     this entirely.
-   * **EditHistory generalisation (the C-2 piece).** Widen
-     `bin/history.rs::PaintOp` into an `EditOp` enum with
-     `Paint(...) | SetModelDescription { before, after } |
-     SetOverrideHint { slot, before, after }`. The lib already
-     hands you the `before` value: `Palette::set_override_hint`
-     and `Palette::set_texture` return the previous value. One
-     undo stack, three event types — keeps the user's mental
-     model intact.
-   * **Autosave migration.** Switch `autosave.rs::write_swap`
-     and `session.rs` Save / SaveAs to
-     `project::write_project_with_meta` (passing the
-     `Res<ProjectMeta>`). Otherwise an autosave between two
-     keystrokes will silently drop a freshly-typed
-     `model_description`.
-   * **Toon shader.** Optional `baseColorTexture` per
-     palette-material; when `TexturePrefs::view_mode == Textured`,
-     all cells of that colour share UVs into the per-slot tile.
-     `Flat` / `Textured` toggle in the View menu.
+1. **v0.10 D-1.C / D-1.D — finish the texturing UX**.
+   D-1.A (Material drawer + ProjectMeta wiring + autosave + undo)
+   and D-1.B (per-slot right-click `Generate texture →`) shipped
+   2026-04-28; what remains is the bulk path and the actual
+   render-side hookup. See `v0.10d1-complete.md` for what already
+   exists; the two outstanding slices:
+
+   * **D-1.C — `Generate all` + Rustyme Canvas-group fan-out.**
+     One button on the Material drawer that walks every live
+     palette slot and dispatches a single Rustyme **Canvas group**
+     (group_id + chord callback the worker emits when the last
+     task in the group is done). Per-slot prompt derivation
+     (`derive_texture_prompt`) is already in place from C-1; the
+     missing piece is Rustyme's group-batching protocol on the
+     `slot_texgen.rs` side. Reuses every other piece of D-1.B:
+     `PendingSlotGen` lifecycle, `cache_put`, `PaletteSlotMeta::texture`
+     write-back, busy guards.
+
+   * **D-1.D — Flat / Textured toon-shader hookup.** The
+     `View: Flat / Textured` radio in the Material drawer
+     currently only persists into `ProjectMeta::texture_prefs`.
+     Wire it through `toon::ToonPlugin` so when `view_mode ==
+     Textured` we set the `base_color_texture` of each
+     palette-material to the slot's `<cache_key>.png` (loaded
+     through `bevy::asset::AssetServer`). All cells of that
+     colour share UVs (one seamless tile per slot — the headless
+     mesh export already groups by palette index, GUI just
+     mirrors that). Includes a one-time PNG → wgpu texture
+     upload pass when the user flips the toggle on.
 
 ### Blocked / external
 
@@ -129,9 +135,9 @@ wants.
    the routing + revoke path against an empty-key worker, see
    `v0.10b-bis-complete.md` § 4 / `USER-TODO.md` `#TEX-B-fal`).
    Not on Maquette's plate.
-3. **v0.10 D-1** — *is* #1 above (renumbered now that the
-   schema is in place and the worker is verified). The next big
-   milestone whenever the agent has a free session.
+3. **v0.10 D-1 finish** — *is* #1 above. D-1.A + D-1.B already
+   shipped; D-1.C (Canvas-group fan-out) + D-1.D (toon shader
+   Textured render) outstanding.
 4. **User validation pass** — `USER-TODO.md` has a stack of items
    freshly to-hand: `#1c` shape cycle / `#1c-async` async export /
    `#17b` PIP click / `#17c` PIP colour + axes / `#18` float pose

@@ -54,7 +54,7 @@
 
 use std::path::{Path, PathBuf};
 
-use bevy::prelude::Color;
+use bevy::prelude::{Color, Resource};
 use serde::{Deserialize, Serialize};
 
 use crate::grid::{Cell, Grid, Palette};
@@ -280,16 +280,22 @@ impl ProjectFile {
 ///
 /// Lives next to `Grid` + `Palette` rather than inside `Palette`
 /// because both fields are project-wide (free-form description,
-/// textures view mode, color-hint policy). The GUI keeps them in a
-/// dedicated Bevy resource (`bin/main.rs` adds it as
-/// `ResMut<ProjectMeta>` in v0.10 D-1); the headless lib treats it
-/// as plain data.
+/// textures view mode, color-hint policy). The GUI uses it as a
+/// Bevy resource (`session::ProjectPlugin` registers
+/// `ProjectMeta::default()` at startup); the headless lib treats
+/// it as plain data.
+///
+/// `Resource` is derived so the GUI can keep one of these in
+/// `ResMut<ProjectMeta>` parallel to the existing
+/// `ResMut<CurrentProject>`. CLI / tests construct it as a plain
+/// struct; the derive is a no-op when the bevy_ecs Resource
+/// trait isn't otherwise consulted.
 ///
 /// Defaults are deliberately the "do nothing AI-related" pose so a
 /// project that was never touched by the AI texture pipeline
 /// round-trips with all-defaults and is byte-identical (modulo
 /// field ordering) to itself.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectMeta {
     /// Free-form sentence the user types once for the whole model.
     /// Empty by default — older projects that never set it look

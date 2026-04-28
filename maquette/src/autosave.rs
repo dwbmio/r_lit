@@ -53,7 +53,7 @@ use bevy::prelude::*;
 use bevy::window::WindowFocused;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use maquette::grid::{Grid, Palette};
-use maquette::project;
+use maquette::project::{self, ProjectMeta};
 
 use crate::history::EditHistory;
 use crate::notify::Toasts;
@@ -111,6 +111,7 @@ fn autosave_on_stroke(
     history: Res<EditHistory>,
     grid: Res<Grid>,
     palette: Res<Palette>,
+    meta: Res<ProjectMeta>,
     current: Res<CurrentProject>,
     mut state: ResMut<AutosaveState>,
 ) {
@@ -142,7 +143,7 @@ fn autosave_on_stroke(
         return;
     }
 
-    flush_swap(path, &grid, &palette, &mut state, committed);
+    flush_swap(path, &grid, &palette, &meta, &mut state, committed);
 }
 
 fn autosave_on_blur(
@@ -150,6 +151,7 @@ fn autosave_on_blur(
     history: Res<EditHistory>,
     grid: Res<Grid>,
     palette: Res<Palette>,
+    meta: Res<ProjectMeta>,
     current: Res<CurrentProject>,
     mut state: ResMut<AutosaveState>,
 ) {
@@ -171,20 +173,27 @@ fn autosave_on_blur(
         // a write trigger; it's "write pending edits now, if any".
         return;
     }
-    flush_swap(path, &grid, &palette, &mut state, committed);
+    flush_swap(path, &grid, &palette, &meta, &mut state, committed);
 }
 
 fn flush_swap(
     project_path: &std::path::Path,
     grid: &Grid,
     palette: &Palette,
+    meta: &ProjectMeta,
     state: &mut AutosaveState,
     committed: u64,
 ) {
-    match project::write_swap(project_path, grid, palette) {
+    // v0.10 D-1 migration: was `project::write_swap` (which goes
+    // through the legacy `write_project`, dropping ProjectMeta on
+    // the floor). Now `write_project_with_meta(swap_path(...), …)`
+    // — a typed `model_description` set in the GUI survives an
+    // autosave + crash + Recover cycle.
+    let swap_path = project::swap_path(project_path);
+    match project::write_project_with_meta(&swap_path, grid, palette, meta) {
         Ok(()) => {
             state.last_flushed_strokes = committed;
-            log::info!("autosaved → {}", project::swap_path(project_path).display());
+            log::info!("autosaved → {}", swap_path.display());
         }
         Err(e) => {
             // We intentionally don't toast here — autosave is
@@ -230,6 +239,7 @@ fn render_recovery_modal(
     mut prompt: ResMut<RecoveryPrompt>,
     mut grid: ResMut<Grid>,
     mut palette: ResMut<Palette>,
+    mut meta: ResMut<ProjectMeta>,
     mut current: ResMut<CurrentProject>,
     mut history: ResMut<EditHistory>,
     mut toasts: ResMut<Toasts>,
@@ -281,10 +291,15 @@ fn render_recovery_modal(
 
     match decision {
         Decision::Recover => {
-            match project::read_project(&project::swap_path(&project_path)) {
-                Ok((g, p)) => {
+            // v0.10 D-1: was `read_project` which dropped meta.
+            // Now `read_project_with_meta` so a recovered project
+            // surfaces the same `model_description` /
+            // `texture_prefs` it had before the crash.
+            match project::read_project_with_meta(&project::swap_path(&project_path)) {
+                Ok((g, p, m)) => {
                     *grid = g;
                     *palette = p;
+                    *meta = m;
                     current.path = Some(project_path.clone());
                     // The in-memory state is now strictly newer than
                     // the `.maq` — mark dirty so the user sees the

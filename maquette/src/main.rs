@@ -18,6 +18,7 @@ mod notify;
 mod preview_mesh;
 mod scene;
 mod session;
+mod slot_texgen;
 mod toon;
 mod ui;
 
@@ -120,6 +121,7 @@ fn main() {
         .add_plugins(autosave::AutosavePlugin)
         .add_plugins(block_library::BlockLibraryPlugin)
         .add_plugins(block_composer::BlockComposerPlugin)
+        .add_plugins(slot_texgen::SlotTexgenPlugin)
         .add_plugins(ui::UiPlugin)
         .run();
 }
