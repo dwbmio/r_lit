@@ -182,8 +182,14 @@ struct PackerState {
     auto_pack: bool,
     /// Receiver for background pack results
     pack_rx: Option<std::sync::mpsc::Receiver<BackgroundPackResult>>,
-    /// Flag: auto-pack needed on next frame (set by drop/add)
+    /// Auto-pack queued by an event (drop/add/delete/settings change). Honored
+    /// only when `auto_pack` is on; otherwise just sits dirty until the user
+    /// clicks Pack!.
     needs_auto_pack: bool,
+    /// User clicked Pack! — bypass the `auto_pack` gate. Cleared after the
+    /// pack thread is launched. Separate from `needs_auto_pack` so a user
+    /// who turned auto-pack OFF can still manually trigger packs.
+    manual_pack: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -281,6 +287,7 @@ impl PackerState {
             auto_pack: true,
             pack_rx: None,
             needs_auto_pack: false,
+            manual_pack: false,
         }
     }
 
@@ -298,6 +305,7 @@ impl PackerState {
             auto_pack: true,
             pack_rx: None,
             needs_auto_pack: needs_pack,
+            manual_pack: false,
         }
     }
 
@@ -1303,11 +1311,23 @@ impl MJAtlasApp {
 
         }
 
-        // Trigger auto-pack (must be outside the borrow above)
-        let should_auto_pack = matches!(&self.mode, AppMode::Packer(s) if s.needs_auto_pack && s.pack_rx.is_none() && !s.project.sprites.is_empty());
-        if should_auto_pack {
+        // Trigger pack (must be outside the borrow above). Two gates:
+        //   - `manual_pack` (Pack! button): always honored — explicit user
+        //     intent must work even with auto-pack disabled.
+        //   - `needs_auto_pack` (drop/add/delete/settings event): honored
+        //     only when `auto_pack` toggle is on, so the toggle is not
+        //     decorative.
+        let should_run = matches!(
+            &self.mode,
+            AppMode::Packer(s)
+                if s.pack_rx.is_none()
+                && !s.project.sprites.is_empty()
+                && (s.manual_pack || (s.needs_auto_pack && s.auto_pack))
+        );
+        if should_run {
             if let AppMode::Packer(state) = &mut self.mode {
                 state.needs_auto_pack = false;
+                state.manual_pack = false;
             }
             self.trigger_pack(ctx);
         }
@@ -1367,44 +1387,109 @@ impl MJAtlasApp {
                         // Packing
                         ui.heading("Packing");
                         ui.add_space(4.0);
+                        // Each pack-affecting widget records both `dirty` (so
+                        // the project gets a save prompt later) AND
+                        // `needs_auto_pack` (so the preview catches up to the
+                        // new options on the very next frame). Pre-v0.3.3 only
+                        // a couple of widgets even tracked .changed(), so e.g.
+                        // toggling "Power-of-2" silently kept showing the old
+                        // atlas.
+                        let mut pack_settings_changed: Option<&'static str> = None;
                         ui.horizontal(|ui| {
                             ui.label("Max size:");
                             egui::ComboBox::from_id_salt("max_size")
                                 .selected_text(format!("{}", s.max_size))
                                 .show_ui(ui, |ui| {
                                     for sz in [256, 512, 1024, 2048, 4096, 8192] {
-                                        if ui.selectable_value(&mut s.max_size, sz, format!("{}", sz)).changed() {
-                                            state.dirty = true;
+                                        if ui
+                                            .selectable_value(&mut s.max_size, sz, format!("{}", sz))
+                                            .changed()
+                                        {
+                                            pack_settings_changed = Some("max_size");
                                         }
                                     }
                                 });
                         });
                         ui.horizontal(|ui| {
                             ui.label("Spacing:");
-                            ui.add(egui::DragValue::new(&mut s.spacing).range(0..=32));
+                            if ui
+                                .add(egui::DragValue::new(&mut s.spacing).range(0..=32))
+                                .changed()
+                            {
+                                pack_settings_changed = Some("spacing");
+                            }
                             ui.label("Pad:");
-                            ui.add(egui::DragValue::new(&mut s.padding).range(0..=32));
+                            if ui
+                                .add(egui::DragValue::new(&mut s.padding).range(0..=32))
+                                .changed()
+                            {
+                                pack_settings_changed = Some("padding");
+                            }
                             ui.label("Extr:");
-                            ui.add(egui::DragValue::new(&mut s.extrude).range(0..=8));
+                            if ui
+                                .add(egui::DragValue::new(&mut s.extrude).range(0..=8))
+                                .changed()
+                            {
+                                pack_settings_changed = Some("extrude");
+                            }
                         });
-                        ui.checkbox(&mut s.trim, "Trim transparent");
-                        ui.checkbox(&mut s.rotate, "Allow rotation");
-                        ui.checkbox(&mut s.pot, "Power-of-2");
-                        ui.checkbox(&mut s.polygon, "Polygon mesh");
+                        if ui.checkbox(&mut s.trim, "Trim transparent").changed() {
+                            pack_settings_changed = Some("trim");
+                        }
+                        if ui.checkbox(&mut s.rotate, "Allow rotation").changed() {
+                            pack_settings_changed = Some("rotate");
+                        }
+                        if ui.checkbox(&mut s.pot, "Power-of-2").changed() {
+                            pack_settings_changed = Some("pot");
+                        }
+                        if ui.checkbox(&mut s.polygon, "Polygon mesh").changed() {
+                            pack_settings_changed = Some("polygon");
+                        }
                         if s.polygon {
                             ui.horizontal(|ui| {
                                 ui.add_space(20.0);
                                 ui.label("Tolerance:");
-                                ui.add(egui::DragValue::new(&mut s.tolerance).range(0.5..=10.0).speed(0.1));
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut s.tolerance)
+                                            .range(0.5..=10.0)
+                                            .speed(0.1),
+                                    )
+                                    .changed()
+                                {
+                                    pack_settings_changed = Some("tolerance");
+                                }
                             });
                         }
-                        ui.checkbox(&mut s.quantize, "PNG quantize");
+                        // Quantize / quantize_quality only affect on-disk
+                        // encoding (imagequant runs in save_to_disk, not in
+                        // pack::execute). They're "dirty" but don't justify
+                        // a fresh in-memory pack — the preview pixels are
+                        // identical either way.
+                        if ui.checkbox(&mut s.quantize, "PNG quantize").changed() {
+                            state.dirty = true;
+                        }
                         if s.quantize {
                             ui.horizontal(|ui| {
                                 ui.add_space(20.0);
                                 ui.label("Quality:");
-                                ui.add(egui::DragValue::new(&mut s.quantize_quality).range(1..=100));
+                                if ui
+                                    .add(egui::DragValue::new(&mut s.quantize_quality).range(1..=100))
+                                    .changed()
+                                {
+                                    state.dirty = true;
+                                }
                             });
+                        }
+
+                        if let Some(field) = pack_settings_changed {
+                            // Surface the change in the runlog so reviewing the
+                            // sidecar shows which knob was twisted between two
+                            // packs (essential when several settings move
+                            // before the user clicks anywhere else).
+                            log::info!("gui: settings changed — {} (queued auto-pack)", field);
+                            state.dirty = true;
+                            state.needs_auto_pack = true;
                         }
 
                         ui.add_space(8.0);
@@ -1451,7 +1536,10 @@ impl MJAtlasApp {
                             )
                             .clicked()
                         {
-                            state.needs_auto_pack = true;
+                            // Manual click — always run, even if auto-pack
+                            // is off (the toggle gates only event-driven
+                            // packs, not explicit Pack! presses).
+                            state.manual_pack = true;
                         }
 
                         if is_packing {
