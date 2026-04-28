@@ -493,6 +493,31 @@ impl Palette {
         Some(prev)
     }
 
+    /// Bind a [`crate::block_meta::BlockMeta`] to this slot, returning
+    /// the previously-bound id. `None` unbinds. Whitespace-only ids
+    /// are coerced to `None` on the same principle as
+    /// [`Self::set_override_hint`].
+    ///
+    /// Resolution of the id (deciding which provider serves it,
+    /// applying default color / shape_hint, etc.) is the caller's
+    /// responsibility. This setter only records the binding —
+    /// keeping the lib free of any HTTP / cache coupling that an
+    /// auto-resolver would drag in.
+    pub fn set_block_id(&mut self, idx: u8, block_id: Option<String>) -> Option<Option<String>> {
+        let normalised = block_id.and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let meta = self.slot_meta.get_mut(idx as usize)?;
+        let prev = std::mem::take(&mut meta.block_id);
+        meta.block_id = normalised;
+        Some(prev)
+    }
+
     /// Restore the `slot_meta.len() == colors.len()` invariant
     /// after an external rewrite (i.e. project file load). Pads
     /// with default meta when too short, truncates when too long.
@@ -730,7 +755,7 @@ mod palette_tests {
         for _ in 0..3 {
             palette.slot_meta.push(PaletteSlotMeta {
                 override_hint: Some("ignore".into()),
-                texture: None,
+                ..Default::default()
             });
         }
         palette.ensure_meta_alignment();
@@ -759,6 +784,41 @@ mod palette_tests {
         assert!(palette.meta(0).unwrap().override_hint.is_none());
         palette.set_override_hint(0, Some("".into())).unwrap();
         assert!(palette.meta(0).unwrap().override_hint.is_none());
+    }
+
+    #[test]
+    fn set_block_id_returns_previous_value_and_normalises_whitespace() {
+        let mut palette = Palette::default();
+        // No prior binding.
+        let prev = palette.set_block_id(0, Some("grass".into())).unwrap();
+        assert!(prev.is_none());
+        assert_eq!(palette.meta(0).unwrap().block_id.as_deref(), Some("grass"));
+        // Re-bind: previous shows up.
+        let prev = palette
+            .set_block_id(0, Some("oak_planks".into()))
+            .unwrap();
+        assert_eq!(prev.as_deref(), Some("grass"));
+        // Unbind via `None`.
+        let prev = palette.set_block_id(0, None).unwrap();
+        assert_eq!(prev.as_deref(), Some("oak_planks"));
+        assert!(palette.meta(0).unwrap().block_id.is_none());
+        // Whitespace-only collapses to None — identical to
+        // `set_override_hint`'s behaviour.
+        palette.set_block_id(1, Some("   ".into())).unwrap();
+        assert!(palette.meta(1).unwrap().block_id.is_none());
+        // Out-of-bounds.
+        assert!(palette.set_block_id(99, Some("x".into())).is_none());
+    }
+
+    #[test]
+    fn set_block_id_keeps_invariant_on_meta_emptiness() {
+        let mut palette = Palette::default();
+        // Setting block_id alone makes the meta non-empty.
+        palette.set_block_id(0, Some("grass".into())).unwrap();
+        assert!(!palette.meta(0).unwrap().is_empty());
+        // Clearing it brings the meta back to empty.
+        palette.set_block_id(0, None).unwrap();
+        assert!(palette.meta(0).unwrap().is_empty());
     }
 
     #[test]

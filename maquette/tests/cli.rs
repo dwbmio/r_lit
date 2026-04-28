@@ -695,6 +695,163 @@ fn cli_texture_purge_requires_admin_url() {
     );
 }
 
+// ---------------------------------------------------------------------
+// `block` subcommand tests (added with the v0.10 D-1 prep work).
+//
+// The hfrog-flavoured tests run against an in-process loopback HTTP
+// server so they don't reach for the network. Cache directories are
+// scoped to a tempdir via XDG_CACHE_HOME so concurrent test runs
+// don't leak through `~/.cache/maquette/`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn cli_block_list_local_table_form() {
+    let output = Command::new(cli_bin())
+        .args(["block", "list", "--source", "local"])
+        .output()
+        .expect("failed to spawn");
+    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Header row + 12 bundled blocks + footer "12 blocks total".
+    assert!(stdout.contains("ID"), "table header missing: {stdout}");
+    assert!(stdout.contains("grass"), "expected `grass`: {stdout}");
+    assert!(stdout.contains("oak_planks") || stdout.contains("wood"));
+    assert!(stdout.contains("12 blocks total"));
+}
+
+#[test]
+fn cli_block_list_local_json_is_valid() {
+    let output = Command::new(cli_bin())
+        .args(["block", "list", "--source", "local", "--json"])
+        .output()
+        .expect("failed to spawn");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--json should emit valid JSON");
+    let arr = parsed.as_array().expect("expected an array");
+    assert_eq!(arr.len(), 12, "default local block count");
+    // Every entry must carry the discriminator.
+    for entry in arr {
+        let kind = entry["source"]["kind"].as_str().unwrap_or_default();
+        assert_eq!(kind, "local", "block missing source.kind=local: {entry}");
+    }
+}
+
+#[test]
+fn cli_block_get_known_id_text_form() {
+    let output = Command::new(cli_bin())
+        .args(["block", "get", "grass", "--source", "local"])
+        .output()
+        .expect("failed to spawn");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("id:           grass"));
+    assert!(stdout.contains("source:       local"));
+    assert!(stdout.contains("texture_hint:"));
+}
+
+#[test]
+fn cli_block_get_unknown_id_fails() {
+    let output = Command::new(cli_bin())
+        .args(["block", "get", "definitely_not_a_real_block", "--source", "local"])
+        .output()
+        .expect("failed to spawn");
+    assert!(!output.status.success(), "unknown block must error");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found") || stderr.contains("definitely_not_a_real_block"),
+        "stderr should explain: {stderr}"
+    );
+}
+
+#[test]
+fn cli_block_sync_against_in_process_mock_writes_cache() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    // 1. Spin up a one-shot mock HTTP server. Returns base URL + a
+    //    handle that captures the request line for assertion.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body = r#"{"code":0,"data":[
+        {"pid":42,"name":"mock_block","ver":"0.1.0","md5":"x","descript":"d",
+         "tag":{"id":"mock_block","texture_hint":"a hint","display_name":"模拟块"}}
+    ]}"#;
+    let body_owned = body.to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body_owned.len(),
+            body_owned
+        );
+        stream.write_all(resp.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    // 2. Sandboxed XDG_CACHE_HOME so the test never touches ~/.cache.
+    let tmp = tempfile::tempdir().unwrap();
+
+    // 3. Drive `block sync --base-url <mock>`.
+    let output = Command::new(cli_bin())
+        .env("XDG_CACHE_HOME", tmp.path())
+        .args([
+            "block", "sync",
+            "--base-url",
+        ])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .output()
+        .expect("failed to spawn");
+    handle.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("synced 1 blocks"), "got: {stdout}");
+
+    // 4. Cache file landed where we expect.
+    let cache_file = tmp
+        .path()
+        .join("maquette/blocks/hfrog/maquette-block/v1/mock_block.json");
+    assert!(cache_file.exists(), "cache file missing at {}", cache_file.display());
+    let cached = std::fs::read_to_string(&cache_file).unwrap();
+    // pretty-printed JSON has whitespace; serde_json round-trip is
+    // the cleanest assertion (and proves the file is well-formed).
+    let parsed: serde_json::Value = serde_json::from_str(&cached).unwrap();
+    assert_eq!(parsed["id"], "mock_block");
+    assert_eq!(parsed["texture_hint"], "a hint");
+    assert_eq!(parsed["source"]["kind"], "hfrog");
+}
+
+#[test]
+fn cli_block_list_all_returns_local_when_hfrog_offline() {
+    // `--source all` should never *fail* just because hfrog is
+    // unreachable — it falls through to local. We force an
+    // unreachable URL to guarantee the network call errors quickly.
+    let tmp = tempfile::tempdir().unwrap();
+    let output = Command::new(cli_bin())
+        .env("XDG_CACHE_HOME", tmp.path())
+        .env("MAQUETTE_HFROG_BASE_URL", "http://127.0.0.1:1") // RFC 6890 reserved low port
+        .env("MAQUETTE_HFROG_TIMEOUT_SECS", "1")
+        .args(["block", "list", "--source", "all"])
+        .output()
+        .expect("failed to spawn");
+    assert!(
+        output.status.success(),
+        "all-source list must succeed even when hfrog unreachable. stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("12 blocks total") || stdout.contains("grass"));
+}
+
 /// Selecting `--provider rustyme` without `MAQUETTE_RUSTYME_REDIS_URL`
 /// must fail with an actionable error pointing at the docs; otherwise
 /// the user sees an opaque "redis connect" error that looks like a

@@ -6,6 +6,7 @@
 //! why this split exists.
 
 mod autosave;
+mod block_library;
 mod camera;
 mod export_dialog;
 mod float_window;
@@ -115,6 +116,7 @@ fn main() {
         .add_plugins(float_window::FloatWindowPlugin)
         .add_plugins(notify::NotifyPlugin)
         .add_plugins(autosave::AutosavePlugin)
+        .add_plugins(block_library::BlockLibraryPlugin)
         .add_plugins(ui::UiPlugin)
         .run();
 }

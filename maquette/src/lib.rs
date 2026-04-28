@@ -27,7 +27,13 @@
 //! - [`texture_meta`] — per-palette-slot texture metadata
 //!   (`override_hint`, `texture: TextureHandle`) and project-wide
 //!   `TexturePrefs`. Introduced in schema v4 (v0.10 C).
+//! - [`block_meta`] — block-level metadata (`BlockMeta`),
+//!   provider trait, built-in 12-block `LocalProvider`, and
+//!   `hfrog::HfrogProvider` (HTTP client for the artifact server
+//!   at `https://starlink.youxi123.com/hfrog`). Introduced
+//!   alongside the v0.10 D AI texture pipeline.
 
+pub mod block_meta;
 pub mod export;
 pub mod grid;
 pub mod mesher;

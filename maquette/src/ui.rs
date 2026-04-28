@@ -20,6 +20,7 @@ use maquette::grid::{
 
 use bevy::window::PrimaryWindow;
 
+use crate::block_library::{BlockBindAction, BlockLibraryState, SyncBlockLibrary};
 use crate::camera::{
     egui_rect, FitPreviewToModel, PreviewViewportRect, ResetPreviewView, ZoomPreview, ZOOM_STEP,
 };
@@ -41,6 +42,12 @@ pub struct UiMessages<'w> {
     pub zoom_view: MessageWriter<'w, ZoomPreview>,
     pub history: MessageWriter<'w, HistoryAction>,
     pub jump_ortho: MessageWriter<'w, JumpToOrthoView>,
+    /// Slot ↔ block id binding. UI right-click menus + Block
+    /// Library cards write here; `block_library::handle_bind_action`
+    /// applies the change through `Palette::set_block_id`.
+    pub block_bind: MessageWriter<'w, BlockBindAction>,
+    /// Trigger a hfrog catalog re-fetch.
+    pub block_sync: MessageWriter<'w, SyncBlockLibrary>,
     /// Reactive-rendering wake-up (`WinitSettings::desktop_app()` only
     /// runs `Update` when winit fires an event or someone writes
     /// `RequestRedraw`). After any blocking native dialog we have to
@@ -198,6 +205,7 @@ fn ui_system(
     export_state: Res<ExportInProgress>,
     mut pending_export_dialog: ResMut<PendingExportDialog>,
     pending_project_dialog: Res<PendingProjectDialog>,
+    library: Res<BlockLibraryState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut msgs: UiMessages,
 ) -> Result {
@@ -209,6 +217,8 @@ fn ui_system(
     let zoom_view_ev = &mut msgs.zoom_view;
     let history_ev = &mut msgs.history;
     let jump_ortho_ev = &mut msgs.jump_ortho;
+    let block_bind_ev = &mut msgs.block_bind;
+    let block_sync_ev = &mut msgs.block_sync;
     let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
@@ -662,6 +672,25 @@ fn ui_system(
         ui_state.show_about = open;
     }
 
+    // Block Library (right side). Mounts before the left canvas
+    // panel so its width is settled by the time `available_rect`
+    // is read; egui side panels are evaluated in declaration
+    // order, and the canvas's preview viewport sync wants the
+    // *remaining* central area.
+    egui::SidePanel::right("block_library_panel")
+        .default_width(280.0)
+        .min_width(220.0)
+        .show(ctx, |ui| {
+            block_library_panel(
+                ui,
+                &palette,
+                &library,
+                &mut *block_bind_ev,
+                &mut *block_sync_ev,
+                &mut *redraw_ev,
+            );
+        });
+
     let canvas_rect = egui::SidePanel::left("canvas_panel")
         .default_width(520.0)
         .min_width(360.0)
@@ -678,7 +707,7 @@ fn ui_system(
             );
             ui.add_space(10.0);
             ui.separator();
-            palette_bar(ui, &mut palette, &mut ui_state);
+            palette_bar(ui, &mut palette, &mut ui_state, &library, &mut *block_bind_ev);
             rect
         })
         .inner;
@@ -1172,7 +1201,13 @@ fn handle_shortcuts(
     });
 }
 
-fn palette_bar(ui: &mut egui::Ui, palette: &mut Palette, ui_state: &mut UiState) {
+fn palette_bar(
+    ui: &mut egui::Ui,
+    palette: &mut Palette,
+    ui_state: &mut UiState,
+    library: &BlockLibraryState,
+    block_bind_ev: &mut MessageWriter<BlockBindAction>,
+) {
     ui.label(egui::RichText::new("Palette").strong());
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
@@ -1227,6 +1262,11 @@ fn palette_bar(ui: &mut egui::Ui, palette: &mut Palette, ui_state: &mut UiState)
             // future bevy_egui bump breaks this call site, swap to
             // `response.context_menu_with_ctx` without changing the
             // body.
+            // Snapshot any current block binding for this slot
+            // before we hand `palette` into the closure mutably.
+            let bound_block_id = palette
+                .meta(slot_idx)
+                .and_then(|m| m.block_id.as_deref().map(|s| s.to_string()));
             response.context_menu(|ui| {
                 ui.label(format!("Slot #{slot_idx}"));
                 let mut rgb = [
@@ -1238,6 +1278,51 @@ fn palette_bar(ui: &mut egui::Ui, palette: &mut Palette, ui_state: &mut UiState)
                     palette.update(slot_idx, Color::srgb(rgb[0], rgb[1], rgb[2]));
                 }
                 ui.separator();
+
+                // Block binding: nested submenu showing every known
+                // block id (local + cached hfrog), with the current
+                // binding marked.
+                let bind_label = match bound_block_id.as_deref() {
+                    Some(id) => format!("Block: {id}"),
+                    None => "Bind block…".to_string(),
+                };
+                ui.menu_button(bind_label, |ui| {
+                    if library.blocks.is_empty() {
+                        ui.label(
+                            egui::RichText::new("(no blocks — sync hfrog or rebuild)")
+                                .small()
+                                .italics(),
+                        );
+                    }
+                    for b in &library.blocks {
+                        let is_current = bound_block_id.as_deref() == Some(&b.id);
+                        let label = if is_current {
+                            format!("✔ {} · {}", b.id, b.source.label())
+                        } else {
+                            format!("  {} · {}", b.id, b.source.label())
+                        };
+                        if ui
+                            .button(label)
+                            .on_hover_text(&b.description)
+                            .clicked()
+                        {
+                            block_bind_ev.write(BlockBindAction::Bind {
+                                slot: slot_idx,
+                                block_id: b.id.clone(),
+                            });
+                            ui.close();
+                        }
+                    }
+                    if bound_block_id.is_some() {
+                        ui.separator();
+                        if ui.button("Unbind").clicked() {
+                            block_bind_ev.write(BlockBindAction::Unbind { slot: slot_idx });
+                            ui.close();
+                        }
+                    }
+                });
+
+                ui.separator();
                 if ui.button("Delete…").clicked() {
                     ui_state.delete_color_modal = Some(DeleteColorDraft {
                         idx: slot_idx,
@@ -1246,6 +1331,14 @@ fn palette_bar(ui: &mut egui::Ui, palette: &mut Palette, ui_state: &mut UiState)
                     ui.close();
                 }
             });
+
+            // Bottom-right corner badge "B" if a block is bound — gives
+            // the user a visual cue at-a-glance, no hover needed.
+            if bound_block_id.is_some() {
+                let badge_radius = 5.0;
+                let badge_pos = rect.right_bottom() - egui::vec2(badge_radius + 2.0, badge_radius + 2.0);
+                painter.circle_filled(badge_pos, badge_radius, egui::Color32::from_rgb(120, 180, 255));
+            }
         }
 
         // "+" slot. Adds a new color — hue-shifted from the currently
@@ -1420,6 +1513,183 @@ fn delete_color_modal(
             ui_state.delete_color_modal = Some(draft);
         }
     }
+}
+
+/// Right side panel: the Block Library. Lists every block known to
+/// the in-memory `BlockLibraryState` (LocalProvider + cached hfrog),
+/// shows source / color / texture-hint per row, and surfaces the
+/// "Sync hfrog" button at the top so the user has a single obvious
+/// path to refresh the catalog.
+///
+/// Read-only on the resource — actual mutations go through the
+/// `BlockBindAction` / `SyncBlockLibrary` messages handled in
+/// `block_library.rs`. Keeps this panel a pure projection of state.
+fn block_library_panel(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    library: &BlockLibraryState,
+    block_bind_ev: &mut MessageWriter<BlockBindAction>,
+    block_sync_ev: &mut MessageWriter<SyncBlockLibrary>,
+    redraw_ev: &mut MessageWriter<bevy::window::RequestRedraw>,
+) {
+    ui.heading("Block Library");
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !library.is_in_flight(),
+                egui::Button::new(if library.is_in_flight() {
+                    "Syncing…"
+                } else {
+                    "Sync hfrog"
+                }),
+            )
+            .on_hover_text(
+                "Pull every maquette-block/v1 record from the hfrog \
+                 artifact server (default: \
+                 https://starlink.youxi123.com/hfrog) and merge with \
+                 the bundled local set. Override the URL with \
+                 MAQUETTE_HFROG_BASE_URL.",
+            )
+            .clicked()
+        {
+            block_sync_ev.write(SyncBlockLibrary);
+            redraw_ev.write(bevy::window::RequestRedraw);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(format!("{} blocks", library.blocks.len()))
+                    .small(),
+            );
+        });
+    });
+    if let Some(err) = &library.last_error {
+        ui.label(
+            egui::RichText::new(format!("Last sync failed: {err}"))
+                .small()
+                .color(egui::Color32::from_rgb(220, 90, 90)),
+        );
+    }
+    ui.separator();
+
+    // Currently-selected slot. We highlight the bound block (if any)
+    // and let the user re-bind without leaving the panel.
+    let selected_slot = palette.selected;
+    let bound_block_id = palette
+        .meta(selected_slot)
+        .and_then(|m| m.block_id.as_deref().map(|s| s.to_string()));
+    ui.label(
+        egui::RichText::new(format!(
+            "Selected slot: #{selected_slot}{}",
+            match bound_block_id.as_deref() {
+                Some(id) => format!(" (bound to {id})"),
+                None => String::new(),
+            }
+        ))
+        .small(),
+    );
+    ui.add_space(4.0);
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if library.blocks.is_empty() {
+                ui.add_space(20.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("(library is empty)").italics(),
+                    );
+                    ui.label(
+                        egui::RichText::new("Click Sync hfrog or rebuild — the bundled set should never be empty in production.")
+                            .small(),
+                    );
+                });
+                return;
+            }
+            for b in &library.blocks {
+                let is_current_for_selected =
+                    bound_block_id.as_deref() == Some(&b.id);
+                ui.add_space(4.0);
+                let frame = egui::Frame::group(ui.style())
+                    .stroke(if is_current_for_selected {
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 180, 255))
+                    } else {
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(80))
+                    });
+                frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        // Color swatch — gives visual feedback even without
+                        // the (post-D-1) preview thumbnail.
+                        let (sw_rect, _resp) = ui.allocate_exact_size(
+                            egui::vec2(28.0, 28.0),
+                            egui::Sense::hover(),
+                        );
+                        let painter = ui.painter_at(sw_rect);
+                        let c = b.default_color;
+                        painter.rect_filled(
+                            sw_rect,
+                            4.0,
+                            egui::Color32::from_rgba_unmultiplied(
+                                (c.r.clamp(0.0, 1.0) * 255.0) as u8,
+                                (c.g.clamp(0.0, 1.0) * 255.0) as u8,
+                                (c.b.clamp(0.0, 1.0) * 255.0) as u8,
+                                255,
+                            ),
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(b.label()).strong());
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "id: {} · {}",
+                                    b.id,
+                                    b.source.label()
+                                ))
+                                .small()
+                                .color(egui::Color32::from_gray(170)),
+                            );
+                        });
+                    });
+                    if !b.tags.is_empty() {
+                        ui.label(
+                            egui::RichText::new(b.tags.join(" · ")).small().color(
+                                egui::Color32::from_rgb(140, 170, 200),
+                            ),
+                        );
+                    }
+                    if !b.texture_hint.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&b.texture_hint).small().italics(),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        let bind_label = if is_current_for_selected {
+                            "✔ Bound"
+                        } else {
+                            "Bind to selected slot"
+                        };
+                        if ui
+                            .add_enabled(
+                                !is_current_for_selected,
+                                egui::Button::new(bind_label),
+                            )
+                            .clicked()
+                        {
+                            block_bind_ev.write(BlockBindAction::Bind {
+                                slot: selected_slot,
+                                block_id: b.id.clone(),
+                            });
+                        }
+                        if is_current_for_selected
+                            && ui.button("Unbind").clicked()
+                        {
+                            block_bind_ev.write(BlockBindAction::Unbind {
+                                slot: selected_slot,
+                            });
+                        }
+                    });
+                });
+            }
+        });
 }
 
 /// Floating brush HUD — sits in the canvas's top-left corner

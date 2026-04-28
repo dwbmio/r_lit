@@ -22,6 +22,11 @@ use std::process::ExitCode;
 
 use bevy::prelude::Color;
 use clap::{Parser, Subcommand, ValueEnum};
+use maquette::block_meta::{
+    self,
+    hfrog::{HfrogConfig, HfrogProvider},
+    BlockMetaProvider, LocalProvider,
+};
 use maquette::export::{self, ExportFormat, ExportOptions, OutlineConfig};
 use maquette::grid::{Grid, Palette};
 use maquette::palette_io;
@@ -65,6 +70,84 @@ enum Command {
     /// sonargrid cluster — worker contract in
     /// `docs/texture/rustyme.md`).
     Texture(TextureArgs),
+    /// Inspect or sync block-meta records (the `BlockMeta` data the
+    /// GUI's "Block Library" reads). Sources are `local` (built-in
+    /// 12 blocks) and `hfrog` (artifact server — defaults to
+    /// `https://starlink.youxi123.com/hfrog`, override with
+    /// `MAQUETTE_HFROG_BASE_URL`).
+    Block(BlockArgs),
+}
+
+#[derive(Parser, Debug)]
+struct BlockArgs {
+    #[command(subcommand)]
+    action: BlockAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum BlockAction {
+    /// List blocks. Default scope is `all` (local + hfrog cache,
+    /// merged). Use `--source hfrog` to force a fresh network
+    /// fetch, `--source local` to limit to bundled blocks.
+    List(BlockListArgs),
+    /// Look up a single block by id and print its meta.
+    Get(BlockGetArgs),
+    /// Pull every Maquette-block record from hfrog and persist to
+    /// the local cache. After this, offline `block list --source
+    /// hfrog` works.
+    Sync(BlockSyncArgs),
+}
+
+#[derive(Parser, Debug)]
+struct BlockListArgs {
+    /// Where to read from. `local` lists the bundled blocks;
+    /// `hfrog` reads the disk cache (warm) or hits the network
+    /// (cold); `all` merges both, with hfrog taking precedence on
+    /// id collisions. Defaults to `all`.
+    #[arg(long, value_enum, default_value_t = BlockSource::All)]
+    source: BlockSource,
+    /// Print as a JSON array (suitable for piping into `jq`).
+    /// Without this, formats as a human-readable table.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Parser, Debug)]
+struct BlockGetArgs {
+    /// Block id (e.g. `grass`, `oak_planks`).
+    id: String,
+    /// Where to look. Same semantics as `block list`.
+    #[arg(long, value_enum, default_value_t = BlockSource::All)]
+    source: BlockSource,
+    /// Print the BlockMeta as JSON.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Parser, Debug)]
+struct BlockSyncArgs {
+    /// hfrog base URL. Falls back to `MAQUETTE_HFROG_BASE_URL`
+    /// (default `https://starlink.youxi123.com/hfrog`).
+    #[arg(long)]
+    base_url: Option<String>,
+    /// hfrog `runtime` query namespace. Falls back to
+    /// `MAQUETTE_HFROG_RUNTIME` (default `maquette-block/v1`).
+    #[arg(long)]
+    runtime: Option<String>,
+    /// Print the synced list as JSON; otherwise prints a one-line
+    /// `synced N blocks → <cache_dir>` summary.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum BlockSource {
+    /// Bundled, never hits the network.
+    Local,
+    /// Cached if available; otherwise fetches from hfrog.
+    Hfrog,
+    /// Local + hfrog merged. `hfrog` wins on id collisions.
+    All,
 }
 
 #[derive(Parser, Debug)]
@@ -289,6 +372,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             TextureAction::Revoke(a) => cmd_texture_revoke(a),
             TextureAction::Purge(a) => cmd_texture_purge(a),
         },
+        Command::Block(args) => match args.action {
+            BlockAction::List(a) => cmd_block_list(a),
+            BlockAction::Get(a) => cmd_block_get(a),
+            BlockAction::Sync(a) => cmd_block_sync(a),
+        },
     }
 }
 
@@ -431,6 +519,161 @@ fn cmd_palette_import(args: PaletteImportArgs) -> Result<(), Box<dyn std::error:
     palette_io::import_palette_into(&mut palette, &args.from)?;
     project::write_project(&args.out, &grid, &palette)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// `block` subcommand — read-side only (Maquette doesn't publish to
+// hfrog; that's an ops job using hfrog's own tooling).
+// ---------------------------------------------------------------------
+
+fn cmd_block_list(args: BlockListArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let blocks = collect_blocks(args.source)?;
+    if args.json {
+        let json = serde_json::to_string_pretty(&blocks)?;
+        println!("{json}");
+    } else {
+        if blocks.is_empty() {
+            println!("(no blocks — try `maquette-cli block sync` to fetch hfrog catalog)");
+            return Ok(());
+        }
+        // Five columns: id / source / shape / color / hint-snippet.
+        println!("{:<14} {:<6} {:<6} {:<10} TEXTURE HINT", "ID", "FROM", "SHAPE", "COLOR");
+        for b in &blocks {
+            let hex = format!(
+                "#{:02x}{:02x}{:02x}",
+                (b.default_color.r * 255.0 + 0.5) as u8,
+                (b.default_color.g * 255.0 + 0.5) as u8,
+                (b.default_color.b * 255.0 + 0.5) as u8,
+            );
+            let snippet = truncate(&b.texture_hint, 60);
+            println!(
+                "{:<14} {:<6} {:<6} {:<10} {}",
+                b.id,
+                b.source.label(),
+                shape_label(b.shape_hint),
+                hex,
+                snippet
+            );
+        }
+        println!("\n{} blocks total", blocks.len());
+    }
+    Ok(())
+}
+
+fn cmd_block_get(args: BlockGetArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let block = match args.source {
+        BlockSource::Local => LocalProvider::new().get(&args.id)?,
+        BlockSource::Hfrog => HfrogProvider::new(HfrogConfig::from_env()).get(&args.id)?,
+        BlockSource::All => match LocalProvider::new().get(&args.id) {
+            Ok(b) => b,
+            Err(_) => HfrogProvider::new(HfrogConfig::from_env()).get(&args.id)?,
+        },
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&block)?);
+    } else {
+        println!("id:           {}", block.id);
+        println!("name:         {}", block.name);
+        println!("source:       {}", block.source.label());
+        println!("shape_hint:   {}", shape_label(block.shape_hint));
+        let s = block.default_color;
+        println!(
+            "default_color: rgb({}, {}, {})",
+            (s.r * 255.0 + 0.5) as u8,
+            (s.g * 255.0 + 0.5) as u8,
+            (s.b * 255.0 + 0.5) as u8,
+        );
+        if !block.tags.is_empty() {
+            println!("tags:         {}", block.tags.join(", "));
+        }
+        if !block.texture_hint.is_empty() {
+            println!("texture_hint: {}", block.texture_hint);
+        }
+        println!("description:  {}", block.description);
+    }
+    Ok(())
+}
+
+fn cmd_block_sync(args: BlockSyncArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let mut cfg = HfrogConfig::from_env();
+    if let Some(b) = args.base_url {
+        cfg.base_url = b.trim_end_matches('/').to_string();
+    }
+    if let Some(r) = args.runtime {
+        cfg.runtime = r;
+    }
+    let provider = HfrogProvider::new(cfg.clone());
+    let blocks = provider.sync()?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&blocks)?);
+    } else {
+        let cache = block_meta::default_cache_dir()
+            .map(|p| {
+                p.join("hfrog")
+                    .join(&cfg.runtime)
+                    .display()
+                    .to_string()
+            })
+            .unwrap_or_else(|| "(no cache dir)".to_string());
+        println!(
+            "synced {} blocks from {} (runtime={}) → {}",
+            blocks.len(),
+            cfg.base_url,
+            cfg.runtime,
+            cache,
+        );
+    }
+    Ok(())
+}
+
+fn collect_blocks(
+    source: BlockSource,
+) -> Result<Vec<maquette::block_meta::BlockMeta>, Box<dyn std::error::Error>> {
+    use maquette::block_meta::BlockMeta;
+    let mut out: Vec<BlockMeta> = match source {
+        BlockSource::Local => LocalProvider::new().list()?,
+        BlockSource::Hfrog => HfrogProvider::new(HfrogConfig::from_env()).list()?,
+        BlockSource::All => {
+            let mut local = LocalProvider::new().list()?;
+            // Read the cache instead of forcing a network call —
+            // `block list --source all` should be fast & offline-ok.
+            // The user explicitly opts into a network call by
+            // running `block sync` first or `block list --source
+            // hfrog`.
+            let hfrog = HfrogProvider::new(HfrogConfig::from_env())
+                .list()
+                .unwrap_or_default();
+            // hfrog wins on id collisions — same id from server
+            // overrides bundled definition (lets ops correct a
+            // block without a Maquette release).
+            let hfrog_ids: std::collections::HashSet<String> =
+                hfrog.iter().map(|b| b.id.clone()).collect();
+            local.retain(|b| !hfrog_ids.contains(&b.id));
+            local.extend(hfrog);
+            local
+        }
+    };
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(out)
+}
+
+fn shape_label(s: maquette::grid::ShapeKind) -> &'static str {
+    use maquette::grid::ShapeKind;
+    match s {
+        ShapeKind::Cube => "cube",
+        ShapeKind::Sphere => "sphere",
+    }
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        let mut t: String = chars[..max_chars.saturating_sub(1)].iter().collect();
+        t.push('…');
+        t
+    }
 }
 
 fn cmd_render(args: RenderArgs) -> Result<(), Box<dyn std::error::Error>> {
