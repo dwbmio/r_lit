@@ -160,6 +160,10 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 每个子命令都支持 `--json` 输出，方便 CI 和 dashboard 消费。
 
+## 运行日志 sidecar
+
+每次调用（CLI 或 GUI）都会在 atlas / manifest 旁边写一份 `<output>.log`，覆盖上次的。文件头部记录完整 argv 和解析后的选项；正文捕获本次运行的全部 INFO/WARN/ERROR/DEBUG 行——包括平时不到 stdout 的 DEBUG 诊断信息。失败的运行反而会留下信息最完整的 sidecar；出问题时把 `./out/atlas.log` 直接发出来就行。
+
 ## 命令行参考
 
 ```

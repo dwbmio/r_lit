@@ -260,6 +260,30 @@ mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 mj_atlas gui
 ```
 
+## Run Log (.log)
+
+Every CLI invocation (and every GUI pack) writes a fresh `<output>.log`
+sidecar next to the atlas / manifest, overwriting the previous one.
+Contents:
+- Header (lines starting with `#`): tool version, timestamp, full argv,
+  resolved subcommand, and a one-glance summary of pack options when
+  applicable.
+- Body: every INFO/WARN/ERROR/DEBUG record from this run, including the
+  diff classification, partial-repack fitting decisions, and any I/O
+  errors. DEBUG lines never reach stdout — the file is the only place
+  they appear, which is the point.
+
+The log path mirrors the manifest path:
+- `mj_atlas pack ./sprites -o atlas`     → `<input_or_output_dir>/atlas.log`
+- `mj_atlas inspect ./out/atlas.png`     → `./out/atlas.log`
+- `mj_atlas diff a.json b.json`          → next to A
+- `mj_atlas verify ./out/atlas.png ...`  → `./out/atlas.log`
+- `mj_atlas tag ...`                     → next to the manifest
+
+If the path can't be resolved (e.g. an early CLI error), the log lands
+at `mj_atlas.log` in the current working directory. Failed runs always
+get a sidecar — that's the most useful case to review afterwards.
+
 ## Manifest File (.manifest.json)
 
 When `--incremental` is enabled, mj_atlas writes `<output>.manifest.json` next to the atlas. It records:

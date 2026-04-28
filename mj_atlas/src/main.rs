@@ -4,6 +4,7 @@ mod output;
 mod pack;
 #[cfg(feature = "gui")]
 mod preview;
+mod runlog;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pack::PolygonShape;
@@ -355,31 +356,31 @@ enum OutputFormat {
     GodotTres,
 }
 
-fn init_logger() {
-    let _ = fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {}] {}",
-                humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
-                record.level(),
-                message
-            ))
-        })
-        .level(if cfg!(debug_assertions) {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
-        .chain(std::io::stdout())
-        .apply();
-}
-
 #[tokio::main]
 async fn main() {
-    init_logger();
+    runlog::init();
     let cli = Cli::parse();
 
+    // Header is written at the top of the log file via `flush(... &header)`;
+    // we don't push it through the logger so it doesn't duplicate.
+    let mut header = runlog::standard_header();
+    header.extend(subcommand_header_lines(&cli));
+
     let result = run(&cli);
+
+    if let Err(ref e) = result {
+        // Capture the failure into the buffered log BEFORE we flush, so the
+        // sidecar shows what went wrong even when --json sent the error to
+        // stderr instead of via the log macros.
+        log::error!("{}", e);
+    }
+
+    // Best-effort log flush. Path resolution can itself fail (e.g. unresolved
+    // manifest for `inspect`); on failure we drop the log into the cwd as a
+    // last-ditch fallback so the data isn't lost.
+    let log_path = compute_log_path(&cli)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("mj_atlas.log"));
+    runlog::flush(&log_path, &header);
 
     if let Err(e) = result {
         if cli.json {
@@ -387,10 +388,180 @@ async fn main() {
                 "{}",
                 serde_json::json!({"status": "error", "error": e.to_string()})
             );
-        } else {
-            log::error!("{}", e);
         }
         std::process::exit(1);
+    }
+}
+
+/// Where the log sidecar should land for this invocation. Mirrors the path
+/// the CLI is operating on so a debug session is "look next to the atlas".
+fn compute_log_path(cli: &Cli) -> Option<PathBuf> {
+    match &cli.command {
+        Commands::Pack {
+            input,
+            output,
+            output_dir,
+            ..
+        } => {
+            let dir = output_dir.clone().unwrap_or_else(|| input.clone());
+            Some(dir.join(format!("{}.log", output)))
+        }
+        Commands::Inspect { input }
+        | Commands::Verify { input, .. }
+        | Commands::Tag { input, .. } => log_path_from_anchor(input),
+        Commands::Diff { a, .. } => log_path_from_anchor(a),
+        Commands::Formats => None,
+        #[cfg(feature = "gui")]
+        Commands::Gui | Commands::Preview { .. } => None,
+    }
+}
+
+/// Resolve the manifest from a user-supplied path, then map it to a sibling
+/// `<atlas>.log` so the same name applies across all manifest subcommands.
+fn log_path_from_anchor(input: &PathBuf) -> Option<PathBuf> {
+    let manifest_path = pack::manifest::resolve_manifest_path(input).ok()?;
+    let parent = manifest_path.parent()?;
+    let raw_stem = manifest_path
+        .file_name()
+        .and_then(|s| s.to_str())?;
+    // `atlas.manifest.json` ⇒ stem "atlas"; the default `file_stem()` would
+    // give "atlas.manifest" which is misleading next to atlas.png.
+    let stem = raw_stem
+        .strip_suffix(".manifest.json")
+        .or_else(|| raw_stem.strip_suffix(".json"))
+        .unwrap_or(raw_stem);
+    Some(parent.join(format!("{}.log", stem)))
+}
+
+/// Extra header lines per subcommand — surfaced at the top of the log file
+/// for quick context when reviewing.
+fn subcommand_header_lines(cli: &Cli) -> Vec<String> {
+    match &cli.command {
+        Commands::Pack {
+            input,
+            output,
+            output_dir,
+            max_size,
+            spacing,
+            padding,
+            extrude,
+            trim,
+            rotate,
+            pot,
+            format,
+            incremental,
+            force,
+            polygon,
+            tolerance,
+            polygon_shape,
+            max_vertices,
+            quantize,
+            ..
+        } => {
+            let format_name = match format {
+                OutputFormat::Json => "json",
+                OutputFormat::JsonArray => "json-array",
+                OutputFormat::GodotTpsheet => "godot-tpsheet",
+                OutputFormat::GodotTres => "godot-tres",
+            };
+            let shape = match polygon_shape {
+                PolygonShapeArg::Concave => "concave",
+                PolygonShapeArg::Convex => "convex",
+                PolygonShapeArg::Auto => "auto",
+            };
+            vec![
+                "subcommand: pack".to_string(),
+                format!("input:      {}", input.display()),
+                format!(
+                    "output:     {}/{}.{}",
+                    output_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| input.display().to_string()),
+                    output,
+                    if matches!(format, OutputFormat::GodotTres) {
+                        "tres"
+                    } else if matches!(format, OutputFormat::GodotTpsheet) {
+                        "tpsheet"
+                    } else {
+                        "json"
+                    }
+                ),
+                format!(
+                    "layout:     max_size={} spacing={} padding={} extrude={} trim={} rotate={} pot={}",
+                    max_size, spacing, padding, extrude, trim, rotate, pot
+                ),
+                format!(
+                    "polygon:    {} (shape={} tolerance={} max_vertices={})",
+                    if *polygon { "on" } else { "off" },
+                    shape,
+                    tolerance,
+                    max_vertices
+                ),
+                format!(
+                    "incremental: {}{}  format: {}  quantize: {}",
+                    incremental,
+                    if *force { " (force)" } else { "" },
+                    format_name,
+                    quantize
+                ),
+            ]
+        }
+        Commands::Inspect { input } => vec![
+            "subcommand: inspect".to_string(),
+            format!("input:      {}", input.display()),
+        ],
+        Commands::Diff { a, b } => vec![
+            "subcommand: diff".to_string(),
+            format!("a:          {}", a.display()),
+            format!("b:          {}", b.display()),
+        ],
+        Commands::Verify {
+            input,
+            check_sources,
+        } => vec![
+            "subcommand: verify".to_string(),
+            format!("input:      {}", input.display()),
+            format!("check_sources: {}", check_sources),
+        ],
+        Commands::Tag {
+            input,
+            sprite,
+            add,
+            remove,
+            clear,
+            set_attribution,
+            clear_attribution,
+            set_source_url,
+            clear_source_url,
+            list,
+        } => vec![
+            "subcommand: tag".to_string(),
+            format!("input:      {}", input.display()),
+            format!(
+                "target:     {}",
+                sprite.as_deref().unwrap_or("(all sprites)")
+            ),
+            format!(
+                "ops:        add={:?} remove={:?} clear={} set_attr={} clear_attr={} set_url={} clear_url={} list={}",
+                add,
+                remove,
+                clear,
+                set_attribution.is_some(),
+                clear_attribution,
+                set_source_url.is_some(),
+                clear_source_url,
+                list
+            ),
+        ],
+        Commands::Formats => vec!["subcommand: formats".to_string()],
+        #[cfg(feature = "gui")]
+        Commands::Gui => vec!["subcommand: gui".to_string()],
+        #[cfg(feature = "gui")]
+        Commands::Preview { file } => vec![
+            "subcommand: preview".to_string(),
+            format!("file:       {}", file.display()),
+        ],
     }
 }
 

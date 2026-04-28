@@ -160,6 +160,10 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 JSON output (`--json`) is available on every subcommand for CI / dashboards.
 
+## Run Log Sidecar
+
+Every invocation (CLI or GUI) writes `<output>.log` next to the atlas/manifest, overwriting the previous one. Header records the full argv and resolved options; body captures every INFO/WARN/ERROR/DEBUG line — including DEBUG diagnostics that never reach stdout. Failed runs get the most informative sidecar; just `cat ./out/atlas.log` to share what happened.
+
 ## CLI Reference
 
 ```

@@ -1,6 +1,6 @@
 [package]
 name = "mj_atlas"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "MJAtlas — game-ready texture atlas packer (UV-stable incremental, multi-component polygon mesh, manifest as first-class artifact: inspect/diff/verify/tag, Godot native output)"
 
@@ -14,7 +14,6 @@ thiserror = "^2"
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
 log = "0.4"
-fern = "0.7"
 humantime = "2"
 tokio = { version = "^1", features = ["macros", "rt-multi-thread"] }
 image = "0.25"

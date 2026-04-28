@@ -1218,15 +1218,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fern"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4316185f709b23713e41e3195f90edef7fb00c3ed4adc79769cf09cc762a3b29"
-dependencies = [
- "log",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1989,14 +1980,13 @@ dependencies = [
 
 [[package]]
 name = "mj_atlas"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "clap",
  "crunch",
  "earcut",
  "eframe",
  "egui",
- "fern",
  "humantime",
  "image",
  "imagequant",

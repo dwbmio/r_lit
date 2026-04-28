@@ -1176,7 +1176,36 @@ impl MJAtlasApp {
 
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx_clone = ctx.clone();
+            // The log path must be derivable from `opts` BEFORE the thread
+            // moves it. We capture it once so a failed pack still leaves a
+            // sidecar the user can inspect from the GUI's working dir.
+            let log_path = opts
+                .output_dir
+                .join(format!("{}.log", opts.output_name));
             std::thread::spawn(move || {
+                // Header captures the GUI-resolved options so the sidecar
+                // is self-contained when the user shares it for debugging.
+                let mut header = crate::runlog::standard_header();
+                header.push("subcommand: gui pack".to_string());
+                header.push(format!("input_dir:  {}", opts.input_dir.display()));
+                header.push(format!(
+                    "output:     {}/{}.png",
+                    opts.output_dir.display(),
+                    opts.output_name
+                ));
+                header.push(format!(
+                    "explicit_sprites: {}",
+                    opts.explicit_sprites
+                        .as_ref()
+                        .map(|v| v.len().to_string())
+                        .unwrap_or_else(|| "(none — directory scan)".into())
+                ));
+                header.push(format!(
+                    "layout: max_size={} spacing={} padding={} extrude={} trim={} rotate={} pot={}",
+                    opts.max_size, opts.spacing, opts.padding, opts.extrude,
+                    opts.trim, opts.rotate, opts.pot
+                ));
+
                 let result = match pack::execute(&opts) {
                     Ok(results) => {
                         let total: usize = results.iter().map(|r| r.sprites.len()).sum();
@@ -1206,8 +1235,17 @@ impl MJAtlasApp {
                             BackgroundPackResult::Error("No atlas produced".into())
                         }
                     }
-                    Err(e) => BackgroundPackResult::Error(format!("Pack: {}", e)),
+                    Err(e) => {
+                        // Surface the error into the runlog buffer so the
+                        // sidecar reflects the failure, not just the success
+                        // path's INFO messages.
+                        log::error!("Pack failed: {}", e);
+                        BackgroundPackResult::Error(format!("Pack: {}", e))
+                    }
                 };
+                // Always flush the log — a successful pack tells the user
+                // what was packed; a failed one tells them what went wrong.
+                crate::runlog::flush(&log_path, &header);
                 let _ = tx.send(result);
                 ctx_clone.request_repaint();
             });

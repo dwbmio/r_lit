@@ -261,6 +261,21 @@ mj_atlas pack ./sprites -o atlas --trim --pot --incremental --json
 mj_atlas gui
 ```
 
+## 运行日志 (.log)
+
+每次 CLI 调用（以及每次 GUI 触发的 pack）都会在 atlas / manifest 旁边写一个 `<output>.log` 边车文件，覆盖上一次的。结构：
+- 头部（`#` 开头的几行）：工具版本、时间戳、完整 argv、解析后的子命令、(pack 时) 关键选项摘要。
+- 正文：本次运行的所有 INFO/WARN/ERROR/DEBUG 记录，包含增量 diff 分类、局部重打 fit 决策、所有 I/O 错误。DEBUG 行**不会**到 stdout，只能在日志文件里看到——这正是这个文件存在的意义。
+
+日志路径跟随 manifest 路径：
+- `mj_atlas pack ./sprites -o atlas`     → `<输入或输出目录>/atlas.log`
+- `mj_atlas inspect ./out/atlas.png`     → `./out/atlas.log`
+- `mj_atlas diff a.json b.json`          → A 旁边
+- `mj_atlas verify ./out/atlas.png ...`  → `./out/atlas.log`
+- `mj_atlas tag ...`                     → manifest 旁边
+
+如果路径无法解析（例如早期 CLI 错误），日志落到 cwd 的 `mj_atlas.log`。失败的运行**一定**会留下日志——这恰好是事后排查最需要的场景。
+
 ## Manifest 文件 (.manifest.json)
 
 `--incremental` 模式下与 atlas 同目录写入 `<output>.manifest.json`，记录：
