@@ -49,14 +49,30 @@ fn convert_tp(
 ) -> Result<(), ReError> {
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
-    let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
-    fs::create_dir_all(out_i)?;
+    // Output directory:
+    //   1) explicit `out` argument wins,
+    //   2) otherwise the *input's* parent dir (in-place overwrite —
+    //      matches the README's "overwrites original by default"),
+    //   3) finally cwd as a last-resort fallback when the input is a
+    //      bare filename with no parent (rare; usually only on
+    //      hand-rolled invocations).
+    // Pre-fix this default was always cwd, which silently dropped the
+    // output anywhere the user happened to be `cd`'d to — and made
+    // batch scripts that pass absolute paths impossible to use.
+    let out_i = out.unwrap_or_else(|| {
+        tp.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().expect("current dir get failed!")
+            })
+    });
+    fs::create_dir_all(&out_i)?;
 
     let im = image::open(tp)?;
-    let f_path: &Path = Path::new(f_name);
     let convert_ext = clap::builder::OsStr::from(convert_type.extensions_str()[0]);
-    let f_j_path = f_path.with_extension(convert_ext);
-    let fo = &mut std::fs::File::create(f_j_path)?;
+    let f_j_path = out_i.join(f_name).with_extension(convert_ext);
+    let fo = &mut std::fs::File::create(&f_j_path)?;
     im.write_to(fo, ImageOutputFormat::Jpeg(100))?;
     Ok(())
 }
@@ -69,7 +85,21 @@ fn re_tp(
     mine_type: &str,
     json_output: bool,
 ) -> Result<(u32, u32, u32, u32), ReError> {
-    let out_i = out.unwrap_or(std::env::current_dir().expect("current dir get failed!"));
+    // Same "where do bytes land?" precedence as `convert_tp`:
+    // explicit `out` → input's parent dir (in-place overwrite) →
+    // cwd. The previous unconditional cwd default landed output
+    // wherever the caller happened to be `cd`'d to, which made
+    // batch scripts passing absolute paths essentially silent
+    // no-ops (input remained untouched, output written to a
+    // forgotten directory).
+    let out_i = out.unwrap_or_else(|| {
+        tp.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().expect("current dir get failed!")
+            })
+    });
     let im = image::open(tp)?;
     let orig_size = im.dimensions();
 
@@ -93,7 +123,7 @@ fn re_tp(
         );
     }
 
-    fs::create_dir_all(out_i)?;
+    fs::create_dir_all(&out_i)?;
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
     let im_r: image::DynamicImage = match is_thumb {
@@ -101,14 +131,14 @@ fn re_tp(
         false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
     };
     let new_size = im_r.dimensions();
-    let f_path: &Path = Path::new(f_name);
-    let fo = &mut std::fs::File::create(f_path)?;
+    let f_path = out_i.join(f_name);
+    let fo = &mut std::fs::File::create(&f_path)?;
     let out = ImageOutputFormat::from(
         ImageFormat::from_mime_type(mine_type).expect("unknown output format!"),
     );
 
     if !json_output {
-        log::info!("output fmt={:?}", out);
+        log::info!("output fmt={:?} → {:?}", out, f_path);
     }
     im_r.write_to(fo, out)?;
     Ok((orig_size.0, orig_size.1, new_size.0, new_size.1))
