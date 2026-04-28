@@ -237,7 +237,7 @@ change, not a silent one.
 | `MAQUETTE_RUSTYME_STYLE_MODE`            |         | (worker default = `auto`)        | Optional; `auto` / `solid` / `smart`. CPU-only.   |
 | `MAQUETTE_RUSTYME_RESULT_TIMEOUT_SECS`   |         | `60`                             | Clamps Maquette's patience.                       |
 | `MAQUETTE_RUSTYME_MAX_RETRIES`           |         | `3`                              | Propagated into envelope.                         |
-| `MAQUETTE_RUSTYME_MODEL`                 |         | `rustyme:texture.gen`            | Written into the disk cache key. Change this when you swap worker fleets so stale PNGs don't resurface.|
+| `MAQUETTE_RUSTYME_MODEL`                 |         | `rustyme:texture.gen`            | Written into the disk cache key **and** placed in `kwargs.model`. The default value is fine for `texgen-cpu` (the worker ignores `kwargs.model`). For **`texgen-fal` you must set this to a real Fal endpoint path** (e.g. `fal-ai/flux/schnell`) — sonargrid's fal Lua hook treats `kwargs.model` as the literal endpoint, so the default would resolve to `https://fal.run/rustyme:texture.gen` and 404. The `scripts/gen-mc-blocks.sh` helper sets it automatically on the fal lane. |
 
 ## Smoke test
 
