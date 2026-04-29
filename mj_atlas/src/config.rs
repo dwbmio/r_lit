@@ -35,7 +35,9 @@ pub struct HfrogConfig {
     pub enabled: bool,
     /// Base URL of the hfrog server, e.g. `https://hfrog.example.com`. No
     /// trailing slash. Empty disables the mirror regardless of `enabled`.
-    #[serde(default)]
+    /// New configs default to our internal deployment for convenience —
+    /// users on different deployments override via the GUI / TOML.
+    #[serde(default = "default_endpoint")]
     pub endpoint: String,
     /// Bearer token for authenticated hfrog instances. Empty = no auth header.
     /// Stored in plain text in config.toml — appropriate for dev tokens, NOT
@@ -56,11 +58,20 @@ fn default_runtime() -> String {
     "asset-pack".to_string()
 }
 
+/// Pre-populated endpoint for our internal hfrog deployment. New users get
+/// this filled in, but `enabled = false` keeps the mirror opt-in — flipping
+/// the checkbox in the GUI (or the toml field) is what actually starts
+/// pushing artifacts. Set to empty by changing the config; the value is
+/// just a convenience default, not a requirement.
+fn default_endpoint() -> String {
+    "https://hfrog.gamesci-lite.com".to_string()
+}
+
 impl Default for HfrogConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            endpoint: String::new(),
+            endpoint: default_endpoint(),
             token: String::new(),
             default_runtime: default_runtime(),
             s3_inc_id: 0,
@@ -137,8 +148,9 @@ mod tests {
         let path = tmp("missing");
         let _ = std::fs::remove_file(&path);
         let cfg = Config::load_from(&path).expect("missing file is not an error");
+        // enabled stays opt-in; endpoint is pre-populated for convenience.
         assert!(!cfg.hfrog.enabled);
-        assert_eq!(cfg.hfrog.endpoint, "");
+        assert_eq!(cfg.hfrog.endpoint, "https://hfrog.gamesci-lite.com");
         assert_eq!(cfg.hfrog.default_runtime, "asset-pack");
     }
 
@@ -172,19 +184,24 @@ mod tests {
         std::fs::write(&path, "[hfrog]\nenabled = true\n").unwrap();
         let loaded = Config::load_from(&path).unwrap();
         assert!(loaded.hfrog.enabled);
-        assert_eq!(loaded.hfrog.endpoint, ""); // defaulted
+        // missing endpoint ⇒ falls back to the default (pre-populated URL),
+        // NOT empty — this is what the user gets on a fresh install.
+        assert_eq!(loaded.hfrog.endpoint, "https://hfrog.gamesci-lite.com");
         assert_eq!(loaded.hfrog.default_runtime, "asset-pack");
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn is_active_requires_both_enabled_and_endpoint() {
+        // Default has an endpoint pre-populated; explicitly clear it so we
+        // exercise the "no endpoint" branch independently of `enabled`.
         let mut h = HfrogConfig::default();
-        assert!(!h.is_active());
+        h.endpoint.clear();
+        assert!(!h.is_active(), "disabled + empty endpoint must be inactive");
         h.enabled = true;
-        assert!(!h.is_active(), "enabled alone is insufficient");
+        assert!(!h.is_active(), "enabled alone (empty endpoint) is insufficient");
         h.endpoint = "https://x".into();
-        assert!(h.is_active());
+        assert!(h.is_active(), "enabled + endpoint ⇒ active");
         h.endpoint = "   ".into();
         assert!(!h.is_active(), "whitespace endpoint should not be active");
     }

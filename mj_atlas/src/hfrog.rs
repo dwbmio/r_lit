@@ -83,18 +83,31 @@ impl Client {
     /// any HTTP 2xx response — hfrog's "already-exists" branch is treated as
     /// success because mj_atlas re-uploads idempotently each save.
     pub fn upload_file(&self, spec: &ArtifactSpec, bytes: Vec<u8>, filename: &str) -> Result<()> {
-        let url = format!("{}/artifactory/add_form_file", self.endpoint);
+        // Hfrog mounts the artifactory routes under `/api/artifactory` (see
+        // hfrog/src/services/api/artifactory/mod.rs::register). Earlier
+        // releases of this client used `/artifactory` directly which 404'd
+        // against the production deployment.
+        let url = format!("{}/api/artifactory/add_form_file", self.endpoint);
         let json_payload = serde_json::to_string(spec)
             .map_err(|e| AppError::Custom(format!("hfrog: serialize spec: {}", e)))?;
 
-        let part = reqwest::blocking::multipart::Part::bytes(bytes)
+        let file_part = reqwest::blocking::multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
             .mime_str(mime_for(filename))
             .map_err(|e| AppError::Custom(format!("hfrog: mime: {}", e)))?;
 
+        // Server-side `MPJson<ArtifactoryModel>` requires the part's
+        // Content-Type to be `application/json`. `Form::text(...)` would
+        // tag it as `text/plain` and the actix-multipart extractor returns
+        // `An error occurred processing field: json` instead. Build the
+        // part explicitly with the correct mime.
+        let json_part = reqwest::blocking::multipart::Part::text(json_payload)
+            .mime_str("application/json")
+            .map_err(|e| AppError::Custom(format!("hfrog: json mime: {}", e)))?;
+
         let form = reqwest::blocking::multipart::Form::new()
-            .text("json", json_payload)
-            .part("file", part);
+            .part("json", json_part)
+            .part("file", file_part);
 
         let mut req = self.inner.put(&url).multipart(form);
         if !self.token.is_empty() {
@@ -391,7 +404,10 @@ mod tests {
 
     #[test]
     fn client_disabled_when_config_inactive() {
+        // Default has a pre-populated endpoint; clear it to test the
+        // independent gates one at a time.
         let mut cfg = HfrogConfig::default();
+        cfg.endpoint.clear();
         assert!(Client::from_config(&cfg).is_none(), "disabled by default");
 
         cfg.enabled = true;

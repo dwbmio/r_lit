@@ -74,11 +74,11 @@ The local atlas + manifest + log are always written first; hfrog is mirror-best-
 
 ## Wire format (hfrog endpoint)
 
-`PUT <endpoint>/artifactory/add_form_file` — `multipart/form-data` with two parts:
+`PUT <endpoint>/api/artifactory/add_form_file` — `multipart/form-data` with two parts:
 
 ```
 Content-Disposition: form-data; name="json"
-Content-Type: text/plain
+Content-Type: application/json
 
 {"name":"...","ver":"...","md5":"...","cont_size":...,"runtime":"...",
  "s3_key":"...","s3_inc_id":0,"is_artifactory_ready":false,"is_raw":false,...}
@@ -91,16 +91,29 @@ Content-Type: image/png
 <bytes>
 ```
 
+The `json` part **must** be tagged `Content-Type: application/json` — hfrog
+uses `actix_multipart_extras::MPJson<T>` to deserialize it, and the
+extractor refuses anything else with `400 Bad Request: An error occurred
+processing field: json`.
+
 Auth: `Authorization: Bearer <token>` when `config.hfrog.token` is non-empty.
 
-Server reply (regardless of HTTP path) is hfrog's `RespRet`:
+Server reply is hfrog's `RespRet`:
 
 ```json
 { "code": 0, "msg": "" }
 ```
 
-`code == 0` ⇒ success. `code == 1001` (`AlreadyExist`) ⇒ also treated as success.
-Any other non-zero code surfaces in the runlog with the server's `msg`.
+`code == 0` ⇒ success. `code == 1001` (`AlreadyExist`) ⇒ also treated as
+success. Any other non-zero code surfaces in the runlog with the server's
+`msg`. Notable codes the user might hit:
+
+| `code` | meaning                                | what it usually means in practice          |
+|--------|----------------------------------------|--------------------------------------------|
+| `1001` | `AlreadyExist`                         | re-uploading the same content; treated as success |
+| `1003` | `UpdateFailed`                         | server-side S3 backend mis-configured / unreachable; NOT a client bug |
+| `1004` | `NotFound`                             | querying an artifact that wasn't uploaded yet |
+| `1006` | `ParamsError`                          | client built the multipart wrong (we shouldn't see this any more after v0.4.3) |
 
 ## CI use
 
