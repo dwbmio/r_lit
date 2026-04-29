@@ -174,6 +174,22 @@ default_runtime = "asset-pack"
 
 The GUI exposes the same settings under the "hfrog Mirror" section in the Settings panel. Failed uploads never abort the local pipeline — they're logged to `<atlas>.log` for review. See [`docs/HFROG.md`](docs/HFROG.md) for wire format, naming convention, and failure semantics.
 
+## Keyboard Shortcuts (GUI)
+
+| Shortcut | Action |
+|---|---|
+| `Cmd/Ctrl+N` | New Project |
+| `Cmd/Ctrl+O` | Open Project |
+| `Cmd/Ctrl+S` | Save Project |
+| `Cmd/Ctrl+Shift+S` | Save Project As |
+| `Cmd/Ctrl+E` | Export As (viewer mode) |
+| `Cmd/Ctrl+W` | Close project (back to Welcome) |
+| `Cmd/Ctrl+P` | Pack now (manual; bypasses auto-pack toggle) |
+| `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z` | Undo / Redo (project-level; capped at 50 steps) |
+| `Esc` | Dismiss the active dialog |
+
+Undo defers to in-field text history when a text input is focused. The inline preview drops on undo/redo and re-packs on the next event. See [`docs/GUI_DESIGN.md`](docs/GUI_DESIGN.md) for the full keymap.
+
 ## Run Log Sidecar
 
 Every invocation (CLI or GUI) writes `<output>.log` next to the atlas/manifest, overwriting the previous one. Header records the full argv and resolved options; body captures every INFO/WARN/ERROR/DEBUG line — including DEBUG diagnostics that never reach stdout. Failed runs get the most informative sidecar; just `cat ./out/atlas.log` to share what happened.

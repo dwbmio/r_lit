@@ -174,6 +174,22 @@ default_runtime = "asset-pack"
 
 GUI 的 Settings 面板底部有 "hfrog Mirror" 区域可以直接编辑配置。**上传失败永不阻塞本地流水**——错误写到 `<atlas>.log` 供事后查看。线协议、命名规则、失败处理见 [`docs/HFROG.md`](docs/HFROG.md)。
 
+## 快捷键（GUI）
+
+| 快捷键 | 动作 |
+|---|---|
+| `Cmd/Ctrl+N` | 新建项目 |
+| `Cmd/Ctrl+O` | 打开项目 |
+| `Cmd/Ctrl+S` | 保存项目 |
+| `Cmd/Ctrl+Shift+S` | 另存为 |
+| `Cmd/Ctrl+E` | 导出（viewer 模式） |
+| `Cmd/Ctrl+W` | 关闭当前项目，返回欢迎页 |
+| `Cmd/Ctrl+P` | 立即打包（手动，绕过 Auto-pack 开关） |
+| `Cmd/Ctrl+Z` / `Cmd/Ctrl+Shift+Z` | 撤销 / 重做（项目级，最多 50 步） |
+| `Esc` | 关闭当前对话框 |
+
+输入框获得焦点时撤销会让位给文本框自身的字符级 undo，符合编辑器惯例。撤销/重做会清掉内嵌预览，下一次事件会自动重新打包。完整列表见 [`docs/GUI_DESIGN.md`](docs/GUI_DESIGN.md)。
+
 ## 运行日志 sidecar
 
 每次调用（CLI 或 GUI）都会在 atlas / manifest 旁边写一份 `<output>.log`，覆盖上次的。文件头部记录完整 argv 和解析后的选项；正文捕获本次运行的全部 INFO/WARN/ERROR/DEBUG 行——包括平时不到 stdout 的 DEBUG 诊断信息。失败的运行反而会留下信息最完整的 sidecar；出问题时把 `./out/atlas.log` 直接发出来就行。

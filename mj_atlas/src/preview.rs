@@ -21,7 +21,10 @@ enum BackgroundPackResult {
 
 // ─── Project file (.tpproj) ───
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+// PartialEq is required by the undo/redo `History` snapshot diffing — we
+// compare last-recorded vs current project every frame. Project + sub-types
+// are tiny, so the comparison is cheap.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
     /// Project format version
     pub version: u32,
@@ -35,7 +38,7 @@ pub struct Project {
     pub settings: ProjectSettings,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ProjectSettings {
     pub max_size: usize,
     pub spacing: u32,
@@ -190,6 +193,84 @@ struct PackerState {
     /// pack thread is launched. Separate from `needs_auto_pack` so a user
     /// who turned auto-pack OFF can still manually trigger packs.
     manual_pack: bool,
+    /// Undo / redo history. Snapshots the project on every frame where the
+    /// state has actually changed since the last snapshot — driven by
+    /// `History::maybe_record` from the update loop, NOT by per-action
+    /// callsites (which would be easy to miss).
+    history: History,
+}
+
+/// Linear undo / redo history. `states` always contains at least one entry
+/// (the initial project); `cursor` points at the "present". Undo decrements
+/// the cursor and reads back; redo increments it.
+struct History {
+    states: Vec<Project>,
+    cursor: usize,
+    /// Mirrors the present so we can detect changes without running PartialEq
+    /// on every field every frame; we only re-clone when the user actually
+    /// edits something.
+    last_recorded: Project,
+}
+
+/// Cap to keep memory bounded — a Project is small, but in a marathon
+/// session of drag-drops the snapshot list could otherwise grow unbounded.
+const HISTORY_LIMIT: usize = 50;
+
+impl History {
+    fn new(initial: Project) -> Self {
+        Self {
+            last_recorded: initial.clone(),
+            states: vec![initial],
+            cursor: 0,
+        }
+    }
+
+    /// Called once per frame from `ui_packer`. If the project diverged from
+    /// the last snapshot, push a new entry, drop any redo states beyond the
+    /// cursor, and bump the cursor.
+    fn maybe_record(&mut self, current: &Project) {
+        if *current == self.last_recorded {
+            return;
+        }
+        // Branching off — anything ahead of the cursor is now invalid.
+        self.states.truncate(self.cursor + 1);
+        self.states.push(current.clone());
+        self.cursor = self.states.len() - 1;
+        self.last_recorded = current.clone();
+        // Bound history depth from the BACK so the most recent edits survive.
+        while self.states.len() > HISTORY_LIMIT {
+            self.states.remove(0);
+            self.cursor = self.cursor.saturating_sub(1);
+        }
+    }
+
+    /// Step back one snapshot. Returns the project to restore, or `None` when
+    /// already at the oldest entry (Cmd+Z is a no-op then).
+    fn undo(&mut self) -> Option<Project> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.cursor -= 1;
+        self.last_recorded = self.states[self.cursor].clone();
+        Some(self.states[self.cursor].clone())
+    }
+
+    fn redo(&mut self) -> Option<Project> {
+        if self.cursor + 1 >= self.states.len() {
+            return None;
+        }
+        self.cursor += 1;
+        self.last_recorded = self.states[self.cursor].clone();
+        Some(self.states[self.cursor].clone())
+    }
+
+    fn can_undo(&self) -> bool {
+        self.cursor > 0
+    }
+
+    fn can_redo(&self) -> bool {
+        self.cursor + 1 < self.states.len()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -291,8 +372,10 @@ impl Default for MJAtlasApp {
 
 impl PackerState {
     fn new_empty() -> Self {
+        let project = Project::default();
         Self {
-            project: Project::default(),
+            history: History::new(project.clone()),
+            project,
             project_path: None,
             dirty: false,
             thumbnails: HashMap::new(),
@@ -310,6 +393,7 @@ impl PackerState {
     fn from_project(project: Project, path: PathBuf) -> Self {
         let needs_pack = !project.sprites.is_empty();
         Self {
+            history: History::new(project.clone()),
             project,
             project_path: Some(path),
             dirty: false,
@@ -689,14 +773,23 @@ impl MJAtlasApp {
         let in_packer = matches!(self.mode, AppMode::Packer(_));
         let in_viewer = matches!(self.mode, AppMode::Viewer(_));
 
+        // Helper that builds a menu Button labelled with a shortcut hint on
+        // the right (egui's `Button::shortcut_text` renders the second arg
+        // dimmed). Same convention macOS / Windows / Linux use natively.
+        fn item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+            ui.add(egui::Button::new(label).shortcut_text(shortcut))
+                .clicked()
+        }
+        let cmd_label = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+
         egui::TopBottomPanel::top("main_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New Project").clicked() {
+                    if item(ui, "New Project", &format!("{}+N", cmd_label)) {
                         action = Some(MenuAction::NewProject);
                         ui.close_menu();
                     }
-                    if ui.button("Open Project...").clicked() {
+                    if item(ui, "Open Project...", &format!("{}+O", cmd_label)) {
                         action = Some(MenuAction::OpenProject);
                         ui.close_menu();
                     }
@@ -704,11 +797,12 @@ impl MJAtlasApp {
                     ui.separator();
 
                     ui.add_enabled_ui(in_packer, |ui| {
-                        if ui.button("Save Project").clicked() {
+                        if item(ui, "Save Project", &format!("{}+S", cmd_label)) {
                             action = Some(MenuAction::SaveProject);
                             ui.close_menu();
                         }
-                        if ui.button("Save Project As...").clicked() {
+                        if item(ui, "Save Project As...", &format!("{}+Shift+S", cmd_label))
+                        {
                             action = Some(MenuAction::SaveProjectAs);
                             ui.close_menu();
                         }
@@ -746,8 +840,37 @@ impl MJAtlasApp {
                     ui.separator();
 
                     ui.add_enabled_ui(in_viewer, |ui| {
-                        if ui.button("Export As...").clicked() {
+                        if item(ui, "Export As...", &format!("{}+E", cmd_label)) {
                             action = Some(MenuAction::ExportAs);
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.separator();
+
+                    ui.add_enabled_ui(in_packer || in_viewer, |ui| {
+                        if item(ui, "Close (back to Welcome)", &format!("{}+W", cmd_label))
+                        {
+                            action = Some(MenuAction::GoHome);
+                            ui.close_menu();
+                        }
+                    });
+                });
+
+                ui.menu_button("Edit", |ui| {
+                    let (can_undo, can_redo) = match &self.mode {
+                        AppMode::Packer(s) => (s.history.can_undo(), s.history.can_redo()),
+                        _ => (false, false),
+                    };
+                    ui.add_enabled_ui(can_undo, |ui| {
+                        if item(ui, "Undo", &format!("{}+Z", cmd_label)) {
+                            action = Some(MenuAction::Undo);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_enabled_ui(can_redo, |ui| {
+                        if item(ui, "Redo", &format!("{}+Shift+Z", cmd_label)) {
+                            action = Some(MenuAction::Redo);
                             ui.close_menu();
                         }
                     });
@@ -755,6 +878,17 @@ impl MJAtlasApp {
 
                 ui.menu_button("View", |ui| {
                     if ui.checkbox(&mut self.dark_mode, "Dark Mode").changed() {
+                        ui.close_menu();
+                    }
+                });
+
+                ui.add_enabled_ui(in_packer, |ui| {
+                    if item(
+                        ui,
+                        "Pack",
+                        &format!("{}+P", cmd_label),
+                    ) {
+                        action = Some(MenuAction::PackNow);
                         ui.close_menu();
                     }
                 });
@@ -788,6 +922,130 @@ impl MJAtlasApp {
 
         if let Some(action) = action {
             self.handle_menu_action(action);
+        }
+    }
+
+    /// Process global keyboard shortcuts. Called once per frame BEFORE the
+    /// menu bar / panels are laid out so a shortcut firing on a given frame
+    /// doesn't race with the menu rendering.
+    ///
+    /// Modifiers::COMMAND maps to ⌘ on macOS and Ctrl elsewhere — egui's
+    /// cross-platform alias, so we don't have to special-case the OS.
+    /// `consume_shortcut()` removes the keypress from egui's input queue,
+    /// preventing downstream widgets (text fields, sliders) from also
+    /// reacting to the same combo.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // Esc — dismiss the active dialog (toast list keeps draining itself).
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.open_dialog.is_some() {
+            self.open_dialog = None;
+        }
+
+        // Quick helpers so the table below is one-liners.
+        macro_rules! shortcut {
+            ($mods:expr, $key:expr) => {
+                ctx.input_mut(|i| {
+                    i.consume_shortcut(&egui::KeyboardShortcut::new($mods, $key))
+                })
+            };
+        }
+        let cmd = egui::Modifiers::COMMAND;
+        let cmd_shift = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
+
+        // When a text field has keyboard focus, defer undo / redo to its
+        // own in-field history — that's what the user expects while typing
+        // (matches every text editor / browser). File ops below still fire
+        // regardless of focus, also matching editor conventions.
+        let editing_text = ctx.wants_keyboard_input();
+
+        if !editing_text {
+            // Cmd+Y is the Windows-style alias for redo (keep both bindings).
+            if shortcut!(cmd, egui::Key::Z) {
+                self.undo_packer();
+                return;
+            }
+            if shortcut!(cmd_shift, egui::Key::Z) || shortcut!(cmd, egui::Key::Y) {
+                self.redo_packer();
+                return;
+            }
+        }
+
+        // File ops — these all funnel through `handle_menu_action` so
+        // dirty-check dialogs / dispatch logic match menu-driven invocations
+        // exactly. `Cmd+S` saves; `Cmd+Shift+S` triggers Save As.
+        if shortcut!(cmd, egui::Key::N) {
+            self.handle_menu_action(MenuAction::NewProject);
+            return;
+        }
+        if shortcut!(cmd, egui::Key::O) {
+            self.handle_menu_action(MenuAction::OpenProject);
+            return;
+        }
+        if shortcut!(cmd_shift, egui::Key::S) {
+            self.handle_menu_action(MenuAction::SaveProjectAs);
+            return;
+        }
+        if shortcut!(cmd, egui::Key::S) {
+            self.handle_menu_action(MenuAction::SaveProject);
+            return;
+        }
+        if shortcut!(cmd, egui::Key::E) {
+            self.handle_menu_action(MenuAction::ExportAs);
+            return;
+        }
+        if shortcut!(cmd, egui::Key::W) {
+            // Close current project / atlas — return to Welcome. Mirrors
+            // typical "close window" semantics in document editors.
+            if let AppMode::Packer(s) = &self.mode {
+                if s.dirty {
+                    self.open_dialog =
+                        Some(Dialog::UnsavedChanges(Box::new(MenuAction::GoHome)));
+                    return;
+                }
+            }
+            self.handle_menu_action(MenuAction::GoHome);
+            return;
+        }
+        if shortcut!(cmd, egui::Key::P) {
+            // Manual pack — bypasses the auto-pack toggle, same as clicking
+            // the Pack! button. Useful when the user has auto-pack disabled
+            // and wants a deterministic "pack now".
+            if let AppMode::Packer(state) = &mut self.mode {
+                if !state.project.sprites.is_empty() && state.pack_rx.is_none() {
+                    state.manual_pack = true;
+                }
+            }
+        }
+    }
+
+    /// Pop one entry off the history stack and restore the previous Project.
+    /// Drops the inline preview because the displayed atlas may no longer
+    /// reflect the restored sprite list / settings — the next auto-pack (or
+    /// Cmd+P) will regenerate it.
+    fn undo_packer(&mut self) {
+        if let AppMode::Packer(state) = &mut self.mode {
+            if let Some(prev) = state.history.undo() {
+                state.project = prev;
+                state.dirty = true;
+                state.preview = None;
+                state.needs_auto_pack = true;
+                self.toast("Undo", ToastKind::Info);
+            } else {
+                self.toast("Nothing to undo", ToastKind::Info);
+            }
+        }
+    }
+
+    fn redo_packer(&mut self) {
+        if let AppMode::Packer(state) = &mut self.mode {
+            if let Some(next) = state.history.redo() {
+                state.project = next;
+                state.dirty = true;
+                state.preview = None;
+                state.needs_auto_pack = true;
+                self.toast("Redo", ToastKind::Info);
+            } else {
+                self.toast("Nothing to redo", ToastKind::Info);
+            }
         }
     }
 
@@ -870,6 +1128,15 @@ impl MJAtlasApp {
             }
             MenuAction::ShowLicense => {
                 self.open_dialog = Some(Dialog::License);
+            }
+            MenuAction::Undo => self.undo_packer(),
+            MenuAction::Redo => self.redo_packer(),
+            MenuAction::PackNow => {
+                if let AppMode::Packer(state) = &mut self.mode {
+                    if !state.project.sprites.is_empty() && state.pack_rx.is_none() {
+                        state.manual_pack = true;
+                    }
+                }
             }
         }
     }
@@ -2250,10 +2517,17 @@ enum MenuAction {
     OpenAtlas,
     OpenRecent(PathBuf),
     ExportAs,
-    #[allow(dead_code)]
     GoHome,
     ShowAbout,
     ShowLicense,
+    /// Undo / redo wrap PackerState::history. Defined as menu actions
+    /// (rather than inline keyboard handlers) so the Edit menu can disable
+    /// them when there's nothing to undo / redo.
+    Undo,
+    Redo,
+    /// Manual pack request — flips PackerState::manual_pack so the auto-pack
+    /// dispatcher fires the pack regardless of the auto_pack toggle.
+    PackNow,
 }
 
 impl eframe::App for MJAtlasApp {
@@ -2269,6 +2543,18 @@ impl eframe::App for MJAtlasApp {
             apply_dark_theme(ctx);
         } else {
             apply_light_theme(ctx);
+        }
+
+        // Process keyboard shortcuts BEFORE any UI is laid out so a shortcut
+        // doesn't race with widget event handling that would otherwise
+        // consume the same key (e.g. Cmd+S inside a focused text field).
+        self.handle_shortcuts(ctx);
+
+        // Snapshot the project for undo on every frame where it actually
+        // changed. Cheap PartialEq compare; a new entry is only cloned when
+        // the user truly edited something.
+        if let AppMode::Packer(state) = &mut self.mode {
+            state.history.maybe_record(&state.project);
         }
 
         // Global menu bar on all screens

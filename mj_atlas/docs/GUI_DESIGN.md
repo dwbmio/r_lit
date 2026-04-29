@@ -160,12 +160,39 @@ Standalone atlas preview for opening .json/.tpsheet files directly.
 - Result polled via `mpsc::channel` + `try_recv()` each frame
 - `ctx.request_repaint()` keeps UI responsive during pack
 
-## Keyboard Shortcuts (planned)
-- Cmd/Ctrl+N: New Project
-- Cmd/Ctrl+O: Open Project
-- Cmd/Ctrl+S: Save Project
-- Cmd/Ctrl+Shift+S: Save As
-- Cmd/Ctrl+P: Pack
+## Keyboard Shortcuts (v0.4.2+)
+
+`Cmd` on macOS, `Ctrl` on Windows / Linux — egui's `Modifiers::COMMAND`
+aliases the platform key, so the same source binding works everywhere.
+
+| Shortcut          | Action                                                          |
+|-------------------|-----------------------------------------------------------------|
+| `Cmd+N`           | New Project (with unsaved-changes check)                        |
+| `Cmd+O`           | Open Project...                                                 |
+| `Cmd+S`           | Save Project (or Save As when no path yet)                      |
+| `Cmd+Shift+S`     | Save Project As...                                              |
+| `Cmd+E`           | Export As... (viewer mode)                                      |
+| `Cmd+W`           | Close project — return to Welcome (with dirty-check dialog)     |
+| `Cmd+P`           | Pack now (manual, bypasses Auto-pack on change toggle)          |
+| `Cmd+Z`           | Undo last project change                                        |
+| `Cmd+Shift+Z`     | Redo                                                            |
+| `Cmd+Y`           | Redo (Windows-style alias)                                      |
+| `Esc`             | Dismiss the active dialog                                       |
+
+### Undo / redo scope
+
+The history stack snapshots the entire `Project` (sprite list + settings +
+output paths) on every frame where the state diverges from the last
+snapshot. Stack depth is capped at 50 entries; the oldest entries roll off
+when the cap is hit.
+
+Undo / redo are deferred to the focused widget when a text field is being
+typed into (e.g. the output name field, the hfrog token input) — Cmd+Z
+then does in-field text undo, matching editor conventions.
+
+The inline preview is dropped on undo/redo because the displayed atlas
+may no longer match the restored sprite list / settings; the next
+auto-pack (or `Cmd+P`) regenerates it.
 
 ## Changelog
 

@@ -290,6 +290,25 @@ hfrog 上的命名规则：
 
 详细线协议、命名规则、CI 集成示例见 `docs/HFROG.md`。
 
+## 快捷键 (GUI, v0.4.2+)
+
+`Cmd` on macOS, `Ctrl` 其它平台（egui 的 Modifiers::COMMAND 跨平台别名）。
+
+| 快捷键               | 动作                                          |
+|----------------------|-----------------------------------------------|
+| Cmd+N                | 新建项目                                      |
+| Cmd+O                | 打开项目                                      |
+| Cmd+S                | 保存项目                                      |
+| Cmd+Shift+S          | 另存为                                        |
+| Cmd+E                | 导出（viewer 模式）                            |
+| Cmd+W                | 关闭项目，返回欢迎页                          |
+| Cmd+P                | 立即打包（手动，绕过 Auto-pack 开关）         |
+| Cmd+Z                | 撤销项目级变更                                |
+| Cmd+Shift+Z, Cmd+Y   | 重做                                          |
+| Esc                  | 关闭当前 Dialog                               |
+
+撤销/重做对整个 Project（sprites + settings + output 路径）做帧级快照——本帧状态与上次快照不同时才入栈。栈深度上限 50，超出时最老的先淘汰。文本框获得焦点时 Cmd+Z 让位给文本框字符级 undo。
+
 ## 运行日志 (.log)
 
 每次 CLI 调用（以及每次 GUI 触发的 pack）都会在 atlas / manifest 旁边写一个 `<output>.log` 边车文件，覆盖上一次的。结构：

@@ -297,6 +297,28 @@ envelope; codes 0 and 1001 (AlreadyExist) are treated as success.
 
 See `docs/HFROG.md` for full wire-protocol details and CI integration patterns.
 
+## Keyboard Shortcuts (GUI, v0.4.2+)
+
+`Cmd` on macOS, `Ctrl` elsewhere (egui's Modifiers::COMMAND).
+
+| Shortcut             | Action                                            |
+|----------------------|---------------------------------------------------|
+| Cmd+N                | New Project                                       |
+| Cmd+O                | Open Project                                      |
+| Cmd+S                | Save Project                                      |
+| Cmd+Shift+S          | Save Project As                                   |
+| Cmd+E                | Export As (viewer mode)                           |
+| Cmd+W                | Close project (back to Welcome screen)            |
+| Cmd+P                | Pack now (manual; bypasses Auto-pack toggle)      |
+| Cmd+Z                | Undo project-level change                         |
+| Cmd+Shift+Z, Cmd+Y   | Redo                                              |
+| Esc                  | Dismiss the active dialog                         |
+
+Undo / redo snapshots the entire Project (sprites + settings + output
+paths) on each frame the state diverges from the last snapshot. History
+depth capped at 50; oldest entries evict first. Undo defers to the
+focused text field when typing (Cmd+Z = text undo in that case).
+
 ## Run Log (.log)
 
 Every CLI invocation (and every GUI pack) writes a fresh `<output>.log`
