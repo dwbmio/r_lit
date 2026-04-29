@@ -269,11 +269,15 @@ fn ui_system(
         &mut ui_state,
         &mut palette,
         &mut multiview,
+        &mut axes,
         &mut *project_ev,
         &mut *reset_view_ev,
         &mut *fit_view_ev,
         &mut *zoom_view_ev,
         &mut *history_ev,
+        &mut *composer_open_ev,
+        &mut *redraw_ev,
+        &mut *slot_texgen_ev,
     );
 
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -461,7 +465,8 @@ fn ui_system(
                     .checkbox(&mut axes_visible, "Show World Axes")
                     .on_hover_text(
                         "Overlay the X (red) / Y (green) / Z (blue) world axes at the \
-                         origin of the canvas so you can read orientation at a glance.",
+                         origin of the canvas so you can read orientation at a glance. \
+                         Shortcut: Shift+A.",
                     )
                     .changed()
                 {
@@ -475,7 +480,8 @@ fn ui_system(
                     .on_hover_text(
                         "Open a second window to design a new block: \
                          pick a shape, iterate on a texgen prompt, save \
-                         the result locally or publish it to hfrog.",
+                         the result locally or publish it to hfrog. \
+                         Shortcut: Cmd+B.",
                     )
                     .clicked()
                 {
@@ -1197,11 +1203,15 @@ fn handle_shortcuts(
     ui_state: &mut UiState,
     palette: &mut Palette,
     multiview: &mut MultiViewState,
+    axes: &mut WorldAxesState,
     project_ev: &mut MessageWriter<ProjectAction>,
     reset_view_ev: &mut MessageWriter<ResetPreviewView>,
     fit_view_ev: &mut MessageWriter<FitPreviewToModel>,
     zoom_view_ev: &mut MessageWriter<ZoomPreview>,
     history_ev: &mut MessageWriter<HistoryAction>,
+    composer_open_ev: &mut MessageWriter<OpenBlockComposer>,
+    redraw_ev: &mut MessageWriter<bevy::window::RequestRedraw>,
+    slot_texgen_ev: &mut MessageWriter<GenerateSlotTexture>,
 ) {
     use egui::{Key, KeyboardShortcut, Modifiers};
 
@@ -1209,6 +1219,7 @@ fn handle_shortcuts(
     // thing for file/edit shortcuts on every platform.
     let cmd = Modifiers::COMMAND;
     let cmd_shift = cmd | Modifiers::SHIFT;
+    let shift = Modifiers::SHIFT;
 
     ctx.input_mut(|i| {
         if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::N)) {
@@ -1270,10 +1281,59 @@ fn handle_shortcuts(
                 PaintMode::Additive => PaintMode::Overwrite,
             };
         }
+        // Shift+A toggles the world-axes overlay. Re-uses the `A`
+        // base key (paint-mode lives on bare-A) on the assumption
+        // that "rotate paint mode" and "show/hide axes" are both
+        // viewport-affordances and form a natural pair.
+        if i.consume_shortcut(&KeyboardShortcut::new(shift, Key::A)) {
+            axes.visible = !axes.visible;
+        }
         if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::E))
             && ui_state.export_modal.is_none()
         {
             ui_state.export_modal = Some(ExportDraft::default());
+        }
+        // Cmd+B opens a fresh Block Composer second window. Mirrors
+        // `Window → New Block Composer…` in the menu bar; B for
+        // "Block" is intuitive and Cmd+B isn't claimed by any of
+        // the document / paint flow. We always emit a redraw so
+        // the new window's first frame doesn't sit on the
+        // 5-second `desktop_app` heartbeat.
+        if i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::B)) {
+            composer_open_ev.write(OpenBlockComposer);
+            redraw_ev.write(bevy::window::RequestRedraw);
+        }
+        // Photoshop-style brush-height stepping. `]` raises by one,
+        // `[` lowers by one, both clamped to `[MIN_HEIGHT,
+        // MAX_HEIGHT]`. Bare keys (no modifier) so the user can
+        // chain them while painting with the other hand. egui's
+        // `Key::OpenBracket` / `CloseBracket` are the layout-
+        // independent names — they fire on `[ / ]` regardless of
+        // the underlying keymap.
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::CloseBracket)) {
+            ui_state.brush_height = (ui_state.brush_height + 1).min(MAX_HEIGHT);
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::OpenBracket)) {
+            ui_state.brush_height = ui_state.brush_height.saturating_sub(1).max(MIN_HEIGHT);
+        }
+        // `G` generates a texture for the currently-selected palette
+        // slot. Default lane is the offline `Mock` provider so the
+        // shortcut is always safe (no env / no network required).
+        // `Shift+G` upgrades to the `RustymeFal` lane — the user
+        // asks for the higher-quality path explicitly. The plain
+        // `Cmd+G` window-find chord is intentionally avoided so
+        // we don't shadow muscle memory from text-editor land.
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::G)) {
+            slot_texgen_ev.write(GenerateSlotTexture {
+                slot: palette.selected,
+                provider: SlotTexgenProvider::Mock,
+            });
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(shift, Key::G)) {
+            slot_texgen_ev.write(GenerateSlotTexture {
+                slot: palette.selected,
+                provider: SlotTexgenProvider::RustymeFal,
+            });
         }
 
         // Digit keys 1..=9 select the nth palette swatch. `consume_key`
@@ -1456,7 +1516,9 @@ fn palette_bar(
                             .on_hover_text(match prov {
                                 SlotTexgenProvider::Mock => {
                                     "Offline deterministic noise — \
-                                     no Rustyme worker needed."
+                                     no Rustyme worker needed. \
+                                     Shortcut: G (uses the currently \
+                                     selected slot)."
                                 }
                                 SlotTexgenProvider::RustymeCpu => {
                                     "Rustyme texgen-cpu queue — \
@@ -1466,7 +1528,9 @@ fn palette_bar(
                                     "Rustyme texgen-fal queue → Fal.ai \
                                      FLUX schnell — requires \
                                      MAQUETTE_RUSTYME_REDIS_URL + \
-                                     MAQUETTE_RUSTYME_MODEL=fal-ai/flux/schnell."
+                                     MAQUETTE_RUSTYME_MODEL=fal-ai/flux/schnell. \
+                                     Shortcut: Shift+G (uses the currently \
+                                     selected slot)."
                                 }
                             })
                             .clicked()
@@ -2050,15 +2114,23 @@ fn brush_overlay(ctx: &egui::Context, canvas_rect: egui::Rect, ui_state: &mut Ui
                     ui.add_space(2.0);
 
                     ui.horizontal(|ui| {
-                        ui.label("Height");
-                        let mut h = ui_state.brush_height as u32;
-                        let response = ui.add(
-                            egui::Slider::new(
-                                &mut h,
-                                (MIN_HEIGHT as u32)..=(MAX_HEIGHT as u32),
-                            )
-                            .suffix(" cells"),
+                        ui.label("Height").on_hover_text(
+                            "Brush stack height in cells. Shortcuts: \
+                             `[` lower by one, `]` raise by one.",
                         );
+                        let mut h = ui_state.brush_height as u32;
+                        let response = ui
+                            .add(
+                                egui::Slider::new(
+                                    &mut h,
+                                    (MIN_HEIGHT as u32)..=(MAX_HEIGHT as u32),
+                                )
+                                .suffix(" cells"),
+                            )
+                            .on_hover_text(
+                                "Brush stack height in cells. Shortcuts: \
+                                 `[` lower by one, `]` raise by one.",
+                            );
                         if response.changed() {
                             ui_state.brush_height = h as u8;
                         }
