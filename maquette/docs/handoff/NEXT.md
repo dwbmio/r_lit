@@ -75,6 +75,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | v0.8 | Multi-angle preview + float window + onboarding + QoL   | shipped   |
 | v0.9 | Robustness: autosave + GUI polish + Bevy trim + prefs   | A + polish shipped; **B + C pending** |
 | v0.10 | AI texture MVP (mock → Fal → schema → preview → bake)  | A + B shipped; **C ready, D blocked on worker** |
+| v0.11 | Cloud-as-Backup: hfrog as user's "云硬盘", local stays source-of-truth, manual `Push to cloud` per project + per block + per texture, merged Recent list with `local` / `cloud` badges and mtime-LWW reconciliation | not yet — designed 2026-04-29 (this session); implementation gated on v0.10 D-1 finishing |
 | v1.0 | Release candidate: docs, icon, smoke matrix, tag        | not yet   |
 
 ### v0.10 phase detail
@@ -94,6 +95,63 @@ After D-1 ships we re-evaluate whether E gets pulled in before v1.0
 or deferred — D-1 alone is enough to *feel* whether AI textures
 speed up the iteration loop, which is the core validation the user
 wants.
+
+### v0.11 phase detail — Cloud-as-Backup
+
+Vision (designed 2026-04-29): **hfrog 是用户的云硬盘**. Local
+filesystem stays source-of-truth; cloud is an explicit, manual
+*backup + cross-machine sync* layer. The product invariant is
+"close the lid on machine A, open machine B, find your stuff
+sitting where you left it" — but only if you remembered to hit
+`Push to cloud`. No automatic sync, no conflict-resolution
+voodoo: last-write-wins by mtime, surfaced honestly in the UI.
+
+**Decisions locked in this session** (vs. the `AskQuestion`
+prompts, for traceability):
+
+| Decision           | Choice                                          |
+|--------------------|-------------------------------------------------|
+| Scope              | `.maq` projects + block library + texture cache (all three) |
+| Cloud write timing | Local always first; explicit `Push to cloud` button per artifact (cloud is backup, not source-of-truth) |
+| Merge semantics    | Single-row Recent list; mtime-LWW; badge marks active source; older sibling shown as small grey caption |
+| Timing             | Gated on v0.10 D-1 finishing (texturing UX is the current main thread; cloud is the next big arc) |
+
+The "1-2s probe and fall back" requirement from the user only
+affects the **mode chip** in 0.11.A — the IO path itself stays
+local-first regardless, so probe failures degrade UX (chip flips
+to "Local mode · Try cloud →") but never block the user from
+saving / opening files.
+
+| Phase | Scope | Status |
+|---|---|---|
+| **A** | `cloud_status` module: HTTP probe of `MAQUETTE_HFROG_BASE_URL/api/artifactory/list?runtime=ping` with 1.5 s timeout on startup. `AppCloudMode { Online, Offline { last_error }, Probing }` resource. Status-bar chip ("☁ Cloud OK" / "○ Local mode · Try cloud →") with click-to-reprobe. **Does not** change any IO path; pure UI surfacing. | not yet — first slice |
+| **B-projects** | hfrog protocol extension: new runtime `maquette-project/v1` carrying the `.maq` JSON as the artifact body (fits hfrog's "any binary" payload mode if available; if hfrog forces PNG for the S3 leg, fall back to a JSON-as-metadata + zero-byte PNG approach — research called out in B's first task). `File → Push to cloud` menu item + button on the project status bar; `HfrogPublisher::publish_project` peer of the existing block publisher. Pull side: `maquette-cli project sync` + GUI button. | not yet — second slice |
+| **B-blocks** | Auto-pull `maquette-block/v1` on startup when mode == Online (currently the user has to click `Sync hfrog`). Block Composer's `Publish` already covers the push side — no protocol change needed. | not yet — third slice |
+| **B-textures** | `maquette-texture/v1` runtime carrying generated PNGs keyed by `cache_key`. `Push to cloud` on a project sweeps every `PaletteSlotMeta::texture` it references and uploads the PNGs. Open-from-cloud reverses this: `cache_get` miss → fetch from hfrog before falling back to "regenerate". Cross-machine "open the same project on a different machine and the textures are already there" is the user-visible win. | not yet — fourth slice |
+| **C** | Recent / Browse projects panel — Maquette's first homepage / dashboard. Merges local (`~/Documents/Maquette/*.maq` + recent-files history from the v0.9 C prefs file when that lands) with hfrog (`maquette-project/v1` list). Single row per `(slug, latest_mtime)` with a `[local] / [cloud] / [both ↻]` badge; older sibling shown grey. Open from cloud downloads the `.maq` body to `~/.cache/maquette/projects/<slug>.maq` and routes through the existing local Open path. | not yet — fifth slice |
+| **D** | Polish: per-row "Open the local copy" / "Open the cloud copy" right-click items for the rare case where mtime ordering misleads; `--cloud-first` CLI flag for `maquette-cli project open` so headless / scripted runs follow the same rules; offline indicator in the title bar when working on a project that has a known-newer cloud sibling. | not yet — sixth slice |
+
+Pre-requisites flagged early so they don't surprise us when we
+get there:
+
+* **hfrog "any binary" payload support** — research at the start
+  of v0.11 B-projects. The current `HfrogPublisher` uploads PNG
+  via S3 presigned URL; `.maq` is a JSON text. If hfrog's S3 leg
+  is content-type-agnostic (likely — it's just `PUT <presigned>`
+  with the bytes the client supplies), this is a one-line change.
+  If hfrog hard-codes PNG validation, we either lobby for that to
+  go away or pack `.maq` into a metadata field + zero-byte PNG.
+* **Project slug** — currently a project's identity is its
+  filesystem path. For cloud the canonical id is a slug. Likely
+  derive from `.maq`'s file name on first publish, persisted into
+  `ProjectMeta::cloud_slug: Option<String>` (schema v5 — minor
+  bump, same backward-compat dance as v3 → v4).
+* **prefs.toml prerequisite** — Recent list (phase C) reads from
+  the v0.9 C recent-files history. v0.9 C is currently at "Later
+  — v0.9 closure"; if we want C cleanly we may need to pull v0.9
+  C in first or scope phase C to a "scan
+  `~/Documents/Maquette/*.maq`" minimum. Decision deferred to the
+  start of phase C.
 
 ## Outstanding work (agent, priority-ordered)
 
@@ -129,17 +187,39 @@ wants.
      mirrors that). Includes a one-time PNG → wgpu texture
      upload pass when the user flips the toggle on.
 
+2. **v0.11.A — cloud status chip (gated on D-1 finishing).**
+   Designed 2026-04-29 (this session), not started. See "v0.11
+   phase detail" above for the full six-phase plan; phase A is
+   the only one safe to do *while* D-1.C/D is being polished
+   because it touches no IO path. Concretely:
+
+   * `cloud_status.rs` Bevy plugin owning a startup probe
+     (1.5 s timeout) and an `AppCloudMode { Online, Offline,
+     Probing }` resource.
+   * Status-bar chip on the right edge: "☁ Cloud OK" /
+     "○ Local mode · Try cloud →". Click reprobes; updates the
+     resource and the chip in-place.
+   * Probe is cheap: a `HEAD` (or trivial `GET /list`) against
+     `MAQUETTE_HFROG_BASE_URL`. Any non-2xx, timeout, or
+     network error → `Offline { last_error }`.
+   * Zero changes to File / Save / Open paths. Phase B is where
+     the cloud actually starts owning bytes.
+
 ### Blocked / external
 
-2. **`#TEX-B` worker hardening.** The CPU lane is fully
+3. **`#TEX-B` worker hardening.** The CPU lane is fully
    verified; FAL needs `FAL_KEY` set on the sonargrid host
    before fal lane stops timing out (Maquette already proved
    the routing + revoke path against an empty-key worker, see
    `v0.10b-bis-complete.md` § 4 / `USER-TODO.md` `#TEX-B-fal`).
    Not on Maquette's plate.
-3. **v0.10 D-1 finish** — *is* #1 above. D-1.A + D-1.B already
+4. **v0.10 D-1 finish** — *is* #1 above. D-1.A + D-1.B already
    shipped; D-1.C (Canvas-group fan-out) + D-1.D (toon shader
    Textured render) outstanding.
+5. **v0.11 B / C / D — cloud IO + Recent panel.** Designed
+   2026-04-29; gated on D-1 closing out. See "v0.11 phase detail"
+   above for the slicing rationale (`maquette-project/v1`
+   runtime, `Push to cloud` button, mtime-LWW Recent list).
 4. **User validation pass** — `USER-TODO.md` has a stack of items
    freshly to-hand: `#1c` shape cycle / `#1c-async` async export /
    `#17b` PIP click / `#17c` PIP colour + axes / `#18` float pose
