@@ -23,10 +23,12 @@
 //! or needs a sync.
 //!
 //! The artifact server side is the [`hfrog`][hfrog] backend the user
-//! already runs (typically `https://starlink.youxi123.com/hfrog`).
-//! Maquette is a *consumer*: list, find, optionally download a
-//! pre-rendered PNG payload. We never upload — publishing new blocks
-//! happens through hfrog's own ops tooling.
+//! already runs (default `https://hfrog.gamesci-lite.com`, override
+//! via `MAQUETTE_HFROG_BASE_URL`). Maquette is both a *consumer*
+//! (list / find / download pre-rendered PNG payload) through
+//! [`HfrogProvider`] and a *publisher* (PUT block JSON + S3 upload
+//! of the preview thumbnail) through
+//! [`hfrog::HfrogPublisher`] from the Block Composer.
 //!
 //! [hfrog]: /Users/admin/data0/public_work/hfrog/
 //!
@@ -65,7 +67,13 @@ use crate::grid::ShapeKind;
 pub const HFROG_RUNTIME: &str = "maquette-block/v1";
 
 /// Default hfrog server. Overridable via `MAQUETTE_HFROG_BASE_URL`.
-pub const DEFAULT_HFROG_BASE_URL: &str = "https://starlink.youxi123.com/hfrog";
+///
+/// The URL is the hfrog HTTP root — internally we append
+/// `/api/artifactory/...` paths (see
+/// [`HfrogProvider::list`] / [`HfrogPublisher::publish_block`])
+/// so this should NOT include a trailing path. Trailing slashes
+/// are stripped by [`HfrogConfig::from_env`].
+pub const DEFAULT_HFROG_BASE_URL: &str = "https://hfrog.gamesci-lite.com";
 
 /// HTTP timeout (seconds) for any single hfrog request. Hfrog's
 /// `/list` is paged and bounded; if it takes more than this we'd
@@ -805,15 +813,24 @@ pub mod hfrog {
     ///
     /// | env var                     | default                                  |
     /// |-----------------------------|------------------------------------------|
-    /// | `MAQUETTE_HFROG_BASE_URL`   | `https://starlink.youxi123.com/hfrog`     |
+    /// | `MAQUETTE_HFROG_BASE_URL`   | `https://hfrog.gamesci-lite.com`          |
     /// | `MAQUETTE_HFROG_RUNTIME`    | `maquette-block/v1`                       |
     /// | `MAQUETTE_HFROG_TIMEOUT_SECS`| `15`                                      |
     #[derive(Debug, Clone)]
     pub struct HfrogConfig {
-        /// Base URL **including** the `/hfrog` path component if the
-        /// server is mounted under a sub-path. Sample values:
-        /// `https://starlink.youxi123.com/hfrog`,
-        /// `http://localhost:12121` (when run bare-host).
+        /// Base URL of the hfrog HTTP server — Maquette appends
+        /// `/api/artifactory/...` to it for every call. Sample
+        /// values:
+        ///
+        /// * `https://hfrog.gamesci-lite.com` (production default)
+        /// * `https://starlink.youxi123.com/hfrog` (legacy mount;
+        ///   sub-path style still supported as long as the path
+        ///   prefix is present here)
+        /// * `http://localhost:12121` (a bare-host dev instance)
+        ///
+        /// Trailing slashes are stripped on construction, but
+        /// trailing path components are preserved so the legacy
+        /// sub-path layout still works.
         pub base_url: String,
         /// hfrog `runtime` field — query namespace.
         pub runtime: String,

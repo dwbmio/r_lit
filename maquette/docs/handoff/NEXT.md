@@ -28,10 +28,12 @@ Active fronts:
 * **`#BLOCK` (dashboard item)** — ✅ shipped in C-2. CLI
   `block list/get/sync` works (CLI smoke ≈ 3 min); GUI right
   panel + slot binding works (GUI smoke ≈ 3 min). Real-network
-  `block sync` against `starlink.youxi123.com/hfrog` returns
-  `0 blocks` because the server has no `maquette-block/v1`
-  records yet — but see C-3 below: the *Block Composer* now
-  publishes them directly without needing a curl bootstrap.
+  `block sync` against the production hfrog node
+  (`https://hfrog.gamesci-lite.com`, the new default replacing
+  the legacy `starlink.youxi123.com/hfrog` mount) returns
+  `0 blocks` until the Block Composer has populated some — see
+  C-3 below: the *Block Composer* now publishes them directly
+  without needing a curl bootstrap.
 * **`#COMPOSER` (new dashboard item)** — ✅ shipped in C-3. The
   user can `Window → New Block Composer…`, iterate on prompts
   through the cpu / fal / mock provider lanes, save the result

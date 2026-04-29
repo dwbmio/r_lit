@@ -1603,7 +1603,7 @@ fn composer_ui_system(
                     egui::RichText::new(
                         "Local draft → ~/.cache/maquette/blocks/local-drafts/<id>.{json,png}\n\
                          Publish → MAQUETTE_HFROG_BASE_URL (default \
-                         https://starlink.youxi123.com/hfrog)",
+                         https://hfrog.gamesci-lite.com)",
                     )
                     .small()
                     .color(egui::Color32::from_gray(140)),

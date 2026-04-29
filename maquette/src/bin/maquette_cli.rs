@@ -73,7 +73,7 @@ enum Command {
     /// Inspect or sync block-meta records (the `BlockMeta` data the
     /// GUI's "Block Library" reads). Sources are `local` (built-in
     /// 12 blocks) and `hfrog` (artifact server — defaults to
-    /// `https://starlink.youxi123.com/hfrog`, override with
+    /// `https://hfrog.gamesci-lite.com`, override with
     /// `MAQUETTE_HFROG_BASE_URL`).
     Block(BlockArgs),
 }
@@ -127,7 +127,7 @@ struct BlockGetArgs {
 #[derive(Parser, Debug)]
 struct BlockSyncArgs {
     /// hfrog base URL. Falls back to `MAQUETTE_HFROG_BASE_URL`
-    /// (default `https://starlink.youxi123.com/hfrog`).
+    /// (default `https://hfrog.gamesci-lite.com`).
     #[arg(long)]
     base_url: Option<String>,
     /// hfrog `runtime` query namespace. Falls back to

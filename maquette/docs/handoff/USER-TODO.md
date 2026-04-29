@@ -418,10 +418,10 @@ Agent 交付 `v0.9-complete.md` 后再走这些。
   # → 应有 7 行：id / name / source / shape_hint / default_color / tags / texture_hint / description
   maquette-cli block get grass --json | jq .  # 合法 JSON
 
-  # 3) 联网 sync（默认指向 https://starlink.youxi123.com/hfrog）
+  # 3) 联网 sync（默认指向 https://hfrog.gamesci-lite.com）
   maquette-cli block sync
   # → 现网 hfrog 暂无 maquette-block/v1 制品，应输出
-  #   "synced 0 blocks from https://starlink.youxi123.com/hfrog (runtime=maquette-block/v1) → ~/.cache/maquette/blocks/hfrog/maquette-block/v1"
+  #   "synced 0 blocks from https://hfrog.gamesci-lite.com (runtime=maquette-block/v1) → ~/.cache/maquette/blocks/hfrog/maquette-block/v1"
   # → 0 是预期的（数据没人传）；网络 200 + 协议解析 OK 就算 pass
 
   # 4) all 来源合并（不联网，读缓存）
@@ -466,7 +466,7 @@ Agent 交付 `v0.9-complete.md` 后再走这些。
   - **不通过**：第二窗口不开 / Generate 报错（mock 不应该报错）/ 贴图没贴上 cube / draft 没出现在 Library / 关窗主窗口跟着退出。日志 `RUST_LOG=info maquette` 看 `block_library:` 和 `composer:` 行。
 
 - **#COMPOSER-publish**（3 min）真生图 + 推 hfrog
-  - **前置**：环境变量 `MAQUETTE_RUSTYME_REDIS_URL=redis://10.100.85.15:6379/0`、`MAQUETTE_HFROG_BASE_URL=https://starlink.youxi123.com/hfrog`、`MAQUETTE_HFROG_S3_INC_ID=<对应 bucket id>`（问 ops 拿）
+  - **前置**：环境变量 `MAQUETTE_RUSTYME_REDIS_URL=redis://10.100.85.15:6379/0`、`MAQUETTE_HFROG_S3_INC_ID=<对应 bucket id>`（问 ops 拿）。hfrog URL 不用配，默认就是 `https://hfrog.gamesci-lite.com`；如果 ops 把 hfrog 部到了别的节点再用 `MAQUETTE_HFROG_BASE_URL` 覆盖。
   1. 同 `#COMPOSER-mock` 1-3 步开 Composer
   2. Provider 改 **`rustyme · cpu`**、prompt `iron block, weathered surface`、Style mode `auto`、点 Generate → 几秒后 History 多一张真生成的 PNG（颜色由 LLM 智能解析）
   3. 选这张为 Selected，id `iron_block`、name `铁块测试`、description `测试用铁块`、tags `metal,test`

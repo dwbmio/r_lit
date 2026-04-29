@@ -29,9 +29,10 @@
 //!   `TexturePrefs`. Introduced in schema v4 (v0.10 C).
 //! - [`block_meta`] — block-level metadata (`BlockMeta`),
 //!   provider trait, built-in 12-block `LocalProvider`, and
-//!   `hfrog::HfrogProvider` (HTTP client for the artifact server
-//!   at `https://starlink.youxi123.com/hfrog`). Introduced
-//!   alongside the v0.10 D AI texture pipeline.
+//!   `hfrog::HfrogProvider` (HTTP client for the artifact server,
+//!   default `https://hfrog.gamesci-lite.com`, override via
+//!   `MAQUETTE_HFROG_BASE_URL`). Introduced alongside the v0.10 D
+//!   AI texture pipeline.
 
 pub mod block_meta;
 pub mod export;

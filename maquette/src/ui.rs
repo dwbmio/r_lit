@@ -1900,7 +1900,7 @@ fn block_library_drawer(
             .on_hover_text(
                 "Pull every maquette-block/v1 record from the hfrog \
                  artifact server (default: \
-                 https://starlink.youxi123.com/hfrog) and merge with \
+                 https://hfrog.gamesci-lite.com) and merge with \
                  the bundled local set. Override the URL with \
                  MAQUETTE_HFROG_BASE_URL.",
             )
