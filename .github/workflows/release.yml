@@ -43,12 +43,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # GUI projects ship a notarized .dmg from macOS-latest in addition
+          # to the usual tar.gz; everything else stays binary-only.
+          GUI_PROJECTS=(maquette group_vibe_workbench)
+
+          is_gui() {
+            local n=$1
+            for g in "${GUI_PROJECTS[@]}"; do [ "$g" = "$n" ] && return 0; done
+            return 1
+          }
+
           PROJECTS="[]"
 
           add_project() {
-            local name=$1 version=$2
-            PROJECTS=$(echo "$PROJECTS" | jq -c --arg n "$name" --arg v "$version" '. + [{"name":$n,"version":$v}]')
-            echo "  + ${name} v${version} (new version, no existing release)"
+            local name=$1 version=$2 gui="false"
+            is_gui "$name" && gui="true"
+            PROJECTS=$(echo "$PROJECTS" | jq -c \
+              --arg n "$name" --arg v "$version" --argjson g "$gui" \
+              '. + [{"name":$n,"version":$v,"gui":$g}]')
+            echo "  + ${name} v${version} (gui=${gui})"
           }
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -67,7 +80,7 @@ jobs:
             done
           else
             echo "=== Checking version diffs (HEAD vs HEAD^) ==="
-            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench; do
+            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench maquette; do
               [ -f "${dir}/Cargo.toml" ] || continue
               NEW_VER=$(grep '^version' "${dir}/Cargo.toml" | head -1 | cut -d'"' -f2)
               OLD_VER=$(git show HEAD^:"${dir}/Cargo.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
@@ -148,6 +161,40 @@ jobs:
           key: ${{ matrix.target }}
           cache-all-crates: true
 
+      # ── macOS-only: import the Developer ID cert into a transient
+      #               keychain so codesign can find it later. Skipped if
+      #               MACOS_CERTIFICATE secret is not set, in which case
+      #               GUI bundles will be unsigned (still useful for PRs).
+      - name: Import codesign identity (macOS)
+        if: matrix.os == 'macos-latest'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "${MACOS_CERTIFICATE:-}" ]; then
+            echo "::warning::MACOS_CERTIFICATE not set — GUI builds will be unsigned"
+            echo "MACOS_SIGNED=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KP="${KEYCHAIN_PASSWORD:-r_lit-temp-keychain-pwd}"
+          KC="${RUNNER_TEMP}/build.keychain-db"
+          security create-keychain -p "$KP" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KP" "$KC"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security import "${RUNNER_TEMP}/cert.p12" \
+            -k "$KC" -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KP" "$KC"
+          # Make our keychain the default search path.
+          PRIOR=$(security list-keychains -d user | tr -d '" ' | tr '\n' ' ')
+          security list-keychains -d user -s "$KC" $PRIOR
+          rm -f "${RUNNER_TEMP}/cert.p12"
+          echo "MACOS_SIGNED=1" >> "$GITHUB_ENV"
+
       - name: Build
         shell: bash
         env:
@@ -155,6 +202,20 @@ jobs:
         run: |
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
+            GUI=$(echo "$item" | jq -r '.gui')
+
+            # GUI apps don't cross-compile cleanly to musl/cross targets
+            # (Bevy/GPUI need system libs that aren't in the cross images).
+            # Restrict them to native macOS + native Windows + native glibc.
+            if [ "$GUI" = "true" ]; then
+              case "${{ matrix.target }}" in
+                x86_64-apple-darwin|aarch64-apple-darwin|x86_64-pc-windows-msvc) ;;
+                *)
+                  echo "⤳ skipping $NAME on ${{ matrix.target }} (GUI; not supported)"
+                  continue
+                  ;;
+              esac
+            fi
 
             echo "🔨 Building $NAME for ${{ matrix.target }}..."
             cd "$NAME"
@@ -174,17 +235,51 @@ jobs:
         shell: bash
         env:
           PROJECTS: ${{ needs.detect.outputs.projects }}
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PWD: ${{ secrets.MACOS_NOTARY_PWD }}
         run: |
           mkdir -p release
 
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
+            VERSION=$(echo "$item" | jq -r '.version')
+            GUI=$(echo "$item" | jq -r '.gui')
+
+            BIN_PATH="${NAME}/target/${{ matrix.target }}/release/${NAME}"
+            BIN_PATH_EXE="${BIN_PATH}.exe"
+            [ -f "$BIN_PATH" ] || [ -f "$BIN_PATH_EXE" ] || {
+              echo "⤳ no artifact for ${NAME} on ${{ matrix.target }}, skip packaging"
+              continue
+            }
+
+            # GUI on macOS → signed + notarized .dmg (no tar.gz dup)
+            if [ "$GUI" = "true" ] && [ "${{ matrix.os }}" = "macos-latest" ]; then
+              if [ "${MACOS_SIGNED:-0}" != "1" ]; then
+                echo "::warning::skipping ${NAME} DMG — no signing identity"
+                continue
+              fi
+              case "$NAME" in
+                maquette)              APP_NAME="Maquette" ;;
+                group_vibe_workbench)  APP_NAME="Group Vibe Workbench" ;;
+                *)                     APP_NAME="$NAME" ;;
+              esac
+              APP_NAME="$APP_NAME" \
+              BIN_NAME="$NAME" \
+              PROJECT_DIR="$NAME" \
+              TARGET_TRIPLE="${{ matrix.target }}" \
+              VERSION="$VERSION" \
+              OUT_DIR="$(pwd)/release" \
+                bash .github/scripts/macos-bundle.sh
+              continue
+            fi
 
             cd "${NAME}/target/${{ matrix.target }}/release"
             if [ "${{ matrix.os }}" == "windows-latest" ]; then
-              7z a ../../../../release/${NAME}-${{ matrix.target }}.zip ${NAME}.exe
+              7z a "../../../../release/${NAME}-${{ matrix.target }}.zip" "${NAME}.exe"
             else
-              tar czf ../../../../release/${NAME}-${{ matrix.target }}.tar.gz ${NAME}
+              tar czf "../../../../release/${NAME}-${{ matrix.target }}.tar.gz" "${NAME}"
             fi
             cd ../../../..
           done
@@ -242,6 +337,7 @@ jobs:
             mkdir -p "pkg-${NAME}"
             cp flat/${NAME}-*.tar.gz "pkg-${NAME}/" 2>/dev/null || true
             cp flat/${NAME}-*.zip "pkg-${NAME}/" 2>/dev/null || true
+            cp flat/${NAME}-*.dmg "pkg-${NAME}/" 2>/dev/null || true
 
             ASSET_COUNT=$(ls "pkg-${NAME}/" 2>/dev/null | wc -l)
             if [ "$ASSET_COUNT" -eq 0 ]; then
@@ -256,10 +352,10 @@ jobs:
 
             # Build release notes
             NOTES="${NAME} v${VERSION}"$'\n\n'"Platforms:"$'\n'
-            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip; do
+            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
               [ -f "$f" ] || continue
               BASE=$(basename "$f")
-              PLAT=$(echo "$BASE" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//')
+              PLAT=$(echo "$BASE" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//' | sed 's/\.dmg$//')
               NOTES="${NOTES}- ${PLAT}"$'\n'
             done
             NOTES="${NOTES}"$'\n'"Install: gh release download ${TAG} -p '${NAME}-*' -R ${{ env.GITHUB_REPO }}"
@@ -298,6 +394,14 @@ jobs:
             [bulk_upload]="批量下载上传工具"
             [omniplan_covers_ding]="OmniPlan 封面生成工具"
             [group_vibe_workbench]="桌面协作工作台"
+            [maquette]="Kit-based low-poly 建模与导出工具"
+          )
+
+          # GUI projects ship as a signed/notarized .dmg on macOS,
+          # and only build for native Linux/Windows targets (no musl).
+          declare -A GUI_TOOLS=(
+            [maquette]=1
+            [group_vibe_workbench]=1
           )
 
           PLATFORMS=(
@@ -351,10 +455,19 @@ jobs:
               "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"is_latest\":true,\"release_notes\":\"Built by GitHub Actions\",\"created_by\":\"github-actions/${{ github.run_number }}\"}"
 
             # 4. Release records
+            IS_GUI="${GUI_TOOLS[$NAME]:-0}"
             for p in "${PLATFORMS[@]}"; do
               IFS='|' read -r code os arch display <<< "$p"
+
+              # GUI tools don't ship for musl-based Linux targets.
+              if [[ "$IS_GUI" == "1" && "$code" == *-musl ]]; then
+                continue
+              fi
+
               if [[ "$os" == "windows" ]]; then
                 DL_URL="${GH_DL}/${NAME}-${code}.zip"
+              elif [[ "$IS_GUI" == "1" && "$os" == "macos" ]]; then
+                DL_URL="${GH_DL}/${NAME}-${code}.dmg"
               else
                 DL_URL="${GH_DL}/${NAME}-${code}.tar.gz"
               fi
