@@ -1,5 +1,7 @@
 mod cmd;
 mod config;
+#[cfg(feature = "gui")]
+mod connection;
 mod error;
 mod hfrog;
 mod output;

@@ -160,19 +160,20 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 JSON output (`--json`) is available on every subcommand for CI / dashboards.
 
-## hfrog Mirror (optional)
+## hfrog Cloud Drive (optional)
 
-If you run an [hfrog](https://github.com/dingcode-icu/hfrog) artifact registry, mj_atlas can push every saved project / exported atlas / refreshed manifest there in addition to the local files. Disabled by default; opt-in via `~/.config/mj_atlas/config.toml`:
+mj_atlas can use an [hfrog](https://github.com/dingcode-icu/hfrog) artifact registry as a "cloud drive": every saved project / exported atlas / refreshed manifest gets mirrored, AND the GUI's Welcome screen lists projects from hfrog merged with local recents. Disabled by default; opt-in via `~/.config/mj_atlas/config.toml`:
 
 ```toml
 [hfrog]
 enabled = true
-endpoint = "https://hfrog.example.com"
-token = ""                      # leave empty for unauthenticated
-default_runtime = "asset-pack"
+endpoint = "https://hfrog.gamesci-lite.com"   # default in v0.4.3+
+token = ""                                    # leave empty for unauthenticated
 ```
 
-The GUI exposes the same settings under the "hfrog Mirror" section in the Settings panel. Failed uploads never abort the local pipeline — they're logged to `<atlas>.log` for review. See [`docs/HFROG.md`](docs/HFROG.md) for wire format, naming convention, and failure semantics.
+The GUI exposes the same settings under the "hfrog Mirror" section in the Settings panel. On startup a 1.5-second probe decides between **online** (cloud reads enabled, project list merged) and **offline** (local-only) modes; the menubar badge in the top right (`● Online` / `○ Offline`) is clickable to retry. Failed uploads never abort the local pipeline — they're logged to `<atlas>.log` for review.
+
+See [`docs/HFROG.md`](docs/HFROG.md) for wire format, runtime registration, naming convention, and failure semantics.
 
 ## Keyboard Shortcuts (GUI)
 

@@ -160,19 +160,20 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 每个子命令都支持 `--json` 输出，方便 CI 和 dashboard 消费。
 
-## hfrog 制品镜像（可选）
+## hfrog 云盘（可选）
 
-如果你跑了一个 [hfrog](https://github.com/dingcode-icu/hfrog) 制品仓库，mj_atlas 在本地保存的同时还能把每次的项目 / 导出 atlas / 刷新后的 manifest 同步推一份到 hfrog。默认关闭，需要在 `~/.config/mj_atlas/config.toml` 里手动启用：
+mj_atlas 可以把 [hfrog](https://github.com/dingcode-icu/hfrog) 制品仓库当**云盘**用：每次保存项目 / 导出 atlas / 刷新 manifest 都会同步推一份到 hfrog；同时 GUI 欢迎页会把 hfrog 上的项目跟本地最近项目**合并展示**。默认关闭，需要在 `~/.config/mj_atlas/config.toml` 里手动启用：
 
 ```toml
 [hfrog]
 enabled = true
-endpoint = "https://hfrog.example.com"
-token = ""                      # 不需要鉴权时留空
-default_runtime = "asset-pack"
+endpoint = "https://hfrog.gamesci-lite.com"   # v0.4.3+ 默认值
+token = ""                                    # 不需要鉴权时留空
 ```
 
-GUI 的 Settings 面板底部有 "hfrog Mirror" 区域可以直接编辑配置。**上传失败永不阻塞本地流水**——错误写到 `<atlas>.log` 供事后查看。线协议、命名规则、失败处理见 [`docs/HFROG.md`](docs/HFROG.md)。
+GUI 的 Settings 面板底部有 "hfrog Mirror" 区域可以直接编辑配置。启动时 1.5 秒探活决定 **在线**（云读取开启，项目列表合并）/ **离线**（仅本地）模式；菜单栏右上角徽章（`● Online` / `○ Offline`）可点击重试。**上传失败永不阻塞本地流水**——错误写到 `<atlas>.log` 供事后查看。
+
+线协议、runtime 注册、命名规则、失败处理见 [`docs/HFROG.md`](docs/HFROG.md)。
 
 ## 快捷键（GUI）
 

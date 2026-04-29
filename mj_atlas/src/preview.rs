@@ -338,6 +338,20 @@ struct MJAtlasApp {
     /// Kept separate from `config.hfrog` so canceling/discarding edits is
     /// trivial — just re-read from `config`.
     config_dirty: bool,
+    /// hfrog connection state — `Probing` at startup, then resolves to
+    /// Online/Offline within the probe timeout (1.5 s). Drives the menubar
+    /// badge and the cloud-side project list.
+    connection: crate::connection::ConnectionState,
+    /// Channel to receive the result of an in-flight probe. Polled each
+    /// frame; cleared once the result arrives.
+    probe_rx: Option<std::sync::mpsc::Receiver<crate::connection::ProbeResult>>,
+    /// Cached cloud project list (refreshed when entering Welcome screen
+    /// while online, or after a manual Refresh click). Empty when offline
+    /// or when the read failed.
+    cloud_projects: Vec<crate::hfrog::CloudProject>,
+    /// In-flight cloud-list refresh — same pattern as `probe_rx`.
+    cloud_list_rx:
+        Option<std::sync::mpsc::Receiver<std::result::Result<Vec<crate::hfrog::CloudProject>, String>>>,
 }
 
 const FORMAT_NAMES: &[(&str, &str)] = &[
@@ -357,8 +371,17 @@ impl Default for MJAtlasApp {
             log::warn!("config: load failed, using defaults: {}", e);
             crate::config::Config::default()
         });
+        // Kick off a hfrog reachability probe immediately. The receiver is
+        // polled each update() frame and resolves within 1.5 s; meanwhile
+        // the UI shows a spinner and the user can still work locally —
+        // nothing in the boot path blocks on the result.
+        let probe_rx = Some(crate::connection::spawn_probe(&config.hfrog));
+        let mut connection = crate::connection::ConnectionState::default();
+        connection.probed_endpoint = config.hfrog.endpoint.clone();
+        // Land on Welcome screen so the cloud / local project list is the
+        // first thing the user sees once the probe resolves.
         Self {
-            mode: AppMode::Packer(PackerState::new_empty()),
+            mode: AppMode::Welcome,
             toasts: Vec::new(),
             open_dialog: None,
             recent_files: Vec::new(),
@@ -366,6 +389,10 @@ impl Default for MJAtlasApp {
             fonts_loaded: false,
             config,
             config_dirty: false,
+            connection,
+            probe_rx,
+            cloud_projects: Vec::new(),
+            cloud_list_rx: None,
         }
     }
 }
@@ -904,7 +931,7 @@ impl MJAtlasApp {
                     }
                 });
 
-                // Right-aligned project info
+                // Right-aligned project info + connection mode badge.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let status = match &self.mode {
                         AppMode::Welcome => "Home".to_string(),
@@ -916,6 +943,56 @@ impl MJAtlasApp {
                             .small()
                             .color(egui::Color32::GRAY),
                     );
+                    ui.separator();
+
+                    // Connection badge. Probing → spinner; online → green
+                    // dot + endpoint short-form; offline → grey dot + retry
+                    // button. Click on a non-probing badge re-runs the probe.
+                    use crate::connection::ConnectionMode;
+                    match self.connection.mode {
+                        ConnectionMode::Probing => {
+                            ui.spinner();
+                            ui.label(
+                                egui::RichText::new("Probing hfrog…")
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            );
+                        }
+                        ConnectionMode::Online => {
+                            // Show "● Online · <host>" with retry on click.
+                            let host = host_of(&self.connection.probed_endpoint);
+                            let resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("● Online · {}", host))
+                                        .small()
+                                        .color(egui::Color32::from_rgb(60, 180, 90)),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            if resp.on_hover_text("click to refresh").clicked() {
+                                self.retry_probe();
+                                self.refresh_cloud_projects();
+                            }
+                        }
+                        ConnectionMode::Offline => {
+                            let resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new("○ Offline")
+                                        .small()
+                                        .color(egui::Color32::from_rgb(180, 100, 60)),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            let tt = if self.connection.last_error.is_empty() {
+                                "click to try cloud".to_string()
+                            } else {
+                                format!("{}\nclick to retry", self.connection.last_error)
+                            };
+                            if resp.on_hover_text(tt).clicked() {
+                                self.retry_probe();
+                            }
+                        }
+                    }
                 });
             });
         });
@@ -923,6 +1000,104 @@ impl MJAtlasApp {
         if let Some(action) = action {
             self.handle_menu_action(action);
         }
+    }
+
+    /// Read the result of an in-flight probe (if any). Resolves the
+    /// connection state and, when transitioning to Online, kicks off a
+    /// cloud project list refresh so the Welcome screen has data to show.
+    fn poll_probe_result(&mut self) {
+        if self.probe_rx.is_none() {
+            return;
+        }
+        let rx = self.probe_rx.as_ref().expect("probe_rx checked Some");
+        match rx.try_recv() {
+            Ok(result) => {
+                let was_online = self.connection.is_online();
+                self.connection.mode = result.mode;
+                self.connection.last_error = result.error;
+                self.connection.probed_endpoint = result.endpoint;
+                self.probe_rx = None;
+                log::info!(
+                    "hfrog: probe resolved → {:?} (endpoint={}, err='{}')",
+                    self.connection.mode,
+                    self.connection.probed_endpoint,
+                    self.connection.last_error
+                );
+                // Auto-refresh the cloud project list on the leading edge of
+                // going online, so Welcome is populated by the time the user
+                // actually looks at it. Going offline drops the cached list
+                // so stale entries can't leak through.
+                if self.connection.is_online() && !was_online {
+                    self.refresh_cloud_projects();
+                } else if !self.connection.is_online() {
+                    self.cloud_projects.clear();
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Worker thread died unexpectedly — collapse to Offline.
+                self.connection.mode = crate::connection::ConnectionMode::Offline;
+                self.connection.last_error =
+                    "probe worker disconnected before sending result".to_string();
+                self.probe_rx = None;
+            }
+        }
+    }
+
+    /// Read the result of an in-flight cloud-projects list call.
+    fn poll_cloud_list_result(&mut self) {
+        if self.cloud_list_rx.is_none() {
+            return;
+        }
+        let rx = self
+            .cloud_list_rx
+            .as_ref()
+            .expect("cloud_list_rx checked Some");
+        match rx.try_recv() {
+            Ok(Ok(projects)) => {
+                log::info!("hfrog: cloud list refreshed — {} project(s)", projects.len());
+                self.cloud_projects = projects;
+                self.cloud_list_rx = None;
+            }
+            Ok(Err(err)) => {
+                log::warn!("hfrog: cloud list refresh failed: {}", err);
+                self.cloud_projects.clear();
+                self.cloud_list_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.cloud_list_rx = None;
+            }
+        }
+    }
+
+    /// Manually re-probe hfrog. Bound to the menubar's "Try cloud" button
+    /// when offline, and the Welcome screen's refresh button.
+    fn retry_probe(&mut self) {
+        // Only one probe in flight at a time — second click while probing
+        // is a no-op rather than spawning a duplicate worker.
+        if self.probe_rx.is_some() {
+            return;
+        }
+        self.connection.mode = crate::connection::ConnectionMode::Probing;
+        self.connection.last_error.clear();
+        self.probe_rx = Some(crate::connection::spawn_probe(&self.config.hfrog));
+    }
+
+    /// Spawn a worker that fetches the cloud project list. Result lands in
+    /// `self.cloud_projects` once `poll_cloud_list_result` reads the rx.
+    fn refresh_cloud_projects(&mut self) {
+        if self.cloud_list_rx.is_some() {
+            return;
+        }
+        let cfg = self.config.hfrog.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::hfrog::list_cloud_projects(&cfg)
+                .map_err(|e| format!("{}", e));
+            let _ = tx.send(result);
+        });
+        self.cloud_list_rx = Some(rx);
     }
 
     /// Process global keyboard shortcuts. Called once per frame BEFORE the
@@ -1534,26 +1709,209 @@ impl MJAtlasApp {
                     self.open_atlas_dialog();
                 }
 
-                if !self.recent_files.is_empty() {
-                    ui.add_space(20.0);
-                    ui.label(egui::RichText::new("Recent").size(13.0).color(egui::Color32::GRAY));
-                    ui.add_space(4.0);
-                    let mut open_path: Option<PathBuf> = None;
-                    for path in &self.recent_files {
-                        let label = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                        if ui.add(egui::Label::new(
-                            egui::RichText::new(&label).size(13.0).color(egui::Color32::from_rgb(100, 180, 255)),
-                        ).sense(egui::Sense::click())).clicked() {
-                            open_path = Some(path.clone());
-                        }
-                    }
-                    if let Some(path) = open_path {
-                        self.handle_menu_action(MenuAction::OpenRecent(path));
+                // ── Merged project list (cloud + local) ──
+                //
+                // Each row carries an origin badge:
+                //   ☁︎  = only on hfrog
+                //   💾 = only on disk (recent_files)
+                //   ☁︎💾 = both (display name matches a cloud project AND a
+                //          local recent path). Clicking a synced row prefers
+                //          local — it's instant and the cloud copy is
+                //          identical bytes.
+                //
+                // Connection status decides what we can show:
+                //   Probing  → spinner placeholder
+                //   Online   → cloud + local merged
+                //   Offline  → local-only with a hint to retry the probe
+                self.draw_welcome_project_list(ui);
+            });
+        });
+    }
+
+    /// Render the merged project picker on the Welcome screen. Extracted from
+    /// `ui_welcome` so the logic stays readable as the merge rules grow.
+    fn draw_welcome_project_list(&mut self, ui: &mut egui::Ui) {
+        use crate::connection::ConnectionMode;
+
+        ui.add_space(20.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Projects").size(13.0).color(egui::Color32::GRAY));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Refresh re-probes hfrog AND re-fetches the cloud list.
+                if ui
+                    .small_button("Refresh")
+                    .on_hover_text("Re-probe hfrog and refresh project list")
+                    .clicked()
+                {
+                    self.retry_probe();
+                    if self.connection.is_online() {
+                        self.refresh_cloud_projects();
                     }
                 }
             });
         });
+        ui.add_space(4.0);
+
+        // Build a unified row list with origin tags. Use a BTreeMap keyed by
+        // display name so duplicate-named projects from cloud + local merge
+        // automatically into one row.
+        #[derive(Default)]
+        struct Origins {
+            cloud: Option<crate::hfrog::CloudProject>,
+            local: Option<PathBuf>,
+        }
+        let mut rows: std::collections::BTreeMap<String, Origins> = Default::default();
+        for cp in &self.cloud_projects {
+            rows.entry(cp.display_name.clone())
+                .or_default()
+                .cloud = Some(cp.clone());
+        }
+        for path in &self.recent_files {
+            let display = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
+            rows.entry(display).or_default().local = Some(path.clone());
+        }
+
+        // Probing placeholder so the user doesn't think "empty list = bug".
+        if matches!(self.connection.mode, ConnectionMode::Probing) {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new("Checking hfrog…")
+                        .size(12.0)
+                        .color(egui::Color32::GRAY),
+                );
+            });
+        }
+
+        if rows.is_empty()
+            && !matches!(self.connection.mode, ConnectionMode::Probing)
+        {
+            ui.label(
+                egui::RichText::new("(no projects yet — click New Project)")
+                    .size(12.0)
+                    .color(egui::Color32::DARK_GRAY),
+            );
+        }
+
+        let mut open_local: Option<PathBuf> = None;
+        let mut open_cloud: Option<crate::hfrog::CloudProject> = None;
+        for (display, origins) in &rows {
+            let badge = match (&origins.cloud, &origins.local) {
+                (Some(_), Some(_)) => "☁︎💾",
+                (Some(_), None) => "☁︎",
+                (None, Some(_)) => "💾",
+                (None, None) => continue,
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(badge)
+                        .size(12.0)
+                        .color(egui::Color32::GRAY),
+                );
+                let resp = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(display)
+                            .size(13.0)
+                            .color(egui::Color32::from_rgb(100, 180, 255)),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if resp.clicked() {
+                    // Prefer local on synced rows (instant + identical bytes).
+                    if let Some(p) = &origins.local {
+                        open_local = Some(p.clone());
+                    } else if let Some(cp) = &origins.cloud {
+                        open_cloud = Some(cp.clone());
+                    }
+                }
+                if let Some(cp) = &origins.cloud {
+                    ui.label(
+                        egui::RichText::new(format!("v{}", short_ver(&cp.ver)))
+                            .size(11.0)
+                            .color(egui::Color32::DARK_GRAY),
+                    );
+                }
+            });
+        }
+
+        if let Some(path) = open_local {
+            self.handle_menu_action(MenuAction::OpenRecent(path));
+        }
+        if let Some(cp) = open_cloud {
+            self.open_cloud_project(&cp);
+        }
+
+        if matches!(self.connection.mode, ConnectionMode::Offline)
+            && !self.connection.last_error.is_empty()
+        {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ Offline mode — local-only ({})",
+                    self.connection.last_error
+                ))
+                .size(11.0)
+                .color(egui::Color32::DARK_GRAY),
+            );
+        }
     }
+
+    /// Download a `.tpproj` from hfrog and load it into a fresh PackerState.
+    /// Best-effort: failure surfaces as a toast and we stay on Welcome.
+    fn open_cloud_project(&mut self, cp: &crate::hfrog::CloudProject) {
+        let cfg = self.config.hfrog.clone();
+        let cp_owned = cp.clone();
+        // Synchronous download — small file, no need for a background thread
+        // unless the user complains about UI lag here. Wrap in a thread later
+        // if the hfrog round-trip starts feeling sticky.
+        let bytes = match crate::hfrog::download_project(&cfg, &cp_owned) {
+            Ok(b) => b,
+            Err(e) => {
+                self.toast(format!("Cloud open failed: {}", e), ToastKind::Error);
+                return;
+            }
+        };
+        let parsed: std::result::Result<Project, String> = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parse tpproj: {}", e));
+        let project = match parsed {
+            Ok(p) => p,
+            Err(e) => {
+                self.toast(format!("Cloud project parse failed: {}", e), ToastKind::Error);
+                return;
+            }
+        };
+        // No persistent disk path — cloud-loaded projects are "untitled" until
+        // the user does Save As. They get the dirty marker so Save prompts.
+        let mut state = PackerState::from_project(project, PathBuf::from(&cp_owned.display_name));
+        state.project_path = None;
+        state.dirty = true;
+        self.mode = AppMode::Packer(state);
+        self.toast(
+            format!("Loaded '{}' from hfrog", cp_owned.display_name),
+            ToastKind::Success,
+        );
+    }
+}
+
+/// Truncate a long version string so it fits in the project list. SHA-prefix
+/// versions look ugly past 8 chars in a tight UI; for "save-<unix>" timestamps
+/// we just show the trailing suffix.
+fn short_ver(v: &str) -> String {
+    if v.is_empty() {
+        return "?".to_string();
+    }
+    if v.len() <= 12 {
+        v.to_string()
+    } else {
+        format!("{}…", &v[..10])
+    }
+}
+
+impl MJAtlasApp {
 
     // ─── Packer configuration screen ──
 
@@ -2545,6 +2903,16 @@ impl eframe::App for MJAtlasApp {
             apply_light_theme(ctx);
         }
 
+        // Drain the hfrog probe / cloud list receivers. The probe always
+        // resolves within ~1.5s; cloud list takes a single round trip after
+        // that. While they're in flight we keep `request_repaint` so the
+        // spinner doesn't freeze.
+        self.poll_probe_result();
+        self.poll_cloud_list_result();
+        if self.probe_rx.is_some() || self.cloud_list_rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+
         // Process keyboard shortcuts BEFORE any UI is laid out so a shortcut
         // doesn't race with widget event handling that would otherwise
         // consume the same key (e.g. Cmd+S inside a focused text field).
@@ -3042,6 +3410,21 @@ fn parse_json_hash(
 }
 
 /// Parse `verticesUV` (atlas-space mesh vertices) from a sprite metadata entry.
+/// Extract the host portion of an endpoint URL for the connection badge.
+/// Strips `https://` / `http://` prefix and any trailing path so the menubar
+/// reads "● Online · hfrog.gamesci-lite.com" rather than the full URL.
+fn host_of(endpoint: &str) -> String {
+    let mut s = endpoint.trim();
+    for p in ["https://", "http://"] {
+        if let Some(stripped) = s.strip_prefix(p) {
+            s = stripped;
+            break;
+        }
+    }
+    let s = s.split('/').next().unwrap_or(s);
+    s.to_string()
+}
+
 fn parse_mesh_uv(value: Option<&serde_json::Value>) -> Option<Vec<[f32; 2]>> {
     let arr = value?.as_array()?;
     let mut out = Vec::with_capacity(arr.len());

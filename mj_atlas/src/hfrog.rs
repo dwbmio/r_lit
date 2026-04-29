@@ -50,9 +50,11 @@ pub struct ArtifactSpec {
 /// because hfrog uploads happen from background threads (GUI worker) or
 /// from the synchronous CLI — no shared async runtime needed.
 pub struct Client {
-    inner: reqwest::blocking::Client,
-    endpoint: String,
-    token: String,
+    // Crate-visible so the `list_cloud_projects` / `download_project` free
+    // functions can reuse the same auth + base URL without re-validating.
+    pub(crate) inner: reqwest::blocking::Client,
+    pub(crate) endpoint: String,
+    pub(crate) token: String,
 }
 
 impl Client {
@@ -171,12 +173,34 @@ struct RespRet {
     msg: String,
 }
 
+/// Two-runtime taxonomy on the hfrog side. mj_atlas v0.5+ registers both
+/// runtimes in the registry so cloud listings can be filtered cleanly:
+///   - `mj_atlas-project`: the `.tpproj` project bundle (one per project)
+///   - `mj_atlas-atlas`:   everything else (atlas .png / .json / .manifest /
+///                         .tpsheet / .tres / log)
+///
+/// Earlier versions used a single configurable `default_runtime` ("asset-pack")
+/// for everything. We pivoted because the Welcome screen needs to query
+/// "give me all PROJECTS" without scanning per-pack atlas dumps.
+pub const RUNTIME_PROJECT: &str = "mj_atlas-project";
+pub const RUNTIME_ATLAS: &str = "mj_atlas-atlas";
+
+fn runtime_for_kind(file_kind: &str) -> &'static str {
+    if file_kind == "tpproj" {
+        RUNTIME_PROJECT
+    } else {
+        RUNTIME_ATLAS
+    }
+}
+
 /// Build a fresh `ArtifactSpec` for a file destined for hfrog.
 ///
 /// `project_name` typically maps to the `.tpproj` basename. `file_kind` is a
 /// short tag describing what KIND of artifact this is (`tpproj`, `atlas-png`,
 /// `atlas-json`, `manifest`, `log`) — joined with `project_name` to form the
-/// `name` field, and used to derive the S3 key suffix.
+/// `name` field, used to derive the S3 key suffix, AND used to pick the
+/// runtime ("mj_atlas-project" for tpproj, "mj_atlas-atlas" for everything
+/// else).
 pub fn build_spec(
     cfg: &HfrogConfig,
     project_name: &str,
@@ -204,7 +228,7 @@ pub fn build_spec(
         md5,
         descript: format!("mj_atlas {} of '{}'", file_kind, project_name),
         cont_size,
-        runtime: cfg.default_runtime.clone(),
+        runtime: runtime_for_kind(file_kind).to_string(),
         s3_key: format!("mj_atlas/{}/{}/{}", project_name, ver, filename),
         s3_inc_id: cfg.s3_inc_id as i32,
         is_artifactory_ready: false,
@@ -214,6 +238,199 @@ pub fn build_spec(
             .and_then(|e| e.to_str())
             .map(|s| s.to_string()),
     }
+}
+
+// ─── Read side: list cloud projects, download by name ──────────────────────
+//
+// New in v0.5.0 — turns hfrog from a write-only mirror into a "cloud drive"
+// for the Welcome screen's project picker. Both helpers swallow network
+// failures and return Ok(empty) / Err(string) the GUI can ignore safely.
+
+/// One row in the cloud project list shown on the Welcome screen.
+#[derive(Debug, Clone)]
+pub struct CloudProject {
+    /// Hfrog `name` field — `<project>.tpproj` for our convention.
+    pub name: String,
+    /// Project-level basename (the part before `.tpproj`). What the user types.
+    pub display_name: String,
+    /// Latest version string we've pushed. Used by `download_project` to
+    /// resolve the right artifact when multiple versions coexist.
+    pub ver: String,
+    /// Pre-decode SHA256 prefix from when we last pushed (or whatever hfrog
+    /// returns). Used for local-vs-cloud merge tagging.
+    pub md5: String,
+    /// File size in bytes (just for display).
+    pub cont_size: i64,
+}
+
+/// List every `.tpproj` artifact registered under `mj_atlas-project`. The
+/// hfrog `list` endpoint already takes care of pagination; we cap at 50 to
+/// keep the Welcome screen quick.
+pub fn list_cloud_projects(cfg: &HfrogConfig) -> Result<Vec<CloudProject>> {
+    let client = Client::from_config(cfg)
+        .ok_or_else(|| AppError::Custom("hfrog: client inactive".into()))?;
+    let url = format!(
+        "{}/api/artifactory/list?index=0&cnt=50",
+        client.endpoint
+    );
+    let mut req = client.inner.get(&url);
+    if !client.token.is_empty() {
+        req = req.bearer_auth(&client.token);
+    }
+
+    let resp = req
+        .send()
+        .map_err(|e| AppError::Custom(format!("hfrog: list request: {}", e)))?;
+    if !resp.status().is_success() {
+        return Err(AppError::Custom(format!(
+            "hfrog: list HTTP {}",
+            resp.status()
+        )));
+    }
+    let body = resp
+        .text()
+        .map_err(|e| AppError::Custom(format!("hfrog: list body: {}", e)))?;
+
+    // Server response: `{"code":0,"msg":"","data":[ArtifactoryModel,...]}`
+    // We only need a few fields — declare a thin shape so unknown fields
+    // don't trip serde and a future schema change doesn't break us.
+    #[derive(serde::Deserialize)]
+    struct ListResp {
+        code: i32,
+        #[serde(default)]
+        msg: String,
+        #[serde(default)]
+        data: Vec<ListItem>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ListItem {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        ver: String,
+        #[serde(default)]
+        md5: String,
+        #[serde(default)]
+        cont_size: i64,
+        #[serde(default)]
+        runtime: String,
+    }
+
+    let parsed: ListResp = serde_json::from_str(&body)
+        .map_err(|e| AppError::Custom(format!("hfrog: list parse: {} (body={})", e, body)))?;
+    if parsed.code != 0 {
+        return Err(AppError::Custom(format!(
+            "hfrog: list code={} msg={}",
+            parsed.code, parsed.msg
+        )));
+    }
+
+    // Filter to project-runtime entries. The server's `runtime` column is a
+    // CHAR(20) so it pads with trailing spaces — we trim before comparing.
+    let mut projects: Vec<CloudProject> = parsed
+        .data
+        .into_iter()
+        .filter(|it| it.runtime.trim() == RUNTIME_PROJECT)
+        .filter(|it| it.name.ends_with(".tpproj"))
+        .map(|it| CloudProject {
+            display_name: it
+                .name
+                .strip_suffix(".tpproj")
+                .unwrap_or(&it.name)
+                .to_string(),
+            name: it.name,
+            ver: it.ver,
+            md5: it.md5,
+            cont_size: it.cont_size,
+        })
+        .collect();
+
+    // Stable order: most-likely-name-first by display name. The user clicks
+    // by project name, not by upload time, so alphabetical reads cleaner.
+    projects.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    Ok(projects)
+}
+
+/// Download one cloud project's `.tpproj` bytes via hfrog's presigned-URL
+/// endpoint. Two HTTP calls: hfrog returns an S3 URL, we GET that URL.
+///
+/// When the server's S3 backend is misconfigured this fails at the first
+/// hop (`get_object_presigned_url` returns code 1003 / 1004); the caller
+/// surfaces that as a toast.
+pub fn download_project(cfg: &HfrogConfig, project: &CloudProject) -> Result<Vec<u8>> {
+    let client = Client::from_config(cfg)
+        .ok_or_else(|| AppError::Custom("hfrog: client inactive".into()))?;
+    let url = format!(
+        "{}/api/artifactory/get_object_presigned_url?name={}&ver={}&runtime={}",
+        client.endpoint,
+        urlencode(&project.name),
+        urlencode(&project.ver),
+        urlencode(RUNTIME_PROJECT)
+    );
+    let mut req = client.inner.get(&url);
+    if !client.token.is_empty() {
+        req = req.bearer_auth(&client.token);
+    }
+    let resp = req
+        .send()
+        .map_err(|e| AppError::Custom(format!("hfrog: presign request: {}", e)))?;
+    let body = resp
+        .text()
+        .map_err(|e| AppError::Custom(format!("hfrog: presign body: {}", e)))?;
+
+    // Server replies with `RespVO<String>` where `data` is the presigned URL.
+    #[derive(serde::Deserialize)]
+    struct PresignResp {
+        code: i32,
+        #[serde(default)]
+        msg: String,
+        #[serde(default)]
+        data: String,
+    }
+    let parsed: PresignResp = serde_json::from_str(&body)
+        .map_err(|e| AppError::Custom(format!("hfrog: presign parse: {} (body={})", e, body)))?;
+    if parsed.code != 0 || parsed.data.is_empty() {
+        return Err(AppError::Custom(format!(
+            "hfrog: presign code={} msg={}",
+            parsed.code, parsed.msg
+        )));
+    }
+
+    // Hop two: GET the S3 URL. No auth header — the URL is signed.
+    let s3_resp = client
+        .inner
+        .get(&parsed.data)
+        .send()
+        .map_err(|e| AppError::Custom(format!("hfrog: S3 fetch: {}", e)))?;
+    if !s3_resp.status().is_success() {
+        return Err(AppError::Custom(format!(
+            "hfrog: S3 fetch HTTP {}",
+            s3_resp.status()
+        )));
+    }
+    let bytes = s3_resp
+        .bytes()
+        .map_err(|e| AppError::Custom(format!("hfrog: S3 body: {}", e)))?;
+    Ok(bytes.to_vec())
+}
+
+fn urlencode(s: &str) -> String {
+    // Minimal percent-encode — hfrog query params are simple ASCII project
+    // names and version strings. Escape spaces and the handful of reserved
+    // chars that are likely to show up in user-chosen names.
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
 }
 
 // ─── High-level orchestration: "mirror these artifacts to hfrog" ────────────
@@ -383,7 +600,12 @@ mod tests {
         assert_eq!(spec.name, "myproj.tpproj");
         assert_eq!(spec.ver, "0.1.0");
         assert_eq!(spec.cont_size, bytes.len() as i64);
-        assert_eq!(spec.runtime, "asset-pack");
+        // v0.5: file_kind "tpproj" routes to the project runtime, NOT the
+        // legacy single `default_runtime`. Atlas / log / manifest go to
+        // RUNTIME_ATLAS instead.
+        assert_eq!(spec.runtime, RUNTIME_PROJECT);
+        let png_spec = build_spec(&cfg, "myproj", "atlas-png", "myproj.png", b"x", "0.1.0");
+        assert_eq!(png_spec.runtime, RUNTIME_ATLAS);
         assert_eq!(spec.s3_key, "mj_atlas/myproj/0.1.0/myproj.tpproj");
         assert_eq!(spec.s3_inc_id, 0);
         assert_eq!(spec.is_raw, Some(false));

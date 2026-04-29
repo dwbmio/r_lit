@@ -115,6 +115,55 @@ success. Any other non-zero code surfaces in the runlog with the server's
 | `1004` | `NotFound`                             | querying an artifact that wasn't uploaded yet |
 | `1006` | `ParamsError`                          | client built the multipart wrong (we shouldn't see this any more after v0.4.3) |
 
+## Cloud-drive mode (v0.5.0+)
+
+mj_atlas treats hfrog as a "cloud drive": a quick reachability probe at
+boot decides whether the GUI runs in **online** or **offline** mode, and
+the Welcome screen merges hfrog-side projects with local recents.
+
+### Boot probe
+
+On startup the GUI fires `GET /api/artifactory/runtime/list?index=0&cnt=1`
+with a 1.5-second timeout against the configured endpoint. The response
+classifies as:
+
+| Outcome | Mode | Notes |
+|---|---|---|
+| HTTP 2xx + `code:0` | `Online` | Cloud reads enabled; project list refreshes immediately |
+| Non-2xx / `code != 0` / timeout / network error | `Offline` | Local-only; user can click the badge to retry |
+| `enabled = false` or empty endpoint in config | `Offline` | Same as above; no probe runs |
+
+Probe runs on a worker thread; the UI never blocks. The badge in the
+top-right of the menubar shows the current state (`● Online · <host>` /
+`○ Offline` / spinner while probing) and is clickable to retry.
+
+### Two runtimes on hfrog
+
+mj_atlas v0.5 expects two runtimes registered on the hfrog server. They
+need to exist before the first upload — register them via
+`PUT /api/artifactory/runtime/add`:
+
+| Runtime | What goes here | File kinds |
+|---|---|---|
+| `mj_atlas-project` | Project bundles (.tpproj) | `tpproj` |
+| `mj_atlas-atlas` | Pack outputs | `png`, `json`, `manifest.json`, `tpsheet`, `tres` |
+
+The Welcome screen lists projects by filtering `runtime=mj_atlas-project`
+client-side from `GET /api/artifactory/list?index=0&cnt=50`.
+
+### Project list merge
+
+Welcome screen rows carry an origin badge:
+
+- `☁︎` — only on hfrog
+- `💾` — only on disk (`recent_files`)
+- `☁︎💾` — both (display name matches a cloud project AND a local recent path)
+
+Synced rows prefer the local copy when clicked — it loads instantly and
+the bytes are identical. Cloud-only rows fetch the project via
+`GET /api/artifactory/get_object_presigned_url` followed by a GET to the
+returned S3 URL.
+
 ## CI use
 
 Set the env-equivalent of the config (the file IS the source of truth — no env vars yet):
