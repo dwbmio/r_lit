@@ -4,14 +4,27 @@
 //! Bin-only; the lib's pure `MeshBuilder` holds the geometry and the
 //! exporter consumes the same buckets without ever touching Bevy's
 //! render pipeline.
+//!
+//! v0.10 D-1.D added Textured-view support: when
+//! `ProjectMeta::texture_prefs.view_mode == Textured` and a palette
+//! slot's `texture: Some(TextureHandle)` resolves through
+//! `TextureRegistry`, the per-bucket material gets the AI-generated
+//! PNG bound as `base_color_texture`. Slots without a texture (or
+//! whose PNG didn't decode) fall back to flat colour automatically
+//! — the toon shader's optional sampler binding handles both lanes
+//! through the same code path.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::image::Image;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy_mod_outline::{OutlineMode, OutlineVolume};
 use maquette::grid::{Grid, Palette, CELL_SIZE};
 use maquette::mesher::{build_color_buckets, build_sphere_instances, MeshBuilder};
+use maquette::project::ProjectMeta;
+use maquette::texture_meta::PaletteViewMode;
 
+use crate::texture_registry::TextureRegistry;
 use crate::toon::ToonMaterial;
 
 const OUTLINE_WIDTH_PX: f32 = 3.0;
@@ -33,16 +46,33 @@ impl Plugin for PreviewMeshPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rebuild_cell_mesh(
     mut commands: Commands,
     mut grid: ResMut<Grid>,
     palette: Res<Palette>,
+    meta: Res<ProjectMeta>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ToonMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut texture_registry: ResMut<TextureRegistry>,
     existing: Query<Entity, With<CellMesh>>,
     existing_spheres: Query<Entity, With<SphereCell>>,
 ) {
-    if !grid.dirty {
+    // v0.10 D-1.D: rebuild on three triggers, not just `grid.dirty`.
+    //   1. `grid.dirty`     — paint stroke / shape edit (the original).
+    //   2. `palette` changed — colour edited, slot binding flipped, OR
+    //                          `PaletteSlotMeta::texture` populated by
+    //                          slot_texgen finishing a generate task.
+    //   3. `meta` changed   — `texture_prefs.view_mode` toggle (Flat ↔
+    //                         Textured), or `model_description`
+    //                         re-saved (cosmetic, but a redraw doesn't
+    //                         hurt).
+    // Any single trigger forces a full rebuild — not the cheapest
+    // possible diff, but it matches the existing whole-scene rebuild
+    // model and avoids a fiddly per-bucket invalidation pass.
+    let needs_rebuild = grid.dirty || palette.is_changed() || meta.is_changed();
+    if !needs_rebuild {
         return;
     }
 
@@ -55,6 +85,7 @@ fn rebuild_cell_mesh(
 
     let ox = -(grid.w as f32) * CELL_SIZE * 0.5;
     let oz = -(grid.h as f32) * CELL_SIZE * 0.5;
+    let textured = meta.texture_prefs.view_mode == PaletteViewMode::Textured;
 
     for (ci, builder) in build_color_buckets(&grid) {
         // Palette is sparse since v0.6. A deleted slot referenced by
@@ -66,10 +97,18 @@ fn rebuild_cell_mesh(
         if mesh.count_vertices() == 0 {
             continue;
         }
+        let material = build_slot_material(
+            &palette,
+            ci,
+            color,
+            textured,
+            &mut texture_registry,
+            &mut images,
+        );
         commands.spawn((
             CellMesh,
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(ToonMaterial::with_color(color))),
+            MeshMaterial3d(materials.add(material)),
             OutlineVolume {
                 visible: true,
                 width: OUTLINE_WIDTH_PX,
@@ -98,10 +137,18 @@ fn rebuild_cell_mesh(
     let sphere_mesh = meshes.add(Sphere::new(CELL_SIZE * 0.5));
     for inst in build_sphere_instances(&grid) {
         let color = palette.get(inst.color_idx).unwrap_or(Color::WHITE);
+        let mat = build_slot_material(
+            &palette,
+            inst.color_idx,
+            color,
+            textured,
+            &mut texture_registry,
+            &mut images,
+        );
         // Sharing a per-color material handle across every layer of
         // the same column lets Bevy batch draws — allocating one
         // material per layer would defeat the instancing win above.
-        let material = materials.add(ToonMaterial::with_color(color));
+        let material = materials.add(mat);
         let cx = ox + (inst.grid_x as f32 + 0.5) * CELL_SIZE;
         let cz = oz + (inst.grid_z as f32 + 0.5) * CELL_SIZE;
         let layers = inst.height.max(1);
@@ -127,6 +174,41 @@ fn rebuild_cell_mesh(
     }
 
     grid.dirty = false;
+}
+
+/// Pick the right `ToonMaterial` for a palette slot given the
+/// current view mode + texture availability.
+///
+/// Decision tree:
+/// * Flat view → flat colour material, no texture handle.
+/// * Textured view + slot has a `cache_key` that loads OK →
+///   `base_color_texture: Some(handle)` and `base_color: WHITE`
+///   so the texture dominates.
+/// * Textured view + slot has no `cache_key`, OR the registry
+///   couldn't decode the PNG → fall back to the flat colour
+///   material so the user sees *something* sensible (not a
+///   missing-texture magenta) for slots they haven't generated yet.
+fn build_slot_material(
+    palette: &Palette,
+    slot_idx: u8,
+    color: Color,
+    textured: bool,
+    registry: &mut TextureRegistry,
+    images: &mut Assets<Image>,
+) -> ToonMaterial {
+    if !textured {
+        return ToonMaterial::with_color(color);
+    }
+    let Some(slot_meta) = palette.meta(slot_idx) else {
+        return ToonMaterial::with_color(color);
+    };
+    let Some(handle) = slot_meta.texture.as_ref() else {
+        return ToonMaterial::with_color(color);
+    };
+    match registry.handle_for(&handle.cache_key, images) {
+        Some(image_handle) => ToonMaterial::with_color_and_texture(Color::WHITE, image_handle),
+        None => ToonMaterial::with_color(color),
+    }
 }
 
 fn bucket_to_mesh(builder: MeshBuilder) -> Mesh {

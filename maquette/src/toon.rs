@@ -4,6 +4,18 @@
 //! Rust-side uniform struct, registers the `MaterialPlugin`, and exposes a
 //! helper to build a material from a palette `Color`.
 //!
+//! v0.10 D-1.D added an **optional** `base_color_texture` so the
+//! Material drawer's `View: Textured` mode can sample generated PNGs
+//! on the 3-D preview. The same `Material` struct covers both modes:
+//! * Flat → `base_color_texture: None`. Bevy's
+//!   `AsBindGroup` impl fills the slot with a 1×1 white fallback so
+//!   `textureSample(...) × base_color × shade` collapses to plain
+//!   `base_color × shade`. Identical to the pre-D-1.D pixel output.
+//! * Textured → `base_color_texture: Some(handle)` pointing at the
+//!   `<cache_key>.png` image loaded by `texture_registry`. The
+//!   shader multiplies that against `base_color` (which is white in
+//!   this mode) so the texture is the dominant signal.
+//!
 //! **This material is preview-only.** Per the Export Golden Rule
 //! (`docs/handoff/COST_AWARENESS.md`), exports never reference this
 //! material — they ship geometry + vertex color + a standard/unlit
@@ -11,6 +23,7 @@
 //! engine's own toon shader, or (b) faked with a baked inverted-hull
 //! outline mesh.
 
+use bevy::image::Image;
 use bevy::pbr::{Material, MaterialPlugin};
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
@@ -52,6 +65,24 @@ impl Default for ToonParams {
 pub struct ToonMaterial {
     #[uniform(0)]
     pub params: ToonParams,
+    /// Optional albedo texture sampled in `toon.wgsl`.
+    ///
+    /// `None` is the Flat-view default — the shader's bind group
+    /// impl auto-fills a 1×1 white image (Bevy
+    /// `AsBindGroup` Option semantics) so the same shader path
+    /// renders both modes without branching.
+    ///
+    /// Texture is sampled in linear sRGB and multiplied by
+    /// `params.base_color`, so the GUI can either:
+    /// * tint a shared neutral texture by per-slot color (set
+    ///   `base_color` to the palette colour, hand a greyscale tile
+    ///   here), or
+    /// * use a per-slot full-colour texture (set `base_color` to
+    ///   white, hand the AI-generated PNG here) — this is what
+    ///   v0.10 D-1.D's Textured mode actually does.
+    #[texture(1)]
+    #[sampler(2)]
+    pub base_color_texture: Option<Handle<Image>>,
 }
 
 impl ToonMaterial {
@@ -61,6 +92,20 @@ impl ToonMaterial {
                 base_color: color.into(),
                 ..ToonParams::default()
             },
+            base_color_texture: None,
+        }
+    }
+
+    /// Build a textured variant: shader multiplies `texture × base_color`.
+    /// Pass `Color::WHITE` for `tint` to let the texture dominate, or any
+    /// non-white tint to colour-grade the texture per slot.
+    pub fn with_color_and_texture(tint: Color, texture: Handle<Image>) -> Self {
+        Self {
+            params: ToonParams {
+                base_color: tint.into(),
+                ..ToonParams::default()
+            },
+            base_color_texture: Some(texture),
         }
     }
 }

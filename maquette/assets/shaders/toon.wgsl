@@ -1,9 +1,19 @@
-// Maquette toon (cel) shader — v0.3 A.
+// Maquette toon (cel) shader — v0.10 D-1.D.
 //
 // Flat cel-shading: one hard-coded directional light, N discrete bands on
 // N·L, plus an ambient floor so unlit faces don't go fully black. No
-// specular, no PBR, no textures. Matches the product north star ("no 3D
-// jargon, consistent look").
+// specular, no PBR. Matches the product north star ("no 3D jargon,
+// consistent look").
+//
+// v0.10 D-1.D added an optional `base_color_texture` (binding 1+2). The
+// fragment samples it and multiplies against `base_color`, so:
+//
+//   * Flat mode: Rust hands `base_color_texture: None` ; Bevy's Option
+//     AsBindGroup auto-fills a 1×1 white image; sample == 1.0 ; final
+//     == base_color × shade. Identical to the pre-D-1.D output.
+//   * Textured mode: Rust hands a real PNG handle and sets base_color
+//     to white; sample is the AI-generated tile; final == tile ×
+//     shade. Toon stepping still applies on top.
 //
 // This shader runs ONLY in the preview. Exports never reference it —
 // the Export Golden Rule says geometry + vertex color + standard material
@@ -23,6 +33,8 @@ struct ToonParams {
 // is now the per-object mesh storage buffer). Using the preprocessor
 // directive keeps this shader resilient against future re-slotting.
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ToonParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var base_color_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var base_color_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -37,5 +49,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = clamp(material.ambient_pad.x, 0.0, 1.0);
     let shade   = ambient + (1.0 - ambient) * step;
 
-    return vec4<f32>(material.base_color.rgb * shade, material.base_color.a);
+    // Texture sample in linear sRGB. When `base_color_texture` is
+    // `None` on the Rust side, Bevy fills the slot with a 1×1
+    // white image so this multiply is a no-op.
+    let tex = textureSample(base_color_texture, base_color_sampler, in.uv);
+    let albedo = material.base_color.rgb * tex.rgb;
+    let alpha  = material.base_color.a   * tex.a;
+
+    return vec4<f32>(albedo * shade, alpha);
 }

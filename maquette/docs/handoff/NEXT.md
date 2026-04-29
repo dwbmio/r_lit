@@ -40,19 +40,16 @@ Active fronts:
   as a local draft (instantly visible in the main library), or
   publish straight to hfrog. Two new 3-min smoke tests
   (`#COMPOSER-mock`, `#COMPOSER-publish`) in USER-TODO.md.
-* **v0.10 D-1 — A + B subset shipped 2026-04-28 evening.**
-  Material drawer (model_description / ignore_color_hint / view_mode
-  toggle) lives in the left panel between palette and Block Library;
-  ProjectMeta resource is wired through Open / Save / autosave / recovery;
-  EditHistory unified into a `EditEntry::{Paint | Meta}` LIFO stack so
-  Ctrl+Z respects strict chronological order across paint strokes and
-  meta edits; per-slot `Generate texture →` right-click menu spawns a
-  `SlotTexgenPlugin` task per swatch (Mock / Rustyme CPU / Rustyme Fal),
-  PNG lands in `~/.cache/maquette/textures/<sha>.png`,
-  `PaletteSlotMeta::texture` populated. See `v0.10d1-complete.md`.
-  **D-1.C** (palette-wide `Generate all` + Canvas-group fan-out) and
-  **D-1.D** (`Flat / Textured` actually flipping toon-shader behaviour)
-  are the remaining slices — see "Outstanding work" §1.
+* **v0.10 D-1 — closed 2026-04-29.**
+  A + B (Material drawer + ProjectMeta wiring + EditHistory LIFO +
+  per-slot right-click `Generate texture →`) shipped 2026-04-28; see
+  `v0.10d1-complete.md`. C + D shipped 2026-04-29: `Generate all`
+  fan-out (3 lanes side-by-side, busy-guard dedupes duplicates;
+  deliberately *not* using Rustyme chord callback to keep
+  per-slot progressive UX) + `Flat / Textured` toggle now actually
+  flips render output through a new `ToonMaterial.base_color_texture`
+  + `texture_registry` cache_key → `Handle<Image>` resolver. See
+  `v0.10d1cd-complete.md`. **D-1 milestone complete.**
 * **User-side validation backlog** — see `USER-TODO.md`. A bunch of
   v0.9 polish items just landed (`#1c-async`, `#17b`, `#17c`, `#18`,
   `#19b`, `#20b`, all `#TEX-A` plumbing) and need a human-eyes pass
@@ -62,7 +59,8 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 · `v0.7-complete.md` · `v0.8-complete.md` · `v0.9a-complete.md` ·
 `v0.9b-complete.md` · `v0.10b-bis-complete.md` ·
 `v0.10c1-complete.md` · `v0.10c2-blockmeta-complete.md` ·
-`v0.10c3-block-composer.md` · `v0.10d1-complete.md`.
+`v0.10c3-block-composer.md` · `v0.10d1-complete.md` ·
+`v0.10d1cd-complete.md`.
 
 ## Roadmap snapshot
 
@@ -74,7 +72,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | v0.7 | Headless render + GUI feature-gate + palette CLI        | shipped   |
 | v0.8 | Multi-angle preview + float window + onboarding + QoL   | shipped   |
 | v0.9 | Robustness: autosave + GUI polish + Bevy trim + prefs   | A + polish shipped; **B + C pending** |
-| v0.10 | AI texture MVP (mock → Fal → schema → preview → bake)  | A + B shipped; **C ready, D blocked on worker** |
+| v0.10 | AI texture MVP (mock → Fal → schema → preview → bake)  | A + B + C + **D-1 (all four sub-slices) shipped 2026-04-28 / 04-29**; D-2 polish + E glTF bake pending |
 | v0.11 | Cloud-as-Backup: hfrog as user's "云硬盘", local stays source-of-truth, manual `Push to cloud` per project + per block + per texture, merged Recent list with `local` / `cloud` badges and mtime-LWW reconciliation | not yet — designed 2026-04-29 (this session); implementation gated on v0.10 D-1 finishing |
 | v1.0 | Release candidate: docs, icon, smoke matrix, tag        | not yet   |
 
@@ -85,7 +83,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | **A** | `texgen` lib module (trait, types, disk cache) + `MockProvider` (deterministic, offline) + `maquette-cli texture gen` | **shipped 2026-04-24** |
 | **B** | `RustymeProvider` (LPUSH `texgen.gen` envelope, BRPOP the PNG back) + `--provider rustyme` + `texture revoke / purge` CLI + frozen worker contract (`docs/texture/rustyme.md`) + sonargrid-side worker roadmap (`docs/texture/rustyme-worker-roadmap.md`) | **shipped 2026-04-24** + **B-bis 2026-04-27 evening** (live integration with sonargrid `texgen-cpu` / `texgen-fal`, `image_b64` shape, profile env, foreign-reply bug fix). `#TEX-B` end-to-end ✅. |
 | **C** | Project schema v4 + block-meta content layer + block authoring tool | **C-1 (lib schema v4) 2026-04-27 evening · C-2 (BlockMeta + Library panel) 2026-04-28 morning · C-3 (Block Composer second-window + Save Draft + Publish to Hfrog) 2026-04-28 afternoon** · undo wiring + autosave migration deferred to D-1 |
-| **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | **A + B shipped 2026-04-28** (Material drawer + per-slot Generate via right-click; see `v0.10d1-complete.md`). **C** (Generate all → Canvas-group fan-out) and **D** (toon-shader Textured rendering) pending |
+| **D-1** | GUI material panel: "What is this model?" single prompt + [Generate] + auto-derived per-slot hints (palette color + cell count + top/middle/bottom bias + adjacency) + Rustyme **Canvas group** fan-out (one task per non-empty slot) + toon shader optional base color texture (one shared seamless tile per slot; all cells of that color share UVs) + View toggle "Flat / Textured" | **shipped** — A+B 2026-04-28 (`v0.10d1-complete.md`) + C+D 2026-04-29 (`v0.10d1cd-complete.md`). Generate-all uses N independent tasks rather than chord callback so the progressive "this slot is done now" UX stays intact. |
 | **D-2** | Per-slot `[regenerate]` + `[edit hint]` affordances in the palette list; re-uses D-1's single-task path (no group needed). Writes the new `override_hint` through the undo stack | not yet |
 | **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
 | **E** | glTF baking: per-palette material with `pbrMetallicRoughness.baseColorTexture`; single tile per slot, outline mesh kept compatible | not yet |
@@ -157,41 +155,15 @@ get there:
 
 ### Now — start here next session
 
-1. **v0.10 D-1.C / D-1.D — finish the texturing UX**.
-   D-1.A (Material drawer + ProjectMeta wiring + autosave + undo)
-   and D-1.B (per-slot right-click `Generate texture →`) shipped
-   2026-04-28; what remains is the bulk path and the actual
-   render-side hookup. See `v0.10d1-complete.md` for what already
-   exists; the two outstanding slices:
+v0.10 D-1 is **closed** as of 2026-04-29 (see
+`v0.10d1cd-complete.md`). Three plausible next threads, ordered
+by user-visible payoff:
 
-   * **D-1.C — `Generate all` + Rustyme Canvas-group fan-out.**
-     One button on the Material drawer that walks every live
-     palette slot and dispatches a single Rustyme **Canvas group**
-     (group_id + chord callback the worker emits when the last
-     task in the group is done). Per-slot prompt derivation
-     (`derive_texture_prompt`) is already in place from C-1; the
-     missing piece is Rustyme's group-batching protocol on the
-     `slot_texgen.rs` side. Reuses every other piece of D-1.B:
-     `PendingSlotGen` lifecycle, `cache_put`, `PaletteSlotMeta::texture`
-     write-back, busy guards.
-
-   * **D-1.D — Flat / Textured toon-shader hookup.** The
-     `View: Flat / Textured` radio in the Material drawer
-     currently only persists into `ProjectMeta::texture_prefs`.
-     Wire it through `toon::ToonPlugin` so when `view_mode ==
-     Textured` we set the `base_color_texture` of each
-     palette-material to the slot's `<cache_key>.png` (loaded
-     through `bevy::asset::AssetServer`). All cells of that
-     colour share UVs (one seamless tile per slot — the headless
-     mesh export already groups by palette index, GUI just
-     mirrors that). Includes a one-time PNG → wgpu texture
-     upload pass when the user flips the toggle on.
-
-2. **v0.11.A — cloud status chip (gated on D-1 finishing).**
-   Designed 2026-04-29 (this session), not started. See "v0.11
-   phase detail" above for the full six-phase plan; phase A is
-   the only one safe to do *while* D-1.C/D is being polished
-   because it touches no IO path. Concretely:
+1. **v0.11.A — cloud status chip (1 short session).**
+   See "v0.11 phase detail" above for the full six-phase plan;
+   phase A is the smallest first slice that introduces no
+   architectural risk because it touches **no IO path**.
+   Concretely:
 
    * `cloud_status.rs` Bevy plugin owning a startup probe
      (1.5 s timeout) and an `AppCloudMode { Online, Offline,
@@ -199,11 +171,42 @@ get there:
    * Status-bar chip on the right edge: "☁ Cloud OK" /
      "○ Local mode · Try cloud →". Click reprobes; updates the
      resource and the chip in-place.
-   * Probe is cheap: a `HEAD` (or trivial `GET /list`) against
-     `MAQUETTE_HFROG_BASE_URL`. Any non-2xx, timeout, or
-     network error → `Offline { last_error }`.
+   * Probe is cheap: `GET <hfrog>/api/artifactory/list?runtime=ping`
+     with 1.5 s timeout. Any non-2xx, timeout, or network error →
+     `Offline { last_error }`.
    * Zero changes to File / Save / Open paths. Phase B is where
      the cloud actually starts owning bytes.
+   * Sets the user up for the bigger v0.11.B (`Push to cloud`
+     button + `maquette-project/v1` runtime + cross-machine sync)
+     by establishing the mode-state-machine vocabulary first.
+
+2. **v0.10 D-2 — per-slot regenerate / edit-hint polish.**
+   The texturing path ships with 3 surfaces (right-click → Generate
+   texture · Material drawer → Generate all · `G` / `Shift+G`
+   keyboard) but no per-slot "regenerate the same prompt" or
+   "edit the prompt for this slot specifically" UI. A right-click
+   submenu `Override hint…` that opens a small popover, plus a
+   `Regenerate (same hint)` peer of the existing `Generate
+   texture` items, would close that gap. Writes the new
+   `override_hint` through the unified undo stack (the `MetaEdit`
+   enum is already hospitable — add `SetOverrideHint { slot,
+   before, after }`).
+
+3. **v0.10 E — glTF baking with textured materials.**
+   Now that Textured preview works, the export pipeline is the
+   weak link: `.gltf` ships flat colour even when the user has
+   AI-generated textures. Phase E adds `pbrMetallicRoughness.
+   baseColorTexture` per palette-material with one tile per slot
+   (the same `<cache_key>.png` files), preserves the outline mesh
+   via the existing baked-inverted-hull approach, and round-trips
+   through Blender / Unity / Godot test scenes. This is what
+   actually closes the "pixel-art-mockup → game-engine asset"
+   loop the v0.10 milestone is named for.
+
+   E is the *most* user-visible of the three but also the
+   biggest scope; v0.11.A is the lowest-risk warm-up and D-2 is
+   the easiest "small polish" if the user wants to take a
+   breath before the next big arc.
 
 ### Blocked / external
 
@@ -213,9 +216,10 @@ get there:
    the routing + revoke path against an empty-key worker, see
    `v0.10b-bis-complete.md` § 4 / `USER-TODO.md` `#TEX-B-fal`).
    Not on Maquette's plate.
-4. **v0.10 D-1 finish** — *is* #1 above. D-1.A + D-1.B already
-   shipped; D-1.C (Canvas-group fan-out) + D-1.D (toon shader
-   Textured render) outstanding.
+4. **v0.10 D-1 finish** — ✅ closed 2026-04-29. All four sub-slices
+   (A: meta wiring · B: per-slot generate · C: Generate all ·
+   D: Textured render) shipped. See `v0.10d1cd-complete.md` for
+   the C+D handoff.
 5. **v0.11 B / C / D — cloud IO + Recent panel.** Designed
    2026-04-29; gated on D-1 closing out. See "v0.11 phase detail"
    above for the slicing rationale (`maquette-project/v1`

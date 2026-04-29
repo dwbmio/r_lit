@@ -782,7 +782,13 @@ fn ui_system(
             .id_salt("material_drawer")
             .default_open(false)
             .show(ui, |ui| {
-                material_drawer(ui, meta, &mut history);
+                material_drawer(
+                    ui,
+                    meta,
+                    &mut history,
+                    &palette,
+                    &mut *slot_texgen_ev,
+                );
             });
             ui.add_space(6.0);
             ui.separator();
@@ -1766,6 +1772,8 @@ fn material_drawer(
     ui: &mut egui::Ui,
     meta: &mut ProjectMeta,
     history: &mut EditHistory,
+    palette: &Palette,
+    slot_texgen_ev: &mut MessageWriter<GenerateSlotTexture>,
 ) {
     ui.label(
         egui::RichText::new(
@@ -1848,8 +1856,9 @@ fn material_drawer(
         ui.radio_value(&mut mode, PaletteViewMode::Textured, "Textured")
             .on_hover_text(
                 "Render generated textures on the 3-D preview. \
-                 (D-1.D wires the toon shader; until then the \
-                 toggle just persists.)",
+                 Slots without a texture fall back to their flat \
+                 colour. Use Generate all (below) or right-click → \
+                 Generate texture per slot to populate them.",
             );
         if mode != prev_mode {
             meta.texture_prefs.view_mode = mode;
@@ -1857,6 +1866,87 @@ fn material_drawer(
                 before: prev_mode,
                 after: mode,
             });
+        }
+    });
+
+    ui.add_space(6.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    // D-1.C: bulk fan-out. The button enumerates every live
+    // palette slot and queues one `GenerateSlotTexture` event per
+    // slot for the chosen lane. The per-slot busy guard in
+    // `slot_texgen::SlotTexgenState` already drops duplicate
+    // requests, so a second click while N tasks are in flight is
+    // a no-op rather than a stampede.
+    //
+    // We deliberately do **not** use Rustyme's Canvas-group +
+    // chord callback here even though sonargrid supports it (see
+    // `protocol.rs::TaskEnvelope::group_id`/`chord_callback`).
+    // Reason: chord callback batches all results into one reply,
+    // which loses the "this slot is done now → flash a badge"
+    // progressive-feedback win we get for free with N independent
+    // tasks. If the user later wants whole-group atomic semantics
+    // ("apply all or nothing"), we'll revisit.
+    let live_slot_count = palette.iter_live().count();
+    ui.label(
+        egui::RichText::new(format!(
+            "Generate all ({live_slot_count} live slot{}):",
+            if live_slot_count == 1 { "" } else { "s" }
+        ))
+        .small()
+        .color(egui::Color32::from_gray(160)),
+    );
+    ui.horizontal_wrapped(|ui| {
+        let providers = [
+            SlotTexgenProvider::Mock,
+            SlotTexgenProvider::RustymeCpu,
+            SlotTexgenProvider::RustymeFal,
+        ];
+        for prov in providers {
+            // Rendering all three lanes side-by-side lets the user
+            // pick offline (Mock — instant smoke) vs online lanes
+            // without diving into a submenu. Hover text repeats
+            // the per-lane env requirements that the right-click
+            // menu also surfaces, so this stays the
+            // single-source-of-truth for "what does each lane
+            // need?".
+            let hover = match prov {
+                SlotTexgenProvider::Mock => {
+                    "Offline deterministic noise — no Rustyme \
+                     worker needed. Useful for proving the \
+                     pipeline works without burning Fal credits."
+                }
+                SlotTexgenProvider::RustymeCpu => {
+                    "Rustyme texgen-cpu queue — \
+                     requires MAQUETTE_RUSTYME_REDIS_URL. \
+                     Programmatic Lua, cheap, fast, limited style."
+                }
+                SlotTexgenProvider::RustymeFal => {
+                    "Rustyme texgen-fal queue → Fal.ai \
+                     FLUX schnell — requires \
+                     MAQUETTE_RUSTYME_REDIS_URL + \
+                     MAQUETTE_RUSTYME_MODEL=fal-ai/flux/schnell. \
+                     Best quality, costs Fal credits."
+                }
+            };
+            let label = match prov {
+                SlotTexgenProvider::Mock => "Mock",
+                SlotTexgenProvider::RustymeCpu => "CPU",
+                SlotTexgenProvider::RustymeFal => "Fal",
+            };
+            let resp = ui
+                .add_enabled(live_slot_count > 0, egui::Button::new(label))
+                .on_hover_text(hover)
+                .on_disabled_hover_text("No live palette slots — add a colour first");
+            if resp.clicked() {
+                for (slot_idx, _color) in palette.iter_live() {
+                    slot_texgen_ev.write(GenerateSlotTexture {
+                        slot: slot_idx,
+                        provider: prov,
+                    });
+                }
+            }
         }
     });
 }

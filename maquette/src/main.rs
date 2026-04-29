@@ -19,6 +19,7 @@ mod preview_mesh;
 mod scene;
 mod session;
 mod slot_texgen;
+mod texture_registry;
 mod toon;
 mod ui;
 
@@ -122,6 +123,7 @@ fn main() {
         .add_plugins(block_library::BlockLibraryPlugin)
         .add_plugins(block_composer::BlockComposerPlugin)
         .add_plugins(slot_texgen::SlotTexgenPlugin)
+        .add_plugins(texture_registry::TextureRegistryPlugin)
         .add_plugins(ui::UiPlugin)
         .run();
 }

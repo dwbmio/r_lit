@@ -66,13 +66,11 @@
 
 use std::sync::Arc;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::image::Image;
 use bevy::math::UVec2;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy::window::{
     PrimaryWindow, RequestRedraw, WindowClosed, WindowRef, WindowResolution,
@@ -800,47 +798,13 @@ fn handle_select_attempt(
     redraw.write(RequestRedraw);
 }
 
+/// Convert raw PNG bytes into a Bevy `Image`. v0.10 D-1.D moved the
+/// implementation to `crate::texture_registry::decode_png_to_image`
+/// so the slot-texgen → preview-mesh pipeline shares the same
+/// decoder. The thin wrapper stays for back-compat with the rest of
+/// this module's call sites.
 fn decode_png_to_image(bytes: &[u8]) -> Result<Image, String> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    let mut reader = decoder
-        .read_info()
-        .map_err(|e| format!("png header: {e}"))?;
-    // png 0.18 returns `Option<usize>` here — `None` for streams
-    // whose declared dimensions overflow usize (we never see this in
-    // practice because images come from texgen-cpu / fal worker).
-    let buf_size = reader
-        .output_buffer_size()
-        .ok_or_else(|| "png: output_buffer_size overflowed".to_string())?;
-    let mut buf = vec![0; buf_size];
-    let info = reader
-        .next_frame(&mut buf)
-        .map_err(|e| format!("png decode: {e}"))?;
-
-    // Normalise to RGBA8 — most of our worker outputs already are,
-    // but a stray RGB or palette image shouldn't hard-fail.
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
-        png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity(info.buffer_size() * 4 / 3);
-            for c in buf.chunks(3) {
-                out.extend_from_slice(c);
-                out.push(255);
-            }
-            out
-        }
-        other => return Err(format!("unsupported color_type={other:?}")),
-    };
-    Ok(Image::new(
-        Extent3d {
-            width: info.width,
-            height: info.height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    ))
+    crate::texture_registry::decode_png_to_image(bytes)
 }
 
 fn handle_discard_attempt(
