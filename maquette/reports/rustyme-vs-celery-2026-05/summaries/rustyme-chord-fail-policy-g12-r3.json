@@ -1,0 +1,41 @@
+{
+  "count": 3,
+  "ok": 3,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 1.676044,
+    "p50": 1.768513,
+    "p95": 2.265062,
+    "p99": 2.265062,
+    "max": 2.265062,
+    "mean": 1.9032063333333333
+  },
+  "backend": "rustyme",
+  "kind": "chord",
+  "group_size": 12,
+  "runs": 3,
+  "rows": [
+    {
+      "gid": "bench-fb8c90a8-ad36-48b8-8cce-a4a163510768",
+      "elapsed_ms": 2.265062,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-ab7c7209-e177-44c6-b6ce-c29a6072669d",
+      "elapsed_ms": 1.768513,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-a8b31af5-aac9-4109-84af-0cedc15e0aeb",
+      "elapsed_ms": 1.676044,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    }
+  ]
+}

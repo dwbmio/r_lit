@@ -109,11 +109,10 @@ Chord correctness artifact:
 * `summaries/chord-correctness-initial.md`
 
 Both Rustyme and Celery passed group=12 / 20-run and group=64 / 100-run callback
-correctness. Rustyme's callback latency is lower in these smoke runs. Failure
-semantics differ: Rustyme leaves the chord incomplete and surfaces the failed
-child through DLQ/timeout, while Celery marks the chord result as failed
-(`ChordError`). Rustyme needs an explicit failed-child policy before user-facing
-chord workflows.
+correctness. Rustyme's callback latency is lower in these smoke runs. The first
+Rustyme failure-child run exposed incomplete-chord behavior; the subsequent
+failed-child policy patch fixes it by counting terminal failed children toward
+done and injecting `{ok:false,status:"DEAD",error}` into callback results.
 
 Initial local-disk IO fan-out artifact:
 

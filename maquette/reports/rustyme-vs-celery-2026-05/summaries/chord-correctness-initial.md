@@ -37,6 +37,12 @@ repeats.
 | Rustyme per-worker Lua | 12 | 3 | callback does **not** fire; producer times out waiting for callback | failed child lands in `rustyme:payload:queue:dlq`; group counter never reaches total |
 | Celery threads=16 | 12 | 3 | summarize callback does **not** run; chord result becomes failure (`ChordError`) | callback AsyncResult is ready with failure |
 
+After the Rustyme failed-child policy patch, the Rustyme row becomes:
+
+| Backend | Group size | Runs | Callback behavior | Failure surface |
+|---|---:|---:|---|---|
+| Rustyme per-worker Lua + failed-child policy | 12 | 3 | callback fires immediately, `results_count=12` | failed child appears in `results` as `{ok:false,status:"DEAD",error,...}` and still lands in DLQ |
+
 ## Read
 
 Both systems pass the successful chord correctness smoke.
@@ -46,15 +52,15 @@ plausible because Rustyme's chord bookkeeping is a small number of Redis
 `HSET/HINCRBY/HSETNX/LPUSH` operations in the worker, while Celery's chord uses
 its backend machinery. The group=64 / 100-repeat run is also stable for both.
 
-Failure-child semantics differ:
+Pre-policy failure-child semantics differed:
 
 * Rustyme leaves the chord incomplete and relies on DLQ/timeout observability.
 * Celery marks the chord callback result as failure (`ChordError`).
 
-For Maquette's progressive UI, this difference matters. If Rustyme chord is used
-for user-visible fan-in, we likely need a failed-child chord policy (for example:
-increment done with `{ok:false,error}` result, or fire a failure callback) so the
-UI does not wait for timeout to explain the failed group.
+The Rustyme patch now implements the first policy: failed terminal children
+increment group done and contribute an explicit failed result. This is better for
+Maquette's progressive UI because a group never hangs until timeout just because
+one slot failed.
 
 ## Artifacts
 
@@ -66,6 +72,7 @@ Raw:
 * `../raw/celery-chord-g64-r100.jsonl`
 * `../raw/rustyme-chord-fail-g12-r3.jsonl`
 * `../raw/celery-chord-fail-g12-r3.jsonl`
+* `../raw/rustyme-chord-fail-policy-g12-r3.jsonl`
 
 Summaries:
 
@@ -75,9 +82,10 @@ Summaries:
 * `celery-chord-g64-r100.json`
 * `rustyme-chord-fail-g12-r3.json`
 * `celery-chord-fail-g12-r3.json`
+* `rustyme-chord-fail-policy-g12-r3.json`
 
 ## Next
 
 1. Run payload chord (64 KiB child result) to see fan-in memory/latency.
-2. Decide Rustyme chord failed-child policy before using chord for user-facing
-   Maquette workflows.
+2. Run failure-recovery scenarios (worker kill, Redis restart, revoke) with
+   group/chord in flight.
