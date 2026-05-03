@@ -336,6 +336,8 @@ class RustymeRun:
     payload_bytes: int
     io_mib: int
     io_dir: str | None
+    max_retries: int
+    fail_all: bool
     request_url: str | None
     timeout_secs: float
     raw: str
@@ -358,6 +360,8 @@ def rustyme_run(args: argparse.Namespace) -> None:
         payload_bytes=args.payload_bytes,
         io_mib=args.io_mib,
         io_dir=args.io_dir,
+        max_retries=args.max_retries,
+        fail_all=args.fail_all,
         request_url=args.request_url,
         timeout_secs=args.timeout_secs,
         raw=args.raw,
@@ -388,10 +392,10 @@ def rustyme_run(args: argparse.Namespace) -> None:
                     io_dir=cfg.io_dir,
                     io_fsync=args.io_fsync,
                     request_url=cfg.request_url,
-                    fail=False,
+                    fail=cfg.fail_all,
                 ),
                 "retries": 0,
-                "max_retries": 0,
+                "max_retries": cfg.max_retries,
                 "priority": "normal",
                 "metadata": {
                     "producer": "bench_rustyme_vs_celery.py",
@@ -516,7 +520,7 @@ def celery_run(args: argparse.Namespace) -> None:
                     io_dir=args.io_dir,
                     io_fsync=args.io_fsync,
                     request_url=args.request_url,
-                    fail=False,
+                    fail=args.fail_all,
                 ),
             )
             sent_wall[res.id] = sent_wall_ns
@@ -560,12 +564,18 @@ def celery_run(args: argparse.Namespace) -> None:
                     )
                     if timing:
                         timing_rows.append(timing)
-                    ok += 1
+                    if res.successful():
+                        ok += 1
+                        status = "SUCCESS"
+                    else:
+                        failed += 1
+                        status = str(res.state)
                     raw.write(
                         json.dumps(
                             {
                                 "event": "result",
                                 "task_id": task_id,
+                                "status": status,
                                 "elapsed_ms": elapsed_ms,
                                 "timing": timing,
                                 "result_size": len(json.dumps(data, default=str)),
@@ -844,6 +854,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--io-dir")
     p.add_argument("--io-fsync", action="store_true")
     p.add_argument("--request-url")
+    p.add_argument("--max-retries", type=int, default=0)
+    p.add_argument("--fail-all", action="store_true")
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--worker-root-pid-file")
     p.add_argument("--raw", required=True)
@@ -861,6 +873,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--io-dir")
     p.add_argument("--io-fsync", action="store_true")
     p.add_argument("--request-url")
+    p.add_argument("--fail-all", action="store_true")
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--worker-root-pid-file")
     p.add_argument("--raw", required=True)

@@ -1,0 +1,31 @@
+{
+  "count": 10,
+  "ok": 0,
+  "failed": 0,
+  "timeout": 10,
+  "latency_ms": {
+    "min": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null,
+    "mean": null
+  },
+  "backend": "rustyme",
+  "queue_key": "rustyme:payload:queue",
+  "result_key": "rustyme:payload:result",
+  "wall_ms": 10038.919294,
+  "throughput_tps": 0.0,
+  "remaining": [
+    "04fc5833-f906-458f-b887-5f6069c27f0d",
+    "083b9c1b-0ff9-4885-851b-b02e8b6ee233",
+    "108732e7-e639-4978-87fd-8598da02cc53",
+    "33cdfc28-2dd5-457c-a505-a128580d067b",
+    "49ebadb5-f7e2-4788-986c-a6a95ee7136d",
+    "693f5605-20dd-4334-b7fa-50b9c01f88db",
+    "7722bc8a-bfd1-44c2-a7ee-a7d16f168ed6",
+    "9fe67762-e19f-4e7b-b0b0-a52904dacc9e",
+    "c94b1962-c821-49be-a71a-0c0759cae445",
+    "f499e4de-435d-4ad6-adfa-d6889edc9a18"
+  ]
+}
