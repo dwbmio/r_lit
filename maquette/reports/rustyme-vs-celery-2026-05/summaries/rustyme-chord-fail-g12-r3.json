@@ -1,0 +1,38 @@
+{
+  "count": 3,
+  "ok": 0,
+  "failed": 0,
+  "timeout": 3,
+  "latency_ms": {
+    "min": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null,
+    "mean": null
+  },
+  "backend": "rustyme",
+  "kind": "chord",
+  "group_size": 12,
+  "runs": 3,
+  "rows": [
+    {
+      "gid": "bench-8d473133-15cd-4c4a-af15-7d9abccc20a4",
+      "ok": false,
+      "timeout": true,
+      "expected": 12
+    },
+    {
+      "gid": "bench-15e5dc72-2796-47d3-a6dd-3f84e8e0e3e1",
+      "ok": false,
+      "timeout": true,
+      "expected": 12
+    },
+    {
+      "gid": "bench-df8147ba-9c79-4337-b36c-2bb0f1b99f29",
+      "ok": false,
+      "timeout": true,
+      "expected": 12
+    }
+  ]
+}

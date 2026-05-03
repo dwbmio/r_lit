@@ -34,6 +34,8 @@ app = Celery("maquette_bench", broker=BROKER, backend=BACKEND)
 
 @app.task(name="bench.echo", bind=True)
 def bench_echo(self, **kwargs: Any) -> dict[str, Any]:
+    if kwargs.get("fail"):
+        raise RuntimeError(f"intentional bench failure: {kwargs.get('seed')}")
     started_ns = time.time_ns()
     sleep_ms = int(kwargs.get("sleep_ms") or 0)
     if sleep_ms > 0:

@@ -1,0 +1,160 @@
+{
+  "count": 100,
+  "ok": 100,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 59.38023,
+    "p50": 65.542664,
+    "p95": 68.732323,
+    "p99": 83.312722,
+    "max": 122.020397,
+    "mean": 65.92618396
+  },
+  "backend": "celery",
+  "kind": "chord",
+  "group_size": 64,
+  "runs": 100,
+  "rows": [
+    {
+      "callback_id": "7176302a-62d2-47e2-9817-827ab4ac0f6e",
+      "elapsed_ms": 122.020397,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "f86475b8-1b97-469c-938d-903c283e6de4",
+      "elapsed_ms": 66.738967,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "793e34c1-f6a3-4d4b-a5cd-e40f551e0fdb",
+      "elapsed_ms": 66.11922,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "4950ba97-828a-4f2d-96b7-517622c3ceb5",
+      "elapsed_ms": 64.220062,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "2253076c-86b8-4017-b4c0-be38f1e35fd3",
+      "elapsed_ms": 65.695951,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "28bd650f-df26-4ce6-aed1-b0b25e7a7989",
+      "elapsed_ms": 67.422402,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "fae8b6a2-8e90-408b-9125-82ff50df1e27",
+      "elapsed_ms": 65.837537,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "3e729043-0b72-485d-992f-57e52a02e3d4",
+      "elapsed_ms": 66.256607,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "0fdee34f-fb53-485f-9753-a44cffb7f1ce",
+      "elapsed_ms": 70.321708,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "671c9850-5037-4bde-a6e2-292de681813b",
+      "elapsed_ms": 68.732323,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "ed757dec-c16a-4bc1-b49c-5f0782c20d0b",
+      "elapsed_ms": 64.238952,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "9fd009c6-c840-4e36-82c4-b8b170f233e1",
+      "elapsed_ms": 65.23756,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "27e886ac-5c44-4021-b7cc-ddcdfd41989d",
+      "elapsed_ms": 65.496975,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "88f1a29e-10f9-4c62-9b03-8060b942c9b5",
+      "elapsed_ms": 65.490095,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "8109a964-08af-4253-b43c-fffd2de24455",
+      "elapsed_ms": 65.115903,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "065f29d5-b8e7-4885-bd6b-1985092d77c1",
+      "elapsed_ms": 60.192331,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "bb41f6b4-a688-4eb2-a8d5-f1df7bc17fa5",
+      "elapsed_ms": 65.614401,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "d05db6f0-9780-4938-aa53-33922038770e",
+      "elapsed_ms": 65.26223,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "a301d952-dd3c-4cbd-b6e9-f37a1573a1bb",
+      "elapsed_ms": 65.378267,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "224f36c2-2373-40be-b296-a9cc7af159f2",
+      "elapsed_ms": 65.231911,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    }
+  ]
+}

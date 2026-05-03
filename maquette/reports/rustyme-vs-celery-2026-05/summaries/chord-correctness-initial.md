@@ -1,0 +1,83 @@
+# Chord Correctness Initial Results
+
+Status: **initial correctness smoke**  
+Date: 2026-05-03  
+Host: Tencent CVM `152.136.54.186`, local Redis.
+
+## Scenario
+
+Run repeated chords:
+
+```text
+N × bench.echo → bench.summarize
+```
+
+Pass condition:
+
+* callback fires exactly once for each group,
+* callback result contains `results_count == 12`,
+* no timeout.
+
+## Results
+
+| Backend | Group size | Runs | OK | Failed | Timeout | p50 callback | p95 callback | p99 callback |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rustyme per-worker Lua | 12 | 20 | 20 | 0 | 0 | **1.64ms** | **1.70ms** | 2.29ms |
+| Celery threads=16 | 12 | 20 | 20 | 0 | 0 | 14.99ms | 16.68ms | 60.87ms |
+| Rustyme per-worker Lua | 64 | 100 | 100 | 0 | 0 | **5.85ms** | **8.42ms** | 8.58ms |
+| Celery threads=16 | 64 | 100 | 100 | 0 | 0 | 65.54ms | 68.73ms | 83.31ms |
+
+## Failure-child Semantics
+
+Injected one intentional failure (`fail_index=3`) in a group of 12 and ran 3
+repeats.
+
+| Backend | Group size | Runs | Callback behavior | Failure surface |
+|---|---:|---:|---|---|
+| Rustyme per-worker Lua | 12 | 3 | callback does **not** fire; producer times out waiting for callback | failed child lands in `rustyme:payload:queue:dlq`; group counter never reaches total |
+| Celery threads=16 | 12 | 3 | summarize callback does **not** run; chord result becomes failure (`ChordError`) | callback AsyncResult is ready with failure |
+
+## Read
+
+Both systems pass the successful chord correctness smoke.
+
+Rustyme's callback latency is much lower in this tiny group=12 case. This is
+plausible because Rustyme's chord bookkeeping is a small number of Redis
+`HSET/HINCRBY/HSETNX/LPUSH` operations in the worker, while Celery's chord uses
+its backend machinery. The group=64 / 100-repeat run is also stable for both.
+
+Failure-child semantics differ:
+
+* Rustyme leaves the chord incomplete and relies on DLQ/timeout observability.
+* Celery marks the chord callback result as failure (`ChordError`).
+
+For Maquette's progressive UI, this difference matters. If Rustyme chord is used
+for user-visible fan-in, we likely need a failed-child chord policy (for example:
+increment done with `{ok:false,error}` result, or fire a failure callback) so the
+UI does not wait for timeout to explain the failed group.
+
+## Artifacts
+
+Raw:
+
+* `../raw/rustyme-chord-g12-r20-r2.jsonl`
+* `../raw/celery-chord-g12-r20.jsonl`
+* `../raw/rustyme-chord-g64-r100.jsonl`
+* `../raw/celery-chord-g64-r100.jsonl`
+* `../raw/rustyme-chord-fail-g12-r3.jsonl`
+* `../raw/celery-chord-fail-g12-r3.jsonl`
+
+Summaries:
+
+* `rustyme-chord-g12-r20-r2.json`
+* `celery-chord-g12-r20.json`
+* `rustyme-chord-g64-r100.json`
+* `celery-chord-g64-r100.json`
+* `rustyme-chord-fail-g12-r3.json`
+* `celery-chord-fail-g12-r3.json`
+
+## Next
+
+1. Run payload chord (64 KiB child result) to see fan-in memory/latency.
+2. Decide Rustyme chord failed-child policy before using chord for user-facing
+   Maquette workflows.

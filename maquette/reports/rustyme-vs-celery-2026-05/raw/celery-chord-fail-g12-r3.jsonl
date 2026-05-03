@@ -1,0 +1,6 @@
+{"event": "sent_chord", "callback_id": "a7a2a4b5-900e-4fac-9ba6-512fac90c157"}
+{"event": "callback", "data": "Dependency 45a2cc1e-45c5-4c8d-bc01-da7477b9ffe9 raised RuntimeError('intentional bench failure: 3')"}
+{"event": "sent_chord", "callback_id": "ca4f1aba-ebd0-4023-8959-8df3a66f6679"}
+{"event": "callback", "data": "Dependency f29ca366-0733-4c47-8a95-30592a319b4e raised RuntimeError('intentional bench failure: 3')"}
+{"event": "sent_chord", "callback_id": "3a91f20c-cc3d-4486-9dac-f886f4a1d4b9"}
+{"event": "callback", "data": "Dependency c1628745-4442-496f-8277-0229cabcf873 raised RuntimeError('intentional bench failure: 3')"}

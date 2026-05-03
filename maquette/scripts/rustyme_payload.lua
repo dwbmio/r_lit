@@ -4,6 +4,9 @@
 
 function on_process(envelope)
     local kwargs = envelope.kwargs or {}
+    if kwargs.fail then
+        error("intentional bench failure: " .. tostring(kwargs.seed))
+    end
     if kwargs.results ~= nil then
         return {
             ok = true,

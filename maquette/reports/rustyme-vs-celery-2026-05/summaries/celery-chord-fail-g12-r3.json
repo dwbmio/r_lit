@@ -1,0 +1,41 @@
+{
+  "count": 3,
+  "ok": 0,
+  "failed": 3,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 15.367382,
+    "p50": 15.718776,
+    "p95": 60.776255,
+    "p99": 60.776255,
+    "max": 60.776255,
+    "mean": 30.620804333333336
+  },
+  "backend": "celery",
+  "kind": "chord",
+  "group_size": 12,
+  "runs": 3,
+  "rows": [
+    {
+      "callback_id": "a7a2a4b5-900e-4fac-9ba6-512fac90c157",
+      "elapsed_ms": 60.776255,
+      "results_count": null,
+      "expected": 12,
+      "ok": false
+    },
+    {
+      "callback_id": "ca4f1aba-ebd0-4023-8959-8df3a66f6679",
+      "elapsed_ms": 15.718776,
+      "results_count": null,
+      "expected": 12,
+      "ok": false
+    },
+    {
+      "callback_id": "3a91f20c-cc3d-4486-9dac-f886f4a1d4b9",
+      "elapsed_ms": 15.367382,
+      "results_count": null,
+      "expected": 12,
+      "ok": false
+    }
+  ]
+}

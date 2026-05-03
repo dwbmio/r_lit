@@ -117,9 +117,11 @@ lower CPU-time/task, much lower RSS than Celery prefork); see
 Payload parity also produced a positive Rustyme signal: 64 KiB / 256 KiB result
 payloads were ~2.6-3.0x higher throughput than Celery with lower CPU-time/task;
 see `reports/rustyme-vs-celery-2026-05/summaries/payload-parity-initial.md`.
-Chord correctness smoke (group=12, 20 repeats) passed on both Rustyme and Celery,
-with Rustyme lower callback latency in the tiny-group case; larger groups and
-failure semantics remain pending. See
+Chord correctness smoke (group=12 x20 and group=64 x100) passed on both Rustyme
+and Celery, with Rustyme lower callback latency. Failure-child semantics differ:
+Rustyme leaves the chord incomplete and exposes the failed child via DLQ/timeout,
+while Celery marks the chord result as failed (`ChordError`). Rustyme needs an
+explicit failed-child policy before user-facing chord workflows. See
 `reports/rustyme-vs-celery-2026-05/summaries/chord-correctness-initial.md`.
 
 Hard rule: **no final recommendation until all required rows below are
@@ -130,7 +132,7 @@ done and their raw JSONL + summary markdown are committed.**
 | **Q0 env reproducibility** | Pin host specs, Redis version, Rustyme commit, Celery version, worker concurrency, kernel/sysctl, raw artifact layout. | partial — env report exists |
 | **Q1 Rustyme Lua parity** | Maquette texgen uses Lua hooks (`texgen_cpu.lua` / `texgen_fal.lua`); built-in EchoHook is only queue-runtime lower bound. | partial — per-worker Lua VM prototype validated; Lua no-op 1k/5k still pending |
 | **Q2 payload parity** | Texture workload returns 64-256 KB+ PNG/base64 payloads; no-op result latency is not enough. | **initial pass** — Rustyme 2.6-3.0x throughput over Celery on 64/256 KiB synthetic result payloads |
-| **Q3 group/chord parity** | D-1.C consciously avoided chord for progressive UX, but Rustyme claims Canvas parity with Celery; must verify correctness. | partial — group=12 x20 passed on both; group=64 / failure semantics pending |
+| **Q3 group/chord parity** | D-1.C consciously avoided chord for progressive UX, but Rustyme claims Canvas parity with Celery; must verify correctness. | partial — success path passed (group=12 x20, group=64 x100); failed-child semantics documented but Rustyme policy needs design |
 | **Q4 reliability recovery** | User cares most about reliability: stale result, worker kill, Redis restart, timeout/retry/DLQ, revoke/purge. | **blocking** |
 | **Q5 energy proxy** | "能耗比" requires CPU-time/task + RSS/task, not just wall-clock throughput. Use `/proc/<pid>/stat` before/after and sum Celery master+children. | partial — captured for long HTTP and payload; failure/group still pending |
 | **Q6 Celery fair tuning** | Celery must not be handicapped by one arbitrary pool choice. At minimum compare prefork=4 and threads=4 (and document why gevent/eventlet is excluded or included). | **blocking** |
@@ -226,7 +228,8 @@ are intentionally paused until the gate yields a recommendation.
 
    * Clean up and commit the per-worker Lua VM patch in sonargrid
      (current prototype passes local tests and test-server long HTTP).
-   * Run group/chord group=64 and failure-child semantics.
+   * Design Rustyme chord failed-child policy (current behavior: incomplete
+     chord + DLQ; Celery behavior: chord result failure).
    * Run failure recovery: stale result, worker kill, Redis restart,
      timeout/retry/DLQ, revoke/purge.
    * Run Maquette workload replay: one slot, 12-slot Generate all,

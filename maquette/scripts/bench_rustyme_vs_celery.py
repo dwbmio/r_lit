@@ -222,6 +222,7 @@ def make_kwargs(
     io_dir: str | None = None,
     io_fsync: bool = False,
     request_url: str | None = None,
+    fail: bool = False,
 ) -> dict[str, Any]:
     payload = ""
     if payload_bytes > 0:
@@ -241,6 +242,8 @@ def make_kwargs(
         data["io_dir"] = io_dir
     if request_url:
         data["request_url"] = request_url
+    if fail:
+        data["fail"] = True
     return data
 
 
@@ -385,6 +388,7 @@ def rustyme_run(args: argparse.Namespace) -> None:
                     io_dir=cfg.io_dir,
                     io_fsync=args.io_fsync,
                     request_url=cfg.request_url,
+                    fail=False,
                 ),
                 "retries": 0,
                 "max_retries": 0,
@@ -501,6 +505,7 @@ def celery_run(args: argparse.Namespace) -> None:
                     io_dir=args.io_dir,
                     io_fsync=args.io_fsync,
                     request_url=args.request_url,
+                    fail=False,
                 ),
             )
             sent_wall[res.id] = sent_wall_ns
@@ -604,6 +609,7 @@ def rustyme_chord_run(args: argparse.Namespace) -> None:
                         sleep_ms=args.sleep_ms,
                         payload_bytes=args.payload_bytes,
                         io_mib=0,
+                        fail=(args.fail_index == i),
                     ),
                     "retries": 0,
                     "max_retries": 0,
@@ -694,6 +700,7 @@ def celery_chord_run(args: argparse.Namespace) -> None:
                         sleep_ms=args.sleep_ms,
                         payload_bytes=args.payload_bytes,
                         io_mib=0,
+                        fail=(args.fail_index == i),
                     ),
                 )
                 for i in range(args.group_size)
@@ -721,7 +728,10 @@ def celery_chord_run(args: argparse.Namespace) -> None:
                 "ok": count == args.group_size,
             }
             rows.append(row)
-            raw.write(json.dumps({"event": "callback", "data": data}, ensure_ascii=False) + "\n")
+            raw.write(
+                json.dumps({"event": "callback", "data": data}, ensure_ascii=False, default=str)
+                + "\n"
+            )
             if count == args.group_size:
                 ok += 1
             else:
@@ -795,6 +805,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--group-ttl-secs", type=int, default=3600)
     p.add_argument("--sleep-ms", type=int, default=0)
     p.add_argument("--payload-bytes", type=int, default=0)
+    p.add_argument("--fail-index", type=int)
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--raw", required=True)
     p.add_argument("--summary", required=True)
@@ -809,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", type=int, default=10)
     p.add_argument("--sleep-ms", type=int, default=0)
     p.add_argument("--payload-bytes", type=int, default=0)
+    p.add_argument("--fail-index", type=int)
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--raw", required=True)
     p.add_argument("--summary", required=True)
