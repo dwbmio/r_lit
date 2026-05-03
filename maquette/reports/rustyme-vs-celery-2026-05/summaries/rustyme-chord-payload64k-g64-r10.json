@@ -1,0 +1,90 @@
+{
+  "count": 10,
+  "ok": 10,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 295.247615,
+    "p50": 305.250523,
+    "p95": 353.982783,
+    "p99": 353.982783,
+    "max": 353.982783,
+    "mean": 309.2028183
+  },
+  "backend": "rustyme",
+  "kind": "chord",
+  "group_size": 64,
+  "runs": 10,
+  "rows": [
+    {
+      "gid": "bench-286476bd-b0ca-4c38-99f8-f1444f5409a2",
+      "elapsed_ms": 353.982783,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-644d9913-13f1-4585-95e8-d939f7663783",
+      "elapsed_ms": 308.788587,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-415025b8-ae11-4e97-ad36-bdb2fc131b1e",
+      "elapsed_ms": 295.247615,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-1b4a6c3b-23a4-4cfa-be10-6d7583f36df6",
+      "elapsed_ms": 308.009812,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-88a28446-9ad1-4c8f-9d44-f71e069cee67",
+      "elapsed_ms": 313.884967,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-2642771b-9bd6-43e5-9a66-5355fc34420a",
+      "elapsed_ms": 309.250165,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-8e09f5be-fa87-4bf9-bda6-943b1bc977a9",
+      "elapsed_ms": 298.718931,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-1c2e9039-08fa-4de3-a373-543e22e21b87",
+      "elapsed_ms": 296.606806,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-95f2e745-f40b-4c55-9617-e069d9f5de7a",
+      "elapsed_ms": 305.250523,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "gid": "bench-024379da-cdbb-45bd-b96e-cc8154ae9c7f",
+      "elapsed_ms": 302.287994,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    }
+  ]
+}

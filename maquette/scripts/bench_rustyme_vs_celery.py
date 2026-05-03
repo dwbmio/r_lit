@@ -571,6 +571,28 @@ def celery_run(args: argparse.Namespace) -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+def compact_result_event(event: str, data: dict[str, Any], gid: str | None = None) -> dict[str, Any]:
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    echo = result.get("echo") if isinstance(result.get("echo"), dict) else {}
+    results = None
+    if isinstance(result.get("results"), list):
+        results = result["results"]
+    elif isinstance(echo.get("results"), list):
+        results = echo["results"]
+    return {
+        "event": event,
+        "gid": gid,
+        "task_id": data.get("task_id"),
+        "status": data.get("status"),
+        "result_task_id": result.get("task_id"),
+        "group_id": result.get("group_id") or echo.get("group_id"),
+        "results_count": len(results) if results is not None else result.get("results_count"),
+        "payload_bytes": result.get("payload_bytes"),
+        "result_size": len(json.dumps(data, default=str)),
+        "failed_results": sum(1 for r in results or [] if isinstance(r, dict) and r.get("ok") is False),
+    }
+
+
 def rustyme_chord_run(args: argparse.Namespace) -> None:
     try:
         import redis  # type: ignore
@@ -639,7 +661,20 @@ def rustyme_chord_run(args: argparse.Namespace) -> None:
                     continue
                 result = data.get("result") if isinstance(data.get("result"), dict) else {}
                 echo = result.get("echo") if isinstance(result.get("echo"), dict) else {}
-                raw.write(json.dumps({"event": "result", "gid": gid, "data": data}, ensure_ascii=False) + "\n")
+                if args.compact_raw:
+                    raw.write(
+                        json.dumps(
+                            compact_result_event("result", data, gid),
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n"
+                    )
+                else:
+                    raw.write(
+                        json.dumps({"event": "result", "gid": gid, "data": data}, ensure_ascii=False)
+                        + "\n"
+                    )
                 if echo.get("group_id") == gid or result.get("group_id") == gid:
                     callback_seen = True
                     received_wall_ns = wall_ns()
@@ -728,10 +763,20 @@ def celery_chord_run(args: argparse.Namespace) -> None:
                 "ok": count == args.group_size,
             }
             rows.append(row)
-            raw.write(
-                json.dumps({"event": "callback", "data": data}, ensure_ascii=False, default=str)
-                + "\n"
-            )
+            if args.compact_raw:
+                raw.write(
+                    json.dumps(
+                        compact_result_event("callback", data, None),
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\n"
+                )
+            else:
+                raw.write(
+                    json.dumps({"event": "callback", "data": data}, ensure_ascii=False, default=str)
+                    + "\n"
+                )
             if count == args.group_size:
                 ok += 1
             else:
@@ -806,6 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sleep-ms", type=int, default=0)
     p.add_argument("--payload-bytes", type=int, default=0)
     p.add_argument("--fail-index", type=int)
+    p.add_argument("--compact-raw", action="store_true")
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--raw", required=True)
     p.add_argument("--summary", required=True)
@@ -821,6 +867,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sleep-ms", type=int, default=0)
     p.add_argument("--payload-bytes", type=int, default=0)
     p.add_argument("--fail-index", type=int)
+    p.add_argument("--compact-raw", action="store_true")
     p.add_argument("--timeout-secs", type=float, default=30.0)
     p.add_argument("--raw", required=True)
     p.add_argument("--summary", required=True)

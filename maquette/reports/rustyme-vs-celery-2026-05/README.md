@@ -113,6 +113,8 @@ correctness. Rustyme's callback latency is lower in these smoke runs. The first
 Rustyme failure-child run exposed incomplete-chord behavior; the subsequent
 failed-child policy patch fixes it by counting terminal failed children toward
 done and injecting `{ok:false,status:"DEAD",error}` into callback results.
+Payload-bearing chord with 64 KiB child results also passes (group=12 and
+group=64), with Rustyme lower callback/fan-in latency in both tested sizes.
 
 Initial local-disk IO fan-out artifact:
 

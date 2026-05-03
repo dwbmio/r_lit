@@ -27,6 +27,19 @@ Pass condition:
 | Rustyme per-worker Lua | 64 | 100 | 100 | 0 | 0 | **5.85ms** | **8.42ms** | 8.58ms |
 | Celery threads=16 | 64 | 100 | 100 | 0 | 0 | 65.54ms | 68.73ms | 83.31ms |
 
+## Payload-Bearing Chord
+
+Each child returned a 64 KiB synthetic `image_b64` payload. Raw logs used compact
+mode so the repository stores counts and sizes rather than every full callback
+body.
+
+| Backend | Group size | Runs | Payload / child | OK | Timeout | p50 callback | p95 callback | max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rustyme per-worker Lua | 12 | 20 | 64 KiB | 20 | 0 | **42.91ms** | **45.59ms** | 57.07ms |
+| Celery threads=16 | 12 | 20 | 64 KiB | 20 | 0 | 77.15ms | 90.20ms | 122.92ms |
+| Rustyme per-worker Lua | 64 | 10 | 64 KiB | 10 | 0 | **305.25ms** | **353.98ms** | 353.98ms |
+| Celery threads=16 | 64 | 10 | 64 KiB | 10 | 0 | 395.19ms | 455.57ms | 455.57ms |
+
 ## Failure-child Semantics
 
 Injected one intentional failure (`fail_index=3`) in a group of 12 and ran 3
@@ -51,6 +64,8 @@ Rustyme's callback latency is much lower in this tiny group=12 case. This is
 plausible because Rustyme's chord bookkeeping is a small number of Redis
 `HSET/HINCRBY/HSETNX/LPUSH` operations in the worker, while Celery's chord uses
 its backend machinery. The group=64 / 100-repeat run is also stable for both.
+Payload-bearing chord also passes on both; Rustyme remains lower latency in the
+tested 64 KiB child-result fan-in cases.
 
 Pre-policy failure-child semantics differed:
 
@@ -73,6 +88,10 @@ Raw:
 * `../raw/rustyme-chord-fail-g12-r3.jsonl`
 * `../raw/celery-chord-fail-g12-r3.jsonl`
 * `../raw/rustyme-chord-fail-policy-g12-r3.jsonl`
+* `../raw/rustyme-chord-payload64k-g12-r20.jsonl`
+* `../raw/celery-chord-payload64k-g12-r20.jsonl`
+* `../raw/rustyme-chord-payload64k-g64-r10.jsonl`
+* `../raw/celery-chord-payload64k-g64-r10.jsonl`
 
 Summaries:
 
@@ -83,9 +102,12 @@ Summaries:
 * `rustyme-chord-fail-g12-r3.json`
 * `celery-chord-fail-g12-r3.json`
 * `rustyme-chord-fail-policy-g12-r3.json`
+* `rustyme-chord-payload64k-g12-r20.json`
+* `celery-chord-payload64k-g12-r20.json`
+* `rustyme-chord-payload64k-g64-r10.json`
+* `celery-chord-payload64k-g64-r10.json`
 
 ## Next
 
-1. Run payload chord (64 KiB child result) to see fan-in memory/latency.
-2. Run failure-recovery scenarios (worker kill, Redis restart, revoke) with
+1. Run failure-recovery scenarios (worker kill, Redis restart, revoke) with
    group/chord in flight.

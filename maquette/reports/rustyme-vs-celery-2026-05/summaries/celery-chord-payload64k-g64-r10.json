@@ -1,0 +1,90 @@
+{
+  "count": 10,
+  "ok": 10,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 387.122198,
+    "p50": 395.190357,
+    "p95": 455.56714,
+    "p99": 455.56714,
+    "max": 455.56714,
+    "mean": 403.8738145
+  },
+  "backend": "celery",
+  "kind": "chord",
+  "group_size": 64,
+  "runs": 10,
+  "rows": [
+    {
+      "callback_id": "01d8dc85-fa73-4ebd-8ab7-7737c2846841",
+      "elapsed_ms": 455.56714,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "4bc44dcb-0f06-43cb-9d96-cd8eed01bc8b",
+      "elapsed_ms": 407.228751,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "c6a15ac8-aa1e-4814-a053-1404b1996c5e",
+      "elapsed_ms": 399.113884,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "67e0911b-4952-40a3-b10f-8dee56443d4c",
+      "elapsed_ms": 410.58149,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "818365b2-2338-4b90-9de7-1dbe1d6fb819",
+      "elapsed_ms": 394.766866,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "ec878d6f-5ced-435c-b705-91be250a4824",
+      "elapsed_ms": 395.190357,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "a077d305-ceff-482b-826d-e15dd96d2b37",
+      "elapsed_ms": 387.122198,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "caa26b83-50c0-4711-9ba1-bab10f4254a3",
+      "elapsed_ms": 405.492458,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "8dc7f8a7-c69b-4d57-bc5a-cae508b2d5bb",
+      "elapsed_ms": 392.31382,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    },
+    {
+      "callback_id": "c9be694a-7498-4024-a89e-00675987a1a1",
+      "elapsed_ms": 391.361181,
+      "results_count": 64,
+      "expected": 64,
+      "ok": true
+    }
+  ]
+}
