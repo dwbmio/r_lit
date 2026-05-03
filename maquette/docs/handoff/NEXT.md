@@ -60,7 +60,7 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 `v0.9b-complete.md` · `v0.10b-bis-complete.md` ·
 `v0.10c1-complete.md` · `v0.10c2-blockmeta-complete.md` ·
 `v0.10c3-block-composer.md` · `v0.10d1-complete.md` ·
-`v0.10d1cd-complete.md`.
+`v0.10d1cd-complete.md` · `v0.11a-cloud-status.md`.
 
 ## Roadmap snapshot
 
@@ -73,7 +73,8 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | v0.8 | Multi-angle preview + float window + onboarding + QoL   | shipped   |
 | v0.9 | Robustness: autosave + GUI polish + Bevy trim + prefs   | A + polish shipped; **B + C pending** |
 | v0.10 | AI texture MVP (mock → Fal → schema → preview → bake)  | A + B + C + **D-1 (all four sub-slices) shipped 2026-04-28 / 04-29**; D-2 polish + E glTF bake pending |
-| v0.11 | Cloud-as-Backup: hfrog as user's "云硬盘", local stays source-of-truth, manual `Push to cloud` per project + per block + per texture, merged Recent list with `local` / `cloud` badges and mtime-LWW reconciliation | not yet — designed 2026-04-29 (this session); implementation gated on v0.10 D-1 finishing |
+| **v0.10-QA** | **Queue Backend Gate: Rustyme vs Celery 公允复测** — reliable/perf/energy gate before more queue-dependent work | **highest priority / in progress 2026-05-03**. Phase 0-2 initial no-op EchoHook data collected, but final decision blocked on required Lua parity / payload / group-chord / failure-recovery / CPU-time runs |
+| v0.11 | Cloud-as-Backup: hfrog as user's "云硬盘", local stays source-of-truth, manual `Push to cloud` per project + per block + per texture, merged Recent list with `local` / `cloud` badges and mtime-LWW reconciliation | **A shipped 2026-05-03** (cloud status chip only; no IO path changes). B-projects / B-blocks / B-textures / C / D pending |
 | v1.0 | Release candidate: docs, icon, smoke matrix, tag        | not yet   |
 
 ### v0.10 phase detail
@@ -88,6 +89,65 @@ Reference: `v0.4-complete.md` · `v0.5-complete.md` · `v0.6-complete.md`
 | **D-3** | _(deferred, may skip)_ 2D-canvas rectangle selection mode that regenerates only the slots whose cells fall inside the box. Explicitly deprioritised by user 2026-04-24 ("选中范围这个我理解可以没必要了") — the palette already carves the model into regions | deferred |
 | **E** | glTF baking: per-palette material with `pbrMetallicRoughness.baseColorTexture`; single tile per slot, outline mesh kept compatible | not yet |
 | **F** | docs (`docs/texture/`) + `USER-TODO.md` validation block + provider switching guide | partial — protocol + worker roadmap shipped, user guide pending |
+
+### v0.10-QA phase detail — Queue Backend Gate
+
+This is a **blocking gate** inserted after v0.10 D-1 and before any
+more queue-dependent feature work (D-2 regenerate UX, E glTF texture
+bake, or v0.11.B cloud project push). Motivation: Maquette's next
+several arcs all depend on async task execution. If Rustyme is
+materially worse than Celery on reliability / performance /
+energy-per-task, continuing to add Rustyme-specific surface area would
+compound technical debt.
+
+Status (2026-05-03): Tencent CVM `152.136.54.186` is prepared. Phase
+0/2 initial no-op data exists under
+`maquette/reports/rustyme-vs-celery-2026-05/`. It is **not a final
+decision** because Rustyme was measured through built-in EchoHook, not
+Lua hook, and payload / group / failure-recovery paths are still
+unmeasured. A first long-request fan-out run on 2026-05-03 produced a
+critical red flag: Celery threads/prefork both completed 100 × 2s local
+HTTP tasks at concurrency=4 in ~50s, while Rustyme LuaJIT returned
+1/100 in the 100-task run and serialized 4 tasks into ~8s. See
+`reports/rustyme-vs-celery-2026-05/summaries/long-request-fanout-initial.md`.
+Follow-up per-worker Lua VM prototype restored correctness and showed an early
+efficiency advantage at concurrency 16/32 (same wall time class as Celery,
+lower CPU-time/task, much lower RSS than Celery prefork); see
+`reports/rustyme-vs-celery-2026-05/summaries/per-worker-lua-matrix.md`.
+Payload parity also produced a positive Rustyme signal: 64 KiB / 256 KiB result
+payloads were ~2.6-3.0x higher throughput than Celery with lower CPU-time/task;
+see `reports/rustyme-vs-celery-2026-05/summaries/payload-parity-initial.md`.
+Chord correctness smoke (group=12, 20 repeats) passed on both Rustyme and Celery,
+with Rustyme lower callback latency in the tiny-group case; larger groups and
+failure semantics remain pending. See
+`reports/rustyme-vs-celery-2026-05/summaries/chord-correctness-initial.md`.
+
+Hard rule: **no final recommendation until all required rows below are
+done and their raw JSONL + summary markdown are committed.**
+
+| Required slice | Why it is mandatory | Status |
+|---|---|---|
+| **Q0 env reproducibility** | Pin host specs, Redis version, Rustyme commit, Celery version, worker concurrency, kernel/sysctl, raw artifact layout. | partial — env report exists |
+| **Q1 Rustyme Lua parity** | Maquette texgen uses Lua hooks (`texgen_cpu.lua` / `texgen_fal.lua`); built-in EchoHook is only queue-runtime lower bound. | partial — per-worker Lua VM prototype validated; Lua no-op 1k/5k still pending |
+| **Q2 payload parity** | Texture workload returns 64-256 KB+ PNG/base64 payloads; no-op result latency is not enough. | **initial pass** — Rustyme 2.6-3.0x throughput over Celery on 64/256 KiB synthetic result payloads |
+| **Q3 group/chord parity** | D-1.C consciously avoided chord for progressive UX, but Rustyme claims Canvas parity with Celery; must verify correctness. | partial — group=12 x20 passed on both; group=64 / failure semantics pending |
+| **Q4 reliability recovery** | User cares most about reliability: stale result, worker kill, Redis restart, timeout/retry/DLQ, revoke/purge. | **blocking** |
+| **Q5 energy proxy** | "能耗比" requires CPU-time/task + RSS/task, not just wall-clock throughput. Use `/proc/<pid>/stat` before/after and sum Celery master+children. | partial — captured for long HTTP and payload; failure/group still pending |
+| **Q6 Celery fair tuning** | Celery must not be handicapped by one arbitrary pool choice. At minimum compare prefork=4 and threads=4 (and document why gevent/eventlet is excluded or included). | **blocking** |
+| **Q7 Maquette workload replay** | Final decision must include one-slot generate, 12-slot Generate all, and Fal-like sleep workload. | **blocking** |
+| **Q8 long-request fan-out overhead** | The common Maquette case is many workers issuing long HTTP/Fal-like requests. Compare Rustyme+LuaJIT and Celery under high concurrency after subtracting request time; primary metrics are p95/p99 `non_request_ms`, time-to-first-result, time-to-all-results, CPU-time/task, RSS. | **initial pass after per-worker VM** — correctness restored; Rustyme lower CPU/RSS at 16/32 |
+
+Decision outcomes:
+
+* **Continue Rustyme** — only if Rustyme passes reliability slices and
+  no-op/payload p95 and CPU-time/task are materially better than or
+  close to Celery.
+* **Stop Rustyme-specific expansion** — if any reliability slice loses
+  tasks, duplicates callbacks, hangs result consumers, or fails
+  recovery expectations.
+* **Dual-provider middle path** — if performance is strong but
+  reliability / ops maturity is weaker: introduce a `TaskQueueProvider`
+  abstraction and keep Rustyme/Celery selectable by env.
 
 After D-1 ships we re-evaluate whether E gets pulled in before v1.0
 or deferred — D-1 alone is enough to *feel* whether AI textures
@@ -122,7 +182,7 @@ saving / opening files.
 
 | Phase | Scope | Status |
 |---|---|---|
-| **A** | `cloud_status` module: HTTP probe of `MAQUETTE_HFROG_BASE_URL/api/artifactory/list?runtime=ping` with 1.5 s timeout on startup. `AppCloudMode { Online, Offline { last_error }, Probing }` resource. Status-bar chip ("☁ Cloud OK" / "○ Local mode · Try cloud →") with click-to-reprobe. **Does not** change any IO path; pure UI surfacing. | not yet — first slice |
+| **A** | `cloud_status` module: HTTP probe of `MAQUETTE_HFROG_BASE_URL/api/artifactory/list?runtime=ping` with 1.5 s timeout on startup. `AppCloudMode { Online, Offline { last_error }, Probing }` resource. Status-bar chip (`Cloud: checking...` / `Cloud: online` / `Local mode`) with click-to-reprobe. **Does not** change any IO path; pure UI surfacing. | **shipped 2026-05-03** (`v0.11a-cloud-status.md`) |
 | **B-projects** | hfrog protocol extension: new runtime `maquette-project/v1` carrying the `.maq` JSON as the artifact body (fits hfrog's "any binary" payload mode if available; if hfrog forces PNG for the S3 leg, fall back to a JSON-as-metadata + zero-byte PNG approach — research called out in B's first task). `File → Push to cloud` menu item + button on the project status bar; `HfrogPublisher::publish_project` peer of the existing block publisher. Pull side: `maquette-cli project sync` + GUI button. | not yet — second slice |
 | **B-blocks** | Auto-pull `maquette-block/v1` on startup when mode == Online (currently the user has to click `Sync hfrog`). Block Composer's `Publish` already covers the push side — no protocol change needed. | not yet — third slice |
 | **B-textures** | `maquette-texture/v1` runtime carrying generated PNGs keyed by `cache_key`. `Push to cloud` on a project sweeps every `PaletteSlotMeta::texture` it references and uploads the PNGs. Open-from-cloud reverses this: `cache_get` miss → fetch from hfrog before falling back to "regenerate". Cross-machine "open the same project on a different machine and the textures are already there" is the user-visible win. | not yet — fourth slice |
@@ -156,31 +216,41 @@ get there:
 ### Now — start here next session
 
 v0.10 D-1 is **closed** as of 2026-04-29 (see
-`v0.10d1cd-complete.md`). Three plausible next threads, ordered
-by user-visible payoff:
+`v0.10d1cd-complete.md`). v0.11.A is **closed** as of 2026-05-03
+(cloud status chip only; no IO changes). **v0.10-QA Queue Backend
+Gate is now the active highest-priority thread**; D-2 / E / v0.11.B
+are intentionally paused until the gate yields a recommendation.
 
-1. **v0.11.A — cloud status chip (1 short session).**
-   See "v0.11 phase detail" above for the full six-phase plan;
-   phase A is the smallest first slice that introduces no
-   architectural risk because it touches **no IO path**.
-   Concretely:
+1. **v0.10-QA — finish Rustyme vs Celery gate.**
+   Immediate required sequence:
 
-   * `cloud_status.rs` Bevy plugin owning a startup probe
-     (1.5 s timeout) and an `AppCloudMode { Online, Offline,
-     Probing }` resource.
-   * Status-bar chip on the right edge: "☁ Cloud OK" /
-     "○ Local mode · Try cloud →". Click reprobes; updates the
-     resource and the chip in-place.
-   * Probe is cheap: `GET <hfrog>/api/artifactory/list?runtime=ping`
-     with 1.5 s timeout. Any non-2xx, timeout, or network error →
-     `Offline { last_error }`.
-   * Zero changes to File / Save / Open paths. Phase B is where
-     the cloud actually starts owning bytes.
-   * Sets the user up for the bigger v0.11.B (`Push to cloud`
-     button + `maquette-project/v1` runtime + cross-machine sync)
-     by establishing the mode-state-machine vocabulary first.
+   * Clean up and commit the per-worker Lua VM patch in sonargrid
+     (current prototype passes local tests and test-server long HTTP).
+   * Run group/chord group=64 and failure-child semantics.
+   * Run failure recovery: stale result, worker kill, Redis restart,
+     timeout/retry/DLQ, revoke/purge.
+   * Run Maquette workload replay: one slot, 12-slot Generate all,
+     Fal-like sleep, and 64/256 KiB result payloads.
+   * Produce `maquette/reports/rustyme-vs-celery-2026-05/final.md`
+     with recommendation: continue Rustyme / switch Celery /
+     dual-provider.
 
-2. **v0.10 D-2 — per-slot regenerate / edit-hint polish.**
+2. **v0.11.B-projects — explicit `Push to cloud` for `.maq` files.**
+   Phase A established the status vocabulary (`Cloud: online` /
+   `Local mode`) without changing IO. The next real cloud slice is
+   the first byte-moving path:
+
+   * Research hfrog's S3 leg: can presigned upload accept arbitrary
+     JSON/text (`.maq`) bytes, or does it enforce PNG-ish payloads?
+   * Introduce runtime `maquette-project/v1`.
+   * Add `ProjectMeta::cloud_slug: Option<String>` (schema v5 minor
+     bump, backward-compatible).
+   * Add File / status-bar `Push to cloud` action that uploads the
+     current `.maq` snapshot manually. Save/Open remain local-first.
+   * CLI peer: `maquette-cli project push <file.maq>` once the GUI path
+     proves the protocol.
+
+3. **v0.10 D-2 — per-slot regenerate / edit-hint polish.**
    The texturing path ships with 3 surfaces (right-click → Generate
    texture · Material drawer → Generate all · `G` / `Shift+G`
    keyboard) but no per-slot "regenerate the same prompt" or
@@ -192,7 +262,7 @@ by user-visible payoff:
    enum is already hospitable — add `SetOverrideHint { slot,
    before, after }`).
 
-3. **v0.10 E — glTF baking with textured materials.**
+4. **v0.10 E — glTF baking with textured materials.**
    Now that Textured preview works, the export pipeline is the
    weak link: `.gltf` ships flat colour even when the user has
    AI-generated textures. Phase E adds `pbrMetallicRoughness.
@@ -210,18 +280,18 @@ by user-visible payoff:
 
 ### Blocked / external
 
-3. **`#TEX-B` worker hardening.** The CPU lane is fully
+1. **`#TEX-B` worker hardening.** The CPU lane is fully
    verified; FAL needs `FAL_KEY` set on the sonargrid host
    before fal lane stops timing out (Maquette already proved
    the routing + revoke path against an empty-key worker, see
    `v0.10b-bis-complete.md` § 4 / `USER-TODO.md` `#TEX-B-fal`).
    Not on Maquette's plate.
-4. **v0.10 D-1 finish** — ✅ closed 2026-04-29. All four sub-slices
+2. **v0.10 D-1 finish** — closed 2026-04-29. All four sub-slices
    (A: meta wiring · B: per-slot generate · C: Generate all ·
    D: Textured render) shipped. See `v0.10d1cd-complete.md` for
    the C+D handoff.
-5. **v0.11 B / C / D — cloud IO + Recent panel.** Designed
-   2026-04-29; gated on D-1 closing out. See "v0.11 phase detail"
+3. **v0.11 B / C / D — cloud IO + Recent panel.** Designed
+   2026-04-29; A shipped 2026-05-03. See "v0.11 phase detail"
    above for the slicing rationale (`maquette-project/v1`
    runtime, `Push to cloud` button, mtime-LWW Recent list).
 4. **User validation pass** — `USER-TODO.md` has a stack of items

@@ -1,0 +1,20 @@
+{
+  "count": 10,
+  "ok": 10,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 12.057105,
+    "p50": 20.974124,
+    "p95": 21.044059,
+    "p99": 21.044059,
+    "max": 21.044059,
+    "mean": 20.0953436
+  },
+  "backend": "rustyme",
+  "queue_key": "rustyme:bench:queue",
+  "result_key": "rustyme:bench:result",
+  "wall_ms": 22.747152,
+  "throughput_tps": 439.61547362060975,
+  "remaining": []
+}

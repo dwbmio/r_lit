@@ -1,0 +1,22 @@
+{"event": "sent", "task_id": "33b95520-a1a4-4dad-8da2-0d9e64e0b063", "i": 0}
+{"event": "sent", "task_id": "b2873527-74dd-4f75-9a8c-67c15358d0f5", "i": 1}
+{"event": "sent", "task_id": "5d6ee52a-4fa6-4cb4-bdb6-512ff611ea44", "i": 2}
+{"event": "sent", "task_id": "21f1475b-9d9c-4afc-8ce1-340653a21681", "i": 3}
+{"event": "sent", "task_id": "cb98e2e3-85bd-451b-abb9-90b7f5e39dfa", "i": 4}
+{"event": "sent", "task_id": "9d76b03b-3545-4874-8d8c-a3680dd292d5", "i": 5}
+{"event": "sent", "task_id": "88700e2c-545e-4007-a7be-1ef7898f27ee", "i": 6}
+{"event": "sent", "task_id": "b674553a-ad8d-4b56-aa63-c53962459692", "i": 7}
+{"event": "sent", "task_id": "be4c3f85-127a-4b5b-b7f9-55d5f9b1925b", "i": 8}
+{"event": "sent", "task_id": "5163f534-66cf-4e35-93b7-ff941f0a8a8a", "i": 9}
+{"event": "foreign", "task_id": "foreign-stale"}
+{"event": "result", "task_id": "33b95520-a1a4-4dad-8da2-0d9e64e0b063", "status": "SUCCESS", "elapsed_ms": 12.057105, "result_size": 331}
+{"event": "foreign", "task_id": "foreign-stale"}
+{"event": "result", "task_id": "b2873527-74dd-4f75-9a8c-67c15358d0f5", "status": "SUCCESS", "elapsed_ms": 21.044059, "result_size": 331}
+{"event": "result", "task_id": "5d6ee52a-4fa6-4cb4-bdb6-512ff611ea44", "status": "SUCCESS", "elapsed_ms": 21.010462, "result_size": 331}
+{"event": "result", "task_id": "21f1475b-9d9c-4afc-8ce1-340653a21681", "status": "SUCCESS", "elapsed_ms": 20.987082, "result_size": 331}
+{"event": "result", "task_id": "cb98e2e3-85bd-451b-abb9-90b7f5e39dfa", "status": "SUCCESS", "elapsed_ms": 20.987793, "result_size": 331}
+{"event": "result", "task_id": "9d76b03b-3545-4874-8d8c-a3680dd292d5", "status": "SUCCESS", "elapsed_ms": 20.985732, "result_size": 331}
+{"event": "result", "task_id": "88700e2c-545e-4007-a7be-1ef7898f27ee", "status": "SUCCESS", "elapsed_ms": 20.974124, "result_size": 331}
+{"event": "result", "task_id": "b674553a-ad8d-4b56-aa63-c53962459692", "status": "SUCCESS", "elapsed_ms": 20.972063, "result_size": 331}
+{"event": "result", "task_id": "be4c3f85-127a-4b5b-b7f9-55d5f9b1925b", "status": "SUCCESS", "elapsed_ms": 20.966303, "result_size": 331}
+{"event": "result", "task_id": "5163f534-66cf-4e35-93b7-ff941f0a8a8a", "status": "SUCCESS", "elapsed_ms": 20.968713, "result_size": 331}

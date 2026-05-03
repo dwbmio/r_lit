@@ -1,0 +1,236 @@
+{
+  "count": 1000,
+  "ok": 1000,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 550.267423,
+    "p50": 910.446634,
+    "p95": 1169.340032,
+    "p99": 1187.455717,
+    "max": 1227.141945,
+    "mean": 878.0393243980001
+  },
+  "backend": "celery",
+  "broker": "redis://127.0.0.1:6379/0",
+  "backend_url": "redis://127.0.0.1:6379/1",
+  "wall_ms": 1778.392187,
+  "throughput_tps": 562.3056642454761,
+  "timing_ms": {
+    "end_to_end_wall_ms": {
+      "min": 550.266844,
+      "p50": 910.445753,
+      "p95": 1169.339492,
+      "p99": 1187.454997,
+      "max": 1227.140885,
+      "mean": 878.038701519
+    },
+    "queue_wait_ms": {
+      "min": 2.210945,
+      "p50": 23.204239,
+      "p95": 53.942933,
+      "p99": 68.395333,
+      "max": 82.357104,
+      "mean": 25.812968964
+    },
+    "result_return_ms": {
+      "min": 517.485303,
+      "p50": 879.872597,
+      "p95": 1151.773406,
+      "p99": 1180.914083,
+      "max": 1188.23112,
+      "mean": 852.152071624
+    }
+  },
+  "worker_process": {
+    "before": {
+      "root_pid": 76452,
+      "pids": [
+        {
+          "pid": 76452,
+          "cpu_ticks": 29,
+          "rss_bytes": 46182400
+        },
+        {
+          "pid": 76455,
+          "cpu_ticks": 0,
+          "rss_bytes": 38064128
+        },
+        {
+          "pid": 76456,
+          "cpu_ticks": 0,
+          "rss_bytes": 38133760
+        },
+        {
+          "pid": 76457,
+          "cpu_ticks": 0,
+          "rss_bytes": 38064128
+        },
+        {
+          "pid": 76458,
+          "cpu_ticks": 0,
+          "rss_bytes": 38146048
+        },
+        {
+          "pid": 76459,
+          "cpu_ticks": 0,
+          "rss_bytes": 38076416
+        },
+        {
+          "pid": 76460,
+          "cpu_ticks": 0,
+          "rss_bytes": 38150144
+        },
+        {
+          "pid": 76461,
+          "cpu_ticks": 0,
+          "rss_bytes": 38084608
+        },
+        {
+          "pid": 76462,
+          "cpu_ticks": 0,
+          "rss_bytes": 38084608
+        },
+        {
+          "pid": 76463,
+          "cpu_ticks": 0,
+          "rss_bytes": 38092800
+        },
+        {
+          "pid": 76464,
+          "cpu_ticks": 0,
+          "rss_bytes": 38092800
+        },
+        {
+          "pid": 76465,
+          "cpu_ticks": 0,
+          "rss_bytes": 38096896
+        },
+        {
+          "pid": 76466,
+          "cpu_ticks": 0,
+          "rss_bytes": 38100992
+        },
+        {
+          "pid": 76467,
+          "cpu_ticks": 0,
+          "rss_bytes": 38105088
+        },
+        {
+          "pid": 76468,
+          "cpu_ticks": 0,
+          "rss_bytes": 38121472
+        },
+        {
+          "pid": 76469,
+          "cpu_ticks": 0,
+          "rss_bytes": 38125568
+        },
+        {
+          "pid": 76470,
+          "cpu_ticks": 0,
+          "rss_bytes": 38129664
+        }
+      ],
+      "total_cpu_ticks": 29,
+      "total_rss_bytes": 655851520,
+      "hz": 100
+    },
+    "after": {
+      "root_pid": 76452,
+      "pids": [
+        {
+          "pid": 76452,
+          "cpu_ticks": 141,
+          "rss_bytes": 50737152
+        },
+        {
+          "pid": 76455,
+          "cpu_ticks": 32,
+          "rss_bytes": 40873984
+        },
+        {
+          "pid": 76456,
+          "cpu_ticks": 17,
+          "rss_bytes": 41009152
+        },
+        {
+          "pid": 76457,
+          "cpu_ticks": 11,
+          "rss_bytes": 41017344
+        },
+        {
+          "pid": 76458,
+          "cpu_ticks": 1,
+          "rss_bytes": 40910848
+        },
+        {
+          "pid": 76459,
+          "cpu_ticks": 0,
+          "rss_bytes": 40910848
+        },
+        {
+          "pid": 76460,
+          "cpu_ticks": 0,
+          "rss_bytes": 38150144
+        },
+        {
+          "pid": 76461,
+          "cpu_ticks": 0,
+          "rss_bytes": 38084608
+        },
+        {
+          "pid": 76462,
+          "cpu_ticks": 0,
+          "rss_bytes": 38084608
+        },
+        {
+          "pid": 76463,
+          "cpu_ticks": 0,
+          "rss_bytes": 38092800
+        },
+        {
+          "pid": 76464,
+          "cpu_ticks": 0,
+          "rss_bytes": 38092800
+        },
+        {
+          "pid": 76465,
+          "cpu_ticks": 0,
+          "rss_bytes": 38096896
+        },
+        {
+          "pid": 76466,
+          "cpu_ticks": 0,
+          "rss_bytes": 38100992
+        },
+        {
+          "pid": 76467,
+          "cpu_ticks": 0,
+          "rss_bytes": 38105088
+        },
+        {
+          "pid": 76468,
+          "cpu_ticks": 0,
+          "rss_bytes": 38121472
+        },
+        {
+          "pid": 76469,
+          "cpu_ticks": 0,
+          "rss_bytes": 38125568
+        },
+        {
+          "pid": 76470,
+          "cpu_ticks": 34,
+          "rss_bytes": 41033728
+        }
+      ],
+      "total_cpu_ticks": 236,
+      "total_rss_bytes": 677548032,
+      "hz": 100
+    },
+    "cpu_seconds_delta": 2.07,
+    "cpu_ms_per_completed_task": 2.07,
+    "rss_bytes_after": 677548032
+  }
+}

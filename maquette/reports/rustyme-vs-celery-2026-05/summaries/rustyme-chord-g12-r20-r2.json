@@ -1,0 +1,160 @@
+{
+  "count": 20,
+  "ok": 20,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 1.488579,
+    "p50": 1.641466,
+    "p95": 1.700245,
+    "p99": 2.288013,
+    "max": 2.288013,
+    "mean": 1.6448068
+  },
+  "backend": "rustyme",
+  "kind": "chord",
+  "group_size": 12,
+  "runs": 20,
+  "rows": [
+    {
+      "gid": "bench-29ce4730-3f2f-4a90-8069-5941f8a4db1a",
+      "elapsed_ms": 2.288013,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-060b17db-2be1-4552-b02e-da454558cd3b",
+      "elapsed_ms": 1.700245,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-3f151010-520a-411d-9e0d-122661703e7e",
+      "elapsed_ms": 1.684606,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-fc405cab-2590-4246-9c90-7029d2b4bb2c",
+      "elapsed_ms": 1.673515,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-8f387dab-bbf9-43e3-8acd-710cf66d66f8",
+      "elapsed_ms": 1.641466,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-9f1b37cb-fb15-4868-aec8-dcc16ef3b183",
+      "elapsed_ms": 1.670575,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-442c090b-ac07-4ccc-8271-41daf089c903",
+      "elapsed_ms": 1.569358,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-93bebdaf-9754-4fdc-88ab-8282a0821923",
+      "elapsed_ms": 1.671085,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-b1828c12-b34d-47c6-a06b-1d2672dd97c4",
+      "elapsed_ms": 1.565327,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-6e0cdd21-52b7-477b-a233-8233993f7b5c",
+      "elapsed_ms": 1.663767,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-be4e5c87-e602-4577-88a7-efa65d268947",
+      "elapsed_ms": 1.658827,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-0f81f0f9-c172-44d6-8067-0c9b5197c985",
+      "elapsed_ms": 1.608917,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-3e61623d-1379-4c59-8cbd-d0253d0da9a6",
+      "elapsed_ms": 1.560018,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-5e8f5edd-8771-4a0d-8e57-caf86323f48a",
+      "elapsed_ms": 1.542108,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-dac7e801-ab78-4a43-b64a-02b6972211e1",
+      "elapsed_ms": 1.560357,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-c5e5c37a-5bf3-47b5-936d-7c1f8053f628",
+      "elapsed_ms": 1.595018,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-53d8151b-4a6b-45bd-ad25-ce53b6c71909",
+      "elapsed_ms": 1.653217,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-b4106c2a-db32-4980-9b1a-f18b5cf13716",
+      "elapsed_ms": 1.509799,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-45f84dd7-419b-4051-af61-fab7c3018460",
+      "elapsed_ms": 1.591339,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    },
+    {
+      "gid": "bench-6237b08e-e711-4420-8f25-909d3a6aad78",
+      "elapsed_ms": 1.488579,
+      "results_count": 12,
+      "expected": 12,
+      "ok": true
+    }
+  ]
+}

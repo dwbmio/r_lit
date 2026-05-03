@@ -1,0 +1,76 @@
+{
+  "count": 1000,
+  "ok": 1000,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 2404.409504,
+    "p50": 2953.7049,
+    "p95": 3336.082723,
+    "p99": 3384.559479,
+    "max": 3433.625414,
+    "mean": 2923.221417891
+  },
+  "backend": "celery",
+  "broker": "redis://127.0.0.1:6379/0",
+  "backend_url": "redis://127.0.0.1:6379/1",
+  "wall_ms": 5763.548119,
+  "throughput_tps": 173.50423373814118,
+  "timing_ms": {
+    "end_to_end_wall_ms": {
+      "min": 2404.408884,
+      "p50": 2953.7041,
+      "p95": 3336.082003,
+      "p99": 3384.558859,
+      "max": 3433.622984,
+      "mean": 2923.220644589
+    },
+    "queue_wait_ms": {
+      "min": 8.581234,
+      "p50": 838.834423,
+      "p95": 1588.799448,
+      "p99": 1680.797963,
+      "max": 1702.338908,
+      "mean": 843.3033112640001
+    },
+    "result_return_ms": {
+      "min": 701.788731,
+      "p50": 2139.108195,
+      "p95": 3237.403536,
+      "p99": 3353.325066,
+      "max": 3391.852759,
+      "mean": 2079.680185091
+    }
+  },
+  "worker_process": {
+    "before": {
+      "root_pid": 76931,
+      "pids": [
+        {
+          "pid": 76931,
+          "cpu_ticks": 14,
+          "rss_bytes": 45551616
+        }
+      ],
+      "total_cpu_ticks": 14,
+      "total_rss_bytes": 45551616,
+      "hz": 100
+    },
+    "after": {
+      "root_pid": 76931,
+      "pids": [
+        {
+          "pid": 76931,
+          "cpu_ticks": 526,
+          "rss_bytes": 55992320
+        }
+      ],
+      "total_cpu_ticks": 526,
+      "total_rss_bytes": 55992320,
+      "hz": 100
+    },
+    "cpu_seconds_delta": 5.12,
+    "cpu_ms_per_completed_task": 5.12,
+    "rss_bytes_after": 55992320
+  }
+}

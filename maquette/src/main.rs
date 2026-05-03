@@ -9,6 +9,7 @@ mod autosave;
 mod block_composer;
 mod block_library;
 mod camera;
+mod cloud_status;
 mod export_dialog;
 mod float_window;
 mod fonts;
@@ -122,6 +123,7 @@ fn main() {
         .add_plugins(autosave::AutosavePlugin)
         .add_plugins(block_library::BlockLibraryPlugin)
         .add_plugins(block_composer::BlockComposerPlugin)
+        .add_plugins(cloud_status::CloudStatusPlugin)
         .add_plugins(slot_texgen::SlotTexgenPlugin)
         .add_plugins(texture_registry::TextureRegistryPlugin)
         .add_plugins(ui::UiPlugin)

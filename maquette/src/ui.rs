@@ -27,6 +27,7 @@ use crate::block_library::{BlockBindAction, BlockLibraryState, SyncBlockLibrary}
 use crate::camera::{
     egui_rect, FitPreviewToModel, PreviewViewportRect, ResetPreviewView, ZoomPreview, ZOOM_STEP,
 };
+use crate::cloud_status::{CloudStatus, ProbeCloud};
 use crate::export_dialog::PendingExportDialog;
 use crate::float_window::FloatPreviewState;
 use crate::history::{EditHistory, HistoryAction, MetaEdit, PaintOp};
@@ -45,6 +46,10 @@ use crate::session::{CurrentProject, PendingProjectDialog, ProjectAction};
 pub struct ProjectState<'w> {
     pub current: ResMut<'w, CurrentProject>,
     pub meta: ResMut<'w, ProjectMeta>,
+    /// v0.11.A: cloud reachability is UI status only. Keeping it in
+    /// this bundle avoids growing `ui_system` past bevy_ecs's 16-param
+    /// ceiling again.
+    pub cloud: Res<'w, CloudStatus>,
 }
 
 /// Bundle the outbound message writers for `ui_system` so we stay
@@ -70,6 +75,8 @@ pub struct UiMessages<'w> {
     /// the palette swatch → `Generate texture →` → pick a provider
     /// lane; the `slot_texgen::SlotTexgenPlugin` does the rest.
     pub slot_texgen: MessageWriter<'w, GenerateSlotTexture>,
+    /// Retry the short hfrog probe backing the status-bar cloud chip.
+    pub cloud_probe: MessageWriter<'w, ProbeCloud>,
     /// Reactive-rendering wake-up (`WinitSettings::desktop_app()` only
     /// runs `Update` when winit fires an event or someone writes
     /// `RequestRedraw`). After any blocking native dialog we have to
@@ -245,6 +252,7 @@ fn ui_system(
     // as `needless_borrow`).
     let current: &mut CurrentProject = &mut project.current;
     let meta: &mut ProjectMeta = &mut project.meta;
+    let cloud = &project.cloud;
     let project_ev = &mut msgs.project;
     let reset_view_ev = &mut msgs.reset_view;
     let fit_view_ev = &mut msgs.fit_view;
@@ -255,6 +263,7 @@ fn ui_system(
     let block_sync_ev = &mut msgs.block_sync;
     let composer_open_ev = &mut msgs.composer_open;
     let slot_texgen_ev = &mut msgs.slot_texgen;
+    let cloud_probe_ev = &mut msgs.cloud_probe;
     let redraw_ev = &mut msgs.redraw;
     let ctx = ctx.ctx_mut()?;
 
@@ -865,6 +874,7 @@ fn ui_system(
             ));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label("Maquette · v0.8-dev");
+                cloud_status_chip(ui, cloud, &mut *cloud_probe_ev, &mut *redraw_ev);
             });
         });
     });
@@ -883,6 +893,28 @@ fn ui_system(
     });
 
     Ok(())
+}
+
+fn cloud_status_chip(
+    ui: &mut egui::Ui,
+    cloud: &CloudStatus,
+    probe_ev: &mut MessageWriter<ProbeCloud>,
+    redraw_ev: &mut MessageWriter<bevy::window::RequestRedraw>,
+) {
+    let color = to_egui_color(cloud.mode.chip_color());
+    let text = egui::RichText::new(cloud.mode.chip_label()).color(color);
+    let button = egui::Button::new(text)
+        .small()
+        .fill(egui::Color32::from_black_alpha(30))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.7)));
+    let response = ui
+        .add_enabled(!cloud.in_flight, button)
+        .on_hover_text(cloud.mode.tooltip())
+        .on_disabled_hover_text("Cloud probe already running");
+    if response.clicked() {
+        probe_ev.write(ProbeCloud);
+        redraw_ev.write(bevy::window::RequestRedraw);
+    }
 }
 
 fn paint_canvas(

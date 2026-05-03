@@ -1,0 +1,77 @@
+{
+  "count": 800,
+  "ok": 800,
+  "failed": 0,
+  "timeout": 0,
+  "latency_ms": {
+    "min": 2002.809725,
+    "p50": 50075.657752,
+    "p95": 51108.113094,
+    "p99": 51117.329917,
+    "max": 51120.856793,
+    "mean": 48298.50562525125
+  },
+  "backend": "rustyme",
+  "queue_key": "rustyme:long:queue",
+  "result_key": "rustyme:long:result",
+  "wall_ms": 51129.057629,
+  "throughput_tps": 15.646679933061122,
+  "remaining": [],
+  "timing_ms": {
+    "end_to_end_wall_ms": {
+      "min": 2002.812316,
+      "p50": 50075.658372,
+      "p95": 51108.113764,
+      "p99": 51117.330617,
+      "max": 51120.857633,
+      "mean": 48298.506301167494
+    },
+    "non_request_ms": {
+      "min": 2.6073730000000523,
+      "p50": 48074.432628999995,
+      "p95": 49106.099659,
+      "p99": 49115.817454,
+      "max": 49118.89631,
+      "mean": 46297.02578208625
+    },
+    "request_ms": {
+      "min": 2000.014977,
+      "p50": 2001.674101,
+      "p95": 2002.091619,
+      "p99": 2002.213596,
+      "max": 2002.494093,
+      "mean": 2001.48051908125
+    }
+  },
+  "worker_process": {
+    "before": {
+      "root_pid": 70756,
+      "pids": [
+        {
+          "pid": 70756,
+          "cpu_ticks": 0,
+          "rss_bytes": 27852800
+        }
+      ],
+      "total_cpu_ticks": 0,
+      "total_rss_bytes": 27852800,
+      "hz": 100
+    },
+    "after": {
+      "root_pid": 70756,
+      "pids": [
+        {
+          "pid": 70756,
+          "cpu_ticks": 14,
+          "rss_bytes": 42713088
+        }
+      ],
+      "total_cpu_ticks": 14,
+      "total_rss_bytes": 42713088,
+      "hz": 100
+    },
+    "cpu_seconds_delta": 0.14,
+    "cpu_ms_per_completed_task": 0.175,
+    "rss_bytes_after": 42713088
+  }
+}

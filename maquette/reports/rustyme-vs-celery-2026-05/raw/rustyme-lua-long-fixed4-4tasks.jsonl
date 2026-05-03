@@ -1,0 +1,8 @@
+{"event": "sent", "task_id": "8e4f4729-2f11-4bdc-82a7-94e92067a617", "i": 0}
+{"event": "sent", "task_id": "1c8cf180-1e86-43f7-b697-70403a3a36ca", "i": 1}
+{"event": "sent", "task_id": "dacc077a-120b-40e5-8d63-10f513f5fc03", "i": 2}
+{"event": "sent", "task_id": "c9cd353d-2bce-4a4f-8d7e-6fb17c08d85e", "i": 3}
+{"event": "result", "task_id": "8e4f4729-2f11-4bdc-82a7-94e92067a617", "status": "SUCCESS", "elapsed_ms": 2004.618061, "timing": {"request_ms": 2002.016696, "end_to_end_wall_ms": 2004.61904, "non_request_ms": 2.60234400000013}, "result_size": 612}
+{"event": "result", "task_id": "1c8cf180-1e86-43f7-b697-70403a3a36ca", "status": "SUCCESS", "elapsed_ms": 8009.764198, "timing": {"request_ms": 2002.016836, "end_to_end_wall_ms": 8009.765638, "non_request_ms": 6007.748802}, "result_size": 612}
+{"event": "result", "task_id": "dacc077a-120b-40e5-8d63-10f513f5fc03", "status": "SUCCESS", "elapsed_ms": 8009.819448, "timing": {"request_ms": 2000.76217, "end_to_end_wall_ms": 8009.820627, "non_request_ms": 6009.058457}, "result_size": 611}
+{"event": "result", "task_id": "c9cd353d-2bce-4a4f-8d7e-6fb17c08d85e", "status": "SUCCESS", "elapsed_ms": 8009.837206, "timing": {"request_ms": 2002.012159, "end_to_end_wall_ms": 8009.838346, "non_request_ms": 6007.826187}, "result_size": 612}
