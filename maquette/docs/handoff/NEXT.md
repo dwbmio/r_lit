@@ -131,6 +131,10 @@ Rustyme faster in the first smoke. Redis restart mid-run now also passes in the
 first smoke for both systems. Basic pending purge/revoke also passes on both.
 Timeout/retry/DLQ result-surface design remains pending. See
 `reports/rustyme-vs-celery-2026-05/summaries/failure-recovery-initial.md`.
+Maquette workload replay (one slot and 12-slot Generate all, 2s Fal-like sleep,
+64/256 KiB payloads) also completed around the expected 2s wall time on Rustyme
+and Celery; Rustyme kept the measured CPU/RSS efficiency edge. See
+`reports/rustyme-vs-celery-2026-05/summaries/maquette-workload-replay.md`.
 
 Hard rule: **no final recommendation until all required rows below are
 done and their raw JSONL + summary markdown are committed.**
@@ -144,7 +148,7 @@ done and their raw JSONL + summary markdown are committed.**
 | **Q4 reliability recovery** | User cares most about reliability: stale result, worker kill, Redis restart, timeout/retry/DLQ, revoke/purge. | partial — stale result, worker-kill, Redis restart, pending purge/revoke smokes passed; timeout/retry/DLQ result-surface design pending |
 | **Q5 energy proxy** | "能耗比" requires CPU-time/task + RSS/task, not just wall-clock throughput. Use `/proc/<pid>/stat` before/after and sum Celery master+children. | partial — captured for long HTTP and payload; failure/group still pending |
 | **Q6 Celery fair tuning** | Celery must not be handicapped by one arbitrary pool choice. At minimum compare prefork=4 and threads=4 (and document why gevent/eventlet is excluded or included). | **blocking** |
-| **Q7 Maquette workload replay** | Final decision must include one-slot generate, 12-slot Generate all, and Fal-like sleep workload. | **blocking** |
+| **Q7 Maquette workload replay** | Final decision must include one-slot generate, 12-slot Generate all, and Fal-like sleep workload. | **initial pass** — one-slot and 12-slot replay pass with 64/256 KiB payloads; real Fal.ai network still pending |
 | **Q8 long-request fan-out overhead** | The common Maquette case is many workers issuing long HTTP/Fal-like requests. Compare Rustyme+LuaJIT and Celery under high concurrency after subtracting request time; primary metrics are p95/p99 `non_request_ms`, time-to-first-result, time-to-all-results, CPU-time/task, RSS. | **initial pass after per-worker VM** — correctness restored; Rustyme lower CPU/RSS at 16/32 |
 
 Decision outcomes:
@@ -239,8 +243,6 @@ are intentionally paused until the gate yields a recommendation.
    * Decide timeout/retry/DLQ result-surface: Rustyme DLQ currently records task
      state/DLQ but does not push a result_key failure payload, unlike Celery
      result backend failures.
-   * Run Maquette workload replay: one slot, 12-slot Generate all,
-     Fal-like sleep, and 64/256 KiB result payloads.
    * Produce `maquette/reports/rustyme-vs-celery-2026-05/final.md`
      with recommendation: continue Rustyme / switch Celery /
      dual-provider.

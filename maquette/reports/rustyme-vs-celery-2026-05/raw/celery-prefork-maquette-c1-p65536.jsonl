@@ -1,0 +1,2 @@
+{"event": "sent", "task_id": "e1b167f2-b488-4cbe-9964-0b4b03a6dd6e", "i": 0}
+{"event": "result", "task_id": "e1b167f2-b488-4cbe-9964-0b4b03a6dd6e", "status": "SUCCESS", "elapsed_ms": 2046.468654, "timing": {"request_ms": 2002.017063, "queue_wait_ms": 37.109169, "result_return_ms": 4.887914, "worker_overhead_ms": 2.4524180000000797, "client_request_ms": 2004.362423, "end_to_end_wall_ms": 2046.466564, "non_request_ms": 44.449501000000055}, "result_size": 175581}

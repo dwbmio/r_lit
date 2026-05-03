@@ -126,6 +126,14 @@ Celery config). Rustyme recovered 100/100 in ~14s; Celery recovered 100/100 in
 smoke (Rustyme ~20s, Celery ~26s). Basic pending purge/revoke also passes on
 both. Timeout/retry/DLQ result-surface design remains pending.
 
+Maquette workload replay artifact:
+
+* `summaries/maquette-workload-replay.md`
+
+One-slot and 12-slot Generate all shapes both complete around the 2s external
+request duration on Rustyme and Celery. Rustyme keeps the efficiency edge in the
+measured 12-slot runs.
+
 Initial local-disk IO fan-out artifact:
 
 * `summaries/io-fanout-initial.md`

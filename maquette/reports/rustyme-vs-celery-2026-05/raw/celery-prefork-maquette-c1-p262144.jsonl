@@ -1,0 +1,2 @@
+{"event": "sent", "task_id": "b5de99ed-d33d-469d-918d-fcbb7730f0e5", "i": 0}
+{"event": "result", "task_id": "b5de99ed-d33d-469d-918d-fcbb7730f0e5", "status": "SUCCESS", "elapsed_ms": 2053.124003, "timing": {"request_ms": 2002.014965, "queue_wait_ms": 41.648752, "result_return_ms": 8.369129, "worker_overhead_ms": 1.0891059999999015, "client_request_ms": 2002.854885, "end_to_end_wall_ms": 2053.121952, "non_request_ms": 51.10698699999989}, "result_size": 699871}

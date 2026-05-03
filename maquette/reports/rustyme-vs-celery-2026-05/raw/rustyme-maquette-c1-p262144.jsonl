@@ -1,0 +1,2 @@
+{"event": "sent", "task_id": "ec269864-11a4-433c-9228-5ca1544a96ff", "i": 0}
+{"event": "result", "task_id": "ec269864-11a4-433c-9228-5ca1544a96ff", "status": "SUCCESS", "elapsed_ms": 2007.978274, "timing": {"request_ms": 2000.350948, "end_to_end_wall_ms": 2008.643579, "non_request_ms": 8.292631000000029}, "result_size": 699754}

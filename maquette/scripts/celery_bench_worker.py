@@ -75,6 +75,10 @@ def bench_long_request(self, **kwargs: Any) -> dict[str, Any]:
         body = resp.read()
     request_finished_ns = time.time_ns()
     server = json.loads(body.decode("utf-8"))
+    payload_bytes = int(kwargs.get("payload_bytes") or 0)
+    image_b64 = ""
+    if payload_bytes > 0:
+        image_b64 = base64.b64encode(b"x" * payload_bytes).decode("ascii")
     worker_finished_ns = time.time_ns()
     return {
         "ok": True,
@@ -86,6 +90,9 @@ def bench_long_request(self, **kwargs: Any) -> dict[str, Any]:
         "worker_finished_ns": worker_finished_ns,
         "request_elapsed_ms": server.get("request_elapsed_ms")
         or ((request_finished_ns - request_started_ns) / 1_000_000.0),
+        "payload_bytes": payload_bytes,
+        "image_b64": image_b64,
+        "format": "png" if image_b64 else None,
         "server": server,
         "echo": kwargs,
     }

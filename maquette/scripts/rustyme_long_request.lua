@@ -14,6 +14,7 @@ function on_process(envelope)
         error("http.get failed status=" .. tostring(resp.status))
     end
     local body = json.decode(resp.body)
+    local payload = kwargs.payload_b64 or ""
     return {
         ok = true,
         task_id = envelope.id,
@@ -22,6 +23,9 @@ function on_process(envelope)
         server_received_ns = body.server_received_ns,
         sleep_started_ns = body.sleep_started_ns,
         sleep_finished_ns = body.sleep_finished_ns,
+        payload_bytes = kwargs.payload_bytes or 0,
+        image_b64 = payload,
+        format = (payload ~= "") and "png" or nil,
         echo = kwargs,
     }
 end
