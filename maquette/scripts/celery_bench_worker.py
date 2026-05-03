@@ -30,6 +30,11 @@ BROKER = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
 
 app = Celery("maquette_bench", broker=BROKER, backend=BACKEND)
+app.conf.update(
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+)
 
 
 @app.task(name="bench.echo", bind=True)

@@ -116,6 +116,14 @@ done and injecting `{ok:false,status:"DEAD",error}` into callback results.
 Payload-bearing chord with 64 KiB child results also passes (group=12 and
 group=64), with Rustyme lower callback/fan-in latency in both tested sizes.
 
+Failure recovery artifact:
+
+* `summaries/failure-recovery-initial.md`
+
+Initial worker-kill recovery passes on both Rustyme and Celery (with reliable
+Celery config). Rustyme recovered 100/100 in ~14s; Celery recovered 100/100 in
+~25s in the first smoke. Redis restart / retry-DLQ / revoke remain pending.
+
 Initial local-disk IO fan-out artifact:
 
 * `summaries/io-fanout-initial.md`
