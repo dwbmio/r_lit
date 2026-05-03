@@ -7,6 +7,8 @@ on:
         description: 'Space-separated project names to build (e.g. "bulk_upload img_resize")'
         required: true
         type: string
+  repository_dispatch:
+    types: [build]
 
 permissions:
   contents: write
@@ -60,9 +62,15 @@ jobs:
             echo "  + ${name} v${version} (gui=${gui})"
           }
 
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "=== Manual dispatch ==="
-            for p in ${{ github.event.inputs.projects }}; do
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            echo "=== Manual dispatch (${{ github.event_name }}) ==="
+            PROJECTS_INPUT=""
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              PROJECTS_INPUT="${{ github.event.inputs.projects }}"
+            else
+              PROJECTS_INPUT="$(echo '${{ github.event.client_payload }}' | jq -r '.projects // empty')"
+            fi
+            for p in $PROJECTS_INPUT; do
               if [ ! -f "${p}/Cargo.toml" ]; then
                 echo "  ✗ ${p}/Cargo.toml not found, skipping"
                 continue
