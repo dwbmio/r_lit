@@ -68,7 +68,7 @@ jobs:
             if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
               PROJECTS_INPUT="${{ github.event.inputs.projects }}"
             else
-              PROJECTS_INPUT="$(echo '${{ github.event.client_payload }}' | jq -r '.projects // empty')"
+              PROJECTS_INPUT="$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.projects // empty')"
             fi
             for p in $PROJECTS_INPUT; do
               if [ ! -f "${p}/Cargo.toml" ]; then
