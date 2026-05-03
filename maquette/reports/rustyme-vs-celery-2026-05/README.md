@@ -122,7 +122,8 @@ Failure recovery artifact:
 
 Initial worker-kill recovery passes on both Rustyme and Celery (with reliable
 Celery config). Rustyme recovered 100/100 in ~14s; Celery recovered 100/100 in
-~25s in the first smoke. Redis restart / retry-DLQ / revoke remain pending.
+~25s in the first smoke. Redis restart mid-run also passes on both in the first
+smoke (Rustyme ~20s, Celery ~26s). Retry-DLQ and revoke remain pending.
 
 Initial local-disk IO fan-out artifact:
 

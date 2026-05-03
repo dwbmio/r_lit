@@ -408,7 +408,18 @@ def rustyme_run(args: argparse.Namespace) -> None:
         remaining = set(sent)
         deadline = time.time() + cfg.timeout_secs
         while remaining and time.time() < deadline:
-            item = r.brpop(cfg.result_key, timeout=1)
+            try:
+                item = r.brpop(cfg.result_key, timeout=1)
+            except Exception as exc:
+                raw.write(
+                    json.dumps(
+                        {"event": "redis_error", "op": "brpop", "error": str(exc)[:500]},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                time.sleep(0.2)
+                continue
             if not item:
                 continue
             _, payload = item
@@ -517,7 +528,24 @@ def celery_run(args: argparse.Namespace) -> None:
         while pending_by_id and time.time() < deadline:
             progressed = False
             for task_id, (sent_ns, res) in list(pending_by_id.items()):
-                if not res.ready():
+                try:
+                    ready = res.ready()
+                except Exception as exc:
+                    raw.write(
+                        json.dumps(
+                            {
+                                "event": "backend_error",
+                                "op": "ready",
+                                "task_id": task_id,
+                                "error": str(exc)[:500],
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    time.sleep(0.2)
+                    continue
+                if not ready:
                     continue
                 progressed = True
                 try:
