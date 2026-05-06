@@ -82,6 +82,50 @@ Celery:
 | Rustyme | 10/10 | 1 revoked + 9 success | queue paused before purge/revoke for deterministic pending state |
 | Celery | 10/10 without worker | 1 revoked + 9 ready | live-worker purge saw 8/10 due to early reservation |
 
+## Terminal Failure Result Surface
+
+Previous Rustyme behavior:
+
+* terminal failures (`DEAD` / `FAILURE`) updated task state and DLQ,
+* group/chord terminal failure result was recorded after the chord policy patch,
+* but producer clients waiting on `result_key` saw no failure payload and had to
+  timeout or query admin task state.
+
+Implemented in sonargrid `dev/v3`:
+
+```text
+0cd5fe5 fix(rustyme): push terminal failure payloads to result_key
+```
+
+New terminal failure result shape:
+
+```json
+{
+  "task_id": "...",
+  "status": "DEAD",
+  "result": {
+    "ok": false,
+    "status": "DEAD",
+    "task_id": "...",
+    "task": "...",
+    "error": "...",
+    "retries": 1,
+    "max_retries": 1
+  },
+  "metadata": {}
+}
+```
+
+Local validation in the Rustyme repo:
+
+```text
+TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test -p rustyme --test integration_test test_e2e_retries_exhausted_goes_to_dlq -- --nocapture
+cargo check -p rustyme --features lua --no-default-features
+```
+
+Test-server replay is pending because `152.136.54.186:22` was refusing SSH at
+the time this patch was committed.
+
 ## Read
 
 Both systems recovered from a worker-process kill and from a Redis restart,
@@ -125,6 +169,7 @@ Summaries:
 
 ## Next
 
-1. Repeat worker-kill / Redis-restart / revoke / purge 5-10 times.
-2. Timeout/retry/DLQ with result-surface design (Rustyme DLQ currently does not
-   push result_key failure responses).
+1. Replay terminal failure result-key behavior on the Tencent CVM once SSH is
+   available again.
+2. Repeat worker-kill / Redis-restart / revoke / purge 5-10 times if the gate
+   needs statistical confidence rather than smoke evidence.

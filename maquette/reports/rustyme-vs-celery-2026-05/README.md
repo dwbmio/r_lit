@@ -124,7 +124,9 @@ Initial worker-kill recovery passes on both Rustyme and Celery (with reliable
 Celery config). Rustyme recovered 100/100 in ~14s; Celery recovered 100/100 in
 ~25s in the first smoke. Redis restart mid-run also passes on both in the first
 smoke (Rustyme ~20s, Celery ~26s). Basic pending purge/revoke also passes on
-both. Timeout/retry/DLQ result-surface design remains pending.
+both. Terminal failure result-surface has been implemented in Rustyme
+(`0cd5fe5`) so result_key waiters receive `DEAD` / `FAILURE` payloads instead
+of timing out; test-server replay is pending until the CVM SSH comes back.
 
 Maquette workload replay artifact:
 

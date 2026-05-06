@@ -129,7 +129,9 @@ Initial worker-kill recovery also passed on both systems (Rustyme processing-lis
 recovery and Celery `acks_late`/`reject_on_worker_lost` reliable config), with
 Rustyme faster in the first smoke. Redis restart mid-run now also passes in the
 first smoke for both systems. Basic pending purge/revoke also passes on both.
-Timeout/retry/DLQ result-surface design remains pending. See
+Terminal failure result-surface has been implemented in Rustyme (`0cd5fe5`) so
+`result_key` waiters receive `DEAD` / `FAILURE` payloads instead of timing out;
+test-server replay is pending until the CVM SSH comes back. See
 `reports/rustyme-vs-celery-2026-05/summaries/failure-recovery-initial.md`.
 Maquette workload replay (one slot and 12-slot Generate all, 2s Fal-like sleep,
 64/256 KiB payloads) also completed around the expected 2s wall time on Rustyme
@@ -145,7 +147,7 @@ done and their raw JSONL + summary markdown are committed.**
 | **Q1 Rustyme Lua parity** | Maquette texgen uses Lua hooks (`texgen_cpu.lua` / `texgen_fal.lua`); built-in EchoHook is only queue-runtime lower bound. | partial — per-worker Lua VM prototype validated; Lua no-op 1k/5k still pending |
 | **Q2 payload parity** | Texture workload returns 64-256 KB+ PNG/base64 payloads; no-op result latency is not enough. | **initial pass** — Rustyme 2.6-3.0x throughput over Celery on 64/256 KiB synthetic result payloads |
 | **Q3 group/chord parity** | D-1.C consciously avoided chord for progressive UX, but Rustyme claims Canvas parity with Celery; must verify correctness. | **initial pass** — success path passed (group=12 x20, group=64 x100); failed-child policy implemented/tested; 64 KiB payload-bearing chord passed for group=12 and group=64 |
-| **Q4 reliability recovery** | User cares most about reliability: stale result, worker kill, Redis restart, timeout/retry/DLQ, revoke/purge. | partial — stale result, worker-kill, Redis restart, pending purge/revoke smokes passed; timeout/retry/DLQ result-surface design pending |
+| **Q4 reliability recovery** | User cares most about reliability: stale result, worker kill, Redis restart, timeout/retry/DLQ, revoke/purge. | partial — stale result, worker-kill, Redis restart, pending purge/revoke smokes passed; terminal failure result payload implemented in Rustyme, test-server replay pending |
 | **Q5 energy proxy** | "能耗比" requires CPU-time/task + RSS/task, not just wall-clock throughput. Use `/proc/<pid>/stat` before/after and sum Celery master+children. | partial — captured for long HTTP and payload; failure/group still pending |
 | **Q6 Celery fair tuning** | Celery must not be handicapped by one arbitrary pool choice. At minimum compare prefork=4 and threads=4 (and document why gevent/eventlet is excluded or included). | **blocking** |
 | **Q7 Maquette workload replay** | Final decision must include one-slot generate, 12-slot Generate all, and Fal-like sleep workload. | **initial pass** — one-slot and 12-slot replay pass with 64/256 KiB payloads; real Fal.ai network still pending |
@@ -238,11 +240,8 @@ are intentionally paused until the gate yields a recommendation.
 1. **v0.10-QA — finish Rustyme vs Celery gate.**
    Immediate required sequence:
 
-   * Clean up and commit the per-worker Lua VM patch in sonargrid
-     (current prototype passes local tests and test-server long HTTP).
-   * Decide timeout/retry/DLQ result-surface: Rustyme DLQ currently records task
-     state/DLQ but does not push a result_key failure payload, unlike Celery
-     result backend failures.
+   * Replay Rustyme terminal failure result payload on the test CVM once SSH is
+     back (local Rustyme test already passes; sonargrid patch `0cd5fe5` pushed).
    * Produce `maquette/reports/rustyme-vs-celery-2026-05/final.md`
      with recommendation: continue Rustyme / switch Celery /
      dual-provider.
