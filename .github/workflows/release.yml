@@ -9,6 +9,13 @@ on:
         type: string
   repository_dispatch:
     types: [build]
+  push:
+    branches: [main]
+    paths:
+      - '*/Cargo.toml'
+      - '.github/workflows/release.yml'
+      - 'release-metadata.json'
+      - 'scripts/install.sh.template'
 
 permissions:
   contents: write
@@ -16,117 +23,133 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   HFROG_API: https://hfrog.gamesci-lite.com
-  NEXUS_PUBLIC_URL: https://nexus.gamesci-lite.com
-  NEXUS_REPO: raw-prod
   GITHUB_REPO: dwbmio/r_lit
+  R2_PUBLIC_DOMAIN: gamesci-lite.com
+  R2_KEY_PREFIX: r_lit
 
 jobs:
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 1: Detect version changes, build matrix  ║
-  # ╚══════════════════════════════════════════════╝
+  # ╔══════════════════════════════════════════════════════════════════╗
+  # ║ Job 1 — Detect changed crates, merge with release-metadata.json  ║
+  # ╚══════════════════════════════════════════════════════════════════╝
   detect:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
       projects: ${{ steps.detect.outputs.projects }}
-      matrix: ${{ steps.detect.outputs.matrix }}
+      matrix:   ${{ steps.detect.outputs.matrix }}
       has_changes: ${{ steps.detect.outputs.has_changes }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Detect version changes
+      - name: Detect & enrich projects
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # GUI projects ship a notarized .dmg from macOS-latest in addition
-          # to the usual tar.gz; everything else stays binary-only.
-          GUI_PROJECTS=(maquette group_vibe_workbench)
+          set -euo pipefail
+          META=release-metadata.json
+          [ -f "$META" ] || { echo "::error::missing $META"; exit 1; }
 
-          is_gui() {
-            local n=$1
-            for g in "${GUI_PROJECTS[@]}"; do [ "$g" = "$n" ] && return 0; done
-            return 1
-          }
+          DEFAULT_TARGETS=$(jq -c '.defaults.targets' "$META")
+          DEFAULT_CATEGORY=$(jq -r '.defaults.category' "$META")
+          DEFAULT_SOURCE_TYPE=$(jq -r '.defaults.source_type' "$META")
 
-          PROJECTS="[]"
-
-          add_project() {
-            local name=$1 version=$2 gui="false"
-            is_gui "$name" && gui="true"
-            PROJECTS=$(echo "$PROJECTS" | jq -c \
-              --arg n "$name" --arg v "$version" --argjson g "$gui" \
-              '. + [{"name":$n,"version":$v,"gui":$g}]')
-            echo "  + ${name} v${version} (gui=${gui})"
-          }
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            echo "=== Manual dispatch (${{ github.event_name }}) ==="
-            PROJECTS_INPUT=""
-            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-              PROJECTS_INPUT="${{ github.event.inputs.projects }}"
-            else
-              PROJECTS_INPUT="$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.projects // empty')"
-            fi
-            for p in $PROJECTS_INPUT; do
-              if [ ! -f "${p}/Cargo.toml" ]; then
-                echo "  ✗ ${p}/Cargo.toml not found, skipping"
-                continue
-              fi
-              VER=$(grep '^version' "${p}/Cargo.toml" | head -1 | cut -d'"' -f2)
-              if gh release view "${p}-v${VER}" --json tagName >/dev/null 2>&1; then
-                echo "  ≡ ${p}-v${VER} already released, skipping"
-              else
-                add_project "$p" "$VER"
-              fi
+          declare -a CANDIDATES=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            for p in ${{ github.event.inputs.projects }}; do CANDIDATES+=("$p"); done
+            echo "=== mode: workflow_dispatch (${#CANDIDATES[@]}) ==="
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            for p in $(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.projects // empty'); do
+              CANDIDATES+=("$p")
             done
+            echo "=== mode: repository_dispatch (${#CANDIDATES[@]}) ==="
           else
-            echo "=== Checking version diffs (HEAD vs HEAD^) ==="
-            for dir in bulk_upload img_resize textexture mj_atlas group_vibe_workbench maquette; do
-              [ -f "${dir}/Cargo.toml" ] || continue
-              NEW_VER=$(grep '^version' "${dir}/Cargo.toml" | head -1 | cut -d'"' -f2)
-              OLD_VER=$(git show HEAD^:"${dir}/Cargo.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
-              if [ "$NEW_VER" != "$OLD_VER" ]; then
-                if gh release view "${dir}-v${NEW_VER}" --json tagName >/dev/null 2>&1; then
-                  echo "  ≡ ${dir} ${OLD_VER}→${NEW_VER} but ${dir}-v${NEW_VER} already released"
-                else
-                  echo "  Δ ${dir} ${OLD_VER}→${NEW_VER}"
-                  add_project "$dir" "$NEW_VER"
-                fi
-              else
-                echo "  · ${dir} v${NEW_VER} (unchanged)"
-              fi
-            done
+            echo "=== mode: push (diff HEAD vs HEAD^) ==="
+            while IFS= read -r tool; do CANDIDATES+=("$tool"); done < <(jq -r '.tools | keys[]' "$META")
           fi
 
+          PROJECTS='[]'
+
+          for name in "${CANDIDATES[@]}"; do
+            cargo_toml="${name}/Cargo.toml"
+            if [ ! -f "$cargo_toml" ]; then
+              echo "  ✗ ${name}/Cargo.toml not found, skip"
+              continue
+            fi
+
+            new_ver=$(grep '^version' "$cargo_toml" | head -1 | cut -d'"' -f2)
+
+            # On push events we only ship version bumps.
+            if [ "${{ github.event_name }}" = "push" ]; then
+              old_ver=$(git show HEAD^:"$cargo_toml" 2>/dev/null \
+                        | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
+              if [ "$new_ver" = "$old_ver" ]; then
+                echo "  · ${name} v${new_ver} (unchanged)"
+                continue
+              fi
+              echo "  Δ ${name} ${old_ver:-∅}→${new_ver}"
+            fi
+
+            if gh release view "${name}-v${new_ver}" --json tagName >/dev/null 2>&1; then
+              echo "  ≡ ${name}-v${new_ver} already released, skip"
+              continue
+            fi
+
+            tool_meta=$(jq --arg n "$name" '.tools[$n] // {}' "$META")
+            description=$(echo "$tool_meta"  | jq -r --arg fb "r_lit/${name}" '.description // $fb')
+            category=$(echo "$tool_meta"     | jq -r --arg fb "$DEFAULT_CATEGORY"    '.category    // $fb')
+            source_type=$(echo "$tool_meta"  | jq -r --arg fb "$DEFAULT_SOURCE_TYPE" '.source_type // $fb')
+            gui=$(echo "$tool_meta"          | jq -r '.gui // false')
+            mac_app_name=$(echo "$tool_meta" | jq -r --arg fb "$name"                '.macos_app_name // $fb')
+            targets=$(echo "$tool_meta"      | jq -c --argjson d "$DEFAULT_TARGETS"  '.targets // $d')
+
+            entry=$(jq -nc \
+              --arg n   "$name" \
+              --arg v   "$new_ver" \
+              --arg d   "$description" \
+              --arg c   "$category" \
+              --arg s   "$source_type" \
+              --arg map "$mac_app_name" \
+              --argjson g "$gui" \
+              --argjson t "$targets" \
+              '{name:$n, version:$v, description:$d, category:$c, source_type:$s,
+                gui:$g, macos_app_name:$map, targets:$t}')
+            PROJECTS=$(echo "$PROJECTS" | jq -c --argjson e "$entry" '. + [$e]')
+            echo "  + ${name} v${new_ver} (cat=${category} gui=${gui} targets=$(echo "$targets"|jq -c .))"
+          done
+
           COUNT=$(echo "$PROJECTS" | jq 'length')
-          echo ""
-          echo "=== Result: ${COUNT} project(s) to build ==="
+          echo ""; echo "=== Result: ${COUNT} project(s) to build ==="
           echo "$PROJECTS" | jq .
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo 'projects=[]' >> $GITHUB_OUTPUT
-            echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo 'projects=[]'        >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "projects=$(echo "$PROJECTS" | jq -c)" >> $GITHUB_OUTPUT
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          echo "projects=$(echo "$PROJECTS" | jq -c)" >> "$GITHUB_OUTPUT"
 
-          MATRIX='{"include":[
-            {"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","use_cross":false},
-            {"os":"macos-latest","target":"aarch64-apple-darwin","use_cross":false},
-            {"os":"windows-latest","target":"x86_64-pc-windows-msvc","use_cross":false}
-          ]}'
+          # Build matrix is the *union* of all targets across all projects, mapped to OS.
+          MATRIX=$(echo "$PROJECTS" | jq -c '
+            [.[].targets[]] | unique | map(
+              if   . == "x86_64-unknown-linux-gnu"  then {os:"ubuntu-latest", target:.}
+              elif . == "aarch64-apple-darwin"     then {os:"macos-latest",  target:.}
+              elif . == "x86_64-apple-darwin"      then {os:"macos-13",      target:.}
+              elif . == "x86_64-pc-windows-msvc"   then {os:"windows-latest",target:.}
+              elif . == "aarch64-pc-windows-msvc"  then {os:"windows-latest",target:.}
+              else null end
+            ) | map(select(. != null)) | {include: .}
+          ')
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
 
-          echo "matrix=$(echo "$MATRIX" | jq -c)" >> $GITHUB_OUTPUT
-
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 2: Build changed binaries                ║
-  # ╚══════════════════════════════════════════════╝
+  # ╔══════════════════════════════════════════════════════════════════╗
+  # ║ Job 2 — Build per-target binaries                                ║
+  # ╚══════════════════════════════════════════════════════════════════╝
   build:
     name: Build (${{ matrix.target }})
     needs: detect
@@ -144,17 +167,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install build dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest' && !matrix.use_cross
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev cmake pkg-config libcurl4-openssl-dev \
             libwayland-dev libxkbcommon-dev libudev-dev libx11-dev libxcursor-dev libxi-dev \
             libasound2-dev
-
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -162,12 +181,11 @@ jobs:
           key: ${{ matrix.target }}
           cache-all-crates: true
 
-      # ── macOS-only: import the Developer ID cert into a transient
-      #               keychain so codesign can find it later. Skipped if
-      #               MACOS_CERTIFICATE secret is not set, in which case
-      #               GUI bundles will be unsigned (still useful for PRs).
+      # macOS-only: import the Developer ID cert into a transient keychain.
+      # Skipped if MACOS_CERTIFICATE secret is not set; GUI builds will be
+      # unsigned (still useful for PRs).
       - name: Import codesign identity (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -190,7 +208,6 @@ jobs:
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "$KP" "$KC"
-          # Make our keychain the default search path.
           PRIOR=$(security list-keychains -d user | tr -d '" ' | tr '\n' ' ')
           security list-keychains -d user -s "$KC" $PRIOR
           rm -f "${RUNNER_TEMP}/cert.p12"
@@ -201,36 +218,24 @@ jobs:
         env:
           PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
+          set -euo pipefail
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
-            GUI=$(echo "$item" | jq -r '.gui')
-
-            # GUI apps don't cross-compile cleanly to musl/cross targets
-            # (Bevy/GPUI need system libs that aren't in the cross images).
-            # Restrict them to native macOS + native Windows + native glibc.
-            if [ "$GUI" = "true" ]; then
-              case "${{ matrix.target }}" in
-                x86_64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-pc-windows-msvc) ;;
-                *)
-                  echo "⤳ skipping $NAME on ${{ matrix.target }} (GUI; not supported)"
-                  continue
-                  ;;
-              esac
+            TARGETS=$(echo "$item" | jq -r '.targets[]')
+            if ! echo "$TARGETS" | grep -qx "${{ matrix.target }}"; then
+              echo "⤳ ${NAME} skipped (does not target ${{ matrix.target }})"
+              continue
             fi
-
-            echo "🔨 Building $NAME for ${{ matrix.target }}..."
-            cd "$NAME"
-
-            if [ "${{ matrix.use_cross }}" == "true" ]; then
-              cross build --release --target ${{ matrix.target }}
-            elif [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-              RUSTFLAGS='-C linker=cc -C link-args=-L/usr/lib/x86_64-linux-gnu' \
+            echo "🔨 Building ${NAME} for ${{ matrix.target }}"
+            (
+              cd "$NAME"
+              if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+                RUSTFLAGS='-C linker=cc -C link-args=-L/usr/lib/x86_64-linux-gnu' \
+                  cargo build --release --target ${{ matrix.target }}
+              else
                 cargo build --release --target ${{ matrix.target }}
-            else
-              cargo build --release --target ${{ matrix.target }}
-            fi
-
-            cd ..
+              fi
+            )
           done
 
       - name: Package
@@ -242,31 +247,33 @@ jobs:
           MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_PWD: ${{ secrets.MACOS_NOTARY_PWD }}
         run: |
+          set -euo pipefail
           mkdir -p release
 
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
             VERSION=$(echo "$item" | jq -r '.version')
             GUI=$(echo "$item" | jq -r '.gui')
+            APP_NAME=$(echo "$item" | jq -r '.macos_app_name')
+            TARGETS=$(echo "$item" | jq -r '.targets[]')
+
+            if ! echo "$TARGETS" | grep -qx "${{ matrix.target }}"; then
+              continue
+            fi
 
             BIN_PATH="${NAME}/target/${{ matrix.target }}/release/${NAME}"
             BIN_PATH_EXE="${BIN_PATH}.exe"
-            [ -f "$BIN_PATH" ] || [ -f "$BIN_PATH_EXE" ] || {
-              echo "⤳ no artifact for ${NAME} on ${{ matrix.target }}, skip packaging"
+            if [ ! -f "$BIN_PATH" ] && [ ! -f "$BIN_PATH_EXE" ]; then
+              echo "⤳ ${NAME}: no binary for ${{ matrix.target }}, skip"
               continue
-            }
+            fi
 
-            # GUI on macOS → signed + notarized .dmg (no tar.gz dup)
-            if [ "$GUI" = "true" ] && [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # GUI on macOS → signed + notarized .dmg
+            if [ "$GUI" = "true" ] && [ "${{ runner.os }}" = "macOS" ]; then
               if [ "${MACOS_SIGNED:-0}" != "1" ]; then
                 echo "::warning::skipping ${NAME} DMG — no signing identity"
                 continue
               fi
-              case "$NAME" in
-                maquette)              APP_NAME="Maquette" ;;
-                group_vibe_workbench)  APP_NAME="Group Vibe Workbench" ;;
-                *)                     APP_NAME="$NAME" ;;
-              esac
               APP_NAME="$APP_NAME" \
               BIN_NAME="$NAME" \
               PROJECT_DIR="$NAME" \
@@ -277,14 +284,17 @@ jobs:
               continue
             fi
 
-            cd "${NAME}/target/${{ matrix.target }}/release"
-            if [ "${{ matrix.os }}" == "windows-latest" ]; then
-              7z a "../../../../release/${NAME}-${{ matrix.target }}.zip" "${NAME}.exe"
-            else
-              tar czf "../../../../release/${NAME}-${{ matrix.target }}.tar.gz" "${NAME}"
-            fi
-            cd ../../../..
+            (
+              cd "${NAME}/target/${{ matrix.target }}/release"
+              if [ "${{ runner.os }}" = "Windows" ]; then
+                7z a "../../../../release/${NAME}-${{ matrix.target }}.zip" "${NAME}.exe"
+              else
+                tar czf "../../../../release/${NAME}-${{ matrix.target }}.tar.gz" "${NAME}"
+              fi
+            )
           done
+
+          ls -lh release/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -294,13 +304,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 3: Create per-project GitHub Releases    ║
-  # ╚══════════════════════════════════════════════╝
+  # ╔══════════════════════════════════════════════════════════════════╗
+  # ║ Job 3 — Create per-project GitHub Releases                       ║
+  # ╚══════════════════════════════════════════════════════════════════╝
   release:
     name: Create Releases
     needs: [ detect, build ]
-    if: success()
+    if: needs.detect.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     outputs:
       released: ${{ steps.release.outputs.released }}
@@ -325,206 +335,348 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
-          RELEASED="[]"
+          set -euo pipefail
+          RELEASED='[]'
 
           for item in $(echo "$PROJECTS" | jq -c '.[]'); do
             NAME=$(echo "$item" | jq -r '.name')
             VERSION=$(echo "$item" | jq -r '.version')
+            DESC=$(echo "$item" | jq -r '.description')
             TAG="${NAME}-v${VERSION}"
 
-            echo ""
-            echo "━━━ Creating release: ${TAG} ━━━"
+            echo ""; echo "━━━ Release: ${TAG} ━━━"
 
-            # Collect this project's assets
             mkdir -p "pkg-${NAME}"
             cp flat/${NAME}-*.tar.gz "pkg-${NAME}/" 2>/dev/null || true
-            cp flat/${NAME}-*.zip "pkg-${NAME}/" 2>/dev/null || true
-            cp flat/${NAME}-*.dmg "pkg-${NAME}/" 2>/dev/null || true
+            cp flat/${NAME}-*.zip    "pkg-${NAME}/" 2>/dev/null || true
+            cp flat/${NAME}-*.dmg    "pkg-${NAME}/" 2>/dev/null || true
 
-            ASSET_COUNT=$(ls "pkg-${NAME}/" 2>/dev/null | wc -l)
-            if [ "$ASSET_COUNT" -eq 0 ]; then
-              echo "  ⚠ No artifacts for ${NAME}, skipping release"
+            ASSETS=$(ls "pkg-${NAME}/" 2>/dev/null | wc -l)
+            if [ "$ASSETS" -eq 0 ]; then
+              echo "  ⚠ No artifacts for ${NAME}, skip release"
               continue
             fi
 
-            # Generate checksums
-            cd "pkg-${NAME}"
-            sha256sum * > SHA256SUMS
-            cd ..
+            (cd "pkg-${NAME}" && sha256sum * > SHA256SUMS)
 
-            # Build release notes
-            NOTES="${NAME} v${VERSION}"$'\n\n'"Platforms:"$'\n'
-            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
-              [ -f "$f" ] || continue
-              BASE=$(basename "$f")
-              PLAT=$(echo "$BASE" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//' | sed 's/\.zip$//' | sed 's/\.dmg$//')
-              NOTES="${NOTES}- ${PLAT}"$'\n'
-            done
-            NOTES="${NOTES}"$'\n'"Install: gh release download ${TAG} -p '${NAME}-*' -R ${{ env.GITHUB_REPO }}"
-            NOTES="${NOTES}"$'\n\n'"Built by GitHub Actions run #${{ github.run_number }}"
+            INSTALL_CMD="curl -fsSL https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh | bash"
 
-            # Create GitHub release
-            gh release create "$TAG" pkg-${NAME}/* \
+            {
+              echo "## ${NAME} v${VERSION}"
+              echo ""
+              echo "${DESC}"
+              echo ""
+              echo "### Install"
+              echo ""
+              echo '```bash'
+              echo "${INSTALL_CMD}"
+              echo '```'
+              echo ""
+              echo "Or download a tarball directly:"
+              echo ""
+              echo '```bash'
+              echo "gh release download ${TAG} -p '${NAME}-*' -R ${GITHUB_REPO}"
+              echo '```'
+              echo ""
+              echo "### Assets"
+              echo ""
+              for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
+                [ -f "$f" ] || continue
+                base=$(basename "$f")
+                size=$(stat -c%s "$f")
+                sha=$(sha256sum "$f" | cut -d' ' -f1)
+                printf -- "- \`%s\`  —  %s bytes  —  \`%s\`\n" "$base" "$size" "$sha"
+              done
+              echo ""
+              echo "Built by GitHub Actions run #${{ github.run_number }} (commit ${GITHUB_SHA::7})"
+            } > "pkg-${NAME}/RELEASE_NOTES.md"
+
+            gh release create "$TAG" pkg-${NAME}/${NAME}-* pkg-${NAME}/SHA256SUMS \
               --title "${NAME} v${VERSION}" \
-              --notes "$NOTES"
+              --notes-file "pkg-${NAME}/RELEASE_NOTES.md"
 
-            echo "  ✓ Release ${TAG} created with ${ASSET_COUNT} assets"
-            RELEASED=$(echo "$RELEASED" | jq -c --arg n "$NAME" --arg v "$VERSION" --arg t "$TAG" \
+            echo "  ✓ ${TAG} created with ${ASSETS} assets"
+            RELEASED=$(echo "$RELEASED" | jq -c \
+              --arg n "$NAME" --arg v "$VERSION" --arg t "$TAG" \
               '. + [{"name":$n,"version":$v,"tag":$t}]')
           done
 
-          echo "released=$(echo "$RELEASED" | jq -c)" >> $GITHUB_OUTPUT
+          echo "released=$(echo "$RELEASED" | jq -c)" >> "$GITHUB_OUTPUT"
 
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 4: Sync to HFrog (Release Tracking)      ║
-  # ╚══════════════════════════════════════════════╝
+      - name: Upload pkg-* dirs for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-pkgs
+          path: pkg-*
+          retention-days: 7
+
+  # ╔══════════════════════════════════════════════════════════════════╗
+  # ║ Job 4 — Mirror to Cloudflare R2 (binaries + per-tool install.sh) ║
+  # ╚══════════════════════════════════════════════════════════════════╝
+  mirror-r2:
+    name: Mirror to R2
+    needs: release
+    if: ${{ needs.release.outputs.released != '' && needs.release.outputs.released != '[]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release-pkgs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pkgs
+          path: .
+
+      - name: Mirror to R2
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    auto
+          R2_ENDPOINT:           ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+          RELEASED:              ${{ needs.release.outputs.released }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
+            echo "::error::Missing R2_* secrets — see docs/release.md for setup"
+            exit 1
+          fi
+
+          aws() { command aws --endpoint-url "$R2_ENDPOINT" "$@"; }
+
+          for item in $(echo "$RELEASED" | jq -c '.[]'); do
+            NAME=$(echo "$item" | jq -r '.name')
+            VERSION=$(echo "$item" | jq -r '.version')
+            PREFIX="${R2_KEY_PREFIX}/${NAME}"
+            VPREFIX="${PREFIX}/v${VERSION}"
+
+            echo ""; echo "━━━ R2: ${NAME} v${VERSION} ━━━"
+
+            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/${base}"
+              aws s3 cp "$f" "s3://${R2_BUCKET}/${VPREFIX}/${base}" \
+                --content-type "application/octet-stream" \
+                --cache-control "public, max-age=31536000, immutable"
+            done
+
+            if [ -f "pkg-${NAME}/SHA256SUMS" ]; then
+              echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/SHA256SUMS"
+              aws s3 cp "pkg-${NAME}/SHA256SUMS" "s3://${R2_BUCKET}/${VPREFIX}/SHA256SUMS" \
+                --content-type "text/plain; charset=utf-8" \
+                --cache-control "public, max-age=300"
+            fi
+
+            # Render per-tool install.sh from template and upload as the
+            # canonical entry point: https://gamesci-lite.com/r_lit/<tool>/install.sh
+            install_sh="$(mktemp)"
+            sed -e "s|{{TOOL}}|${NAME}|g" \
+                -e "s|{{VERSION}}|${VERSION}|g" \
+                -e "s|{{GITHUB_REPO}}|${GITHUB_REPO}|g" \
+                scripts/install.sh.template > "$install_sh"
+            chmod +x "$install_sh"
+            echo "  ↑ s3://${R2_BUCKET}/${PREFIX}/install.sh"
+            aws s3 cp "$install_sh" "s3://${R2_BUCKET}/${PREFIX}/install.sh" \
+              --content-type "text/x-shellscript; charset=utf-8" \
+              --cache-control "public, max-age=300"
+            echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/install.sh"
+            aws s3 cp "$install_sh" "s3://${R2_BUCKET}/${VPREFIX}/install.sh" \
+              --content-type "text/x-shellscript; charset=utf-8" \
+              --cache-control "public, max-age=31536000, immutable"
+            rm -f "$install_sh"
+          done
+
+          echo ""
+          echo "✓ All artifacts mirrored to https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/<tool>/{install.sh,v<ver>/...}"
+
+  # ╔══════════════════════════════════════════════════════════════════╗
+  # ║ Job 5 — Sync release records to HFrog                            ║
+  # ║                                                                  ║
+  # ║ Each hfrog API returns HTTP 200 even on business errors          ║
+  # ║ (with code != 0 in the body). We MUST inspect the JSON body.     ║
+  # ║                                                                  ║
+  # ║ Field map (hfrog accepts these — others are silently ignored):    ║
+  # ║   software : name, description, install_command, install_script_url ║
+  # ║   platform : code, os, arch, display_name                        ║
+  # ║   version  : software_name, version, is_latest, release_notes,   ║
+  # ║              created_by                                          ║
+  # ║   release  : software_name, version, platform_code, download_url,║
+  # ║              file_size, checksum_sha256, source_type             ║
+  # ║              (open_source | internal)                            ║
+  # ╚══════════════════════════════════════════════════════════════════╝
   sync-hfrog:
     name: Sync to HFrog
-    needs: release
-    if: success()
+    needs: [release, mirror-r2]
+    if: ${{ needs.release.outputs.released != '' && needs.release.outputs.released != '[]' }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Sync releases to HFrog
+      - uses: actions/checkout@v4
+
+      - name: Download release-pkgs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pkgs
+          path: .
+
+      - name: Sync to HFrog
         env:
           RELEASED: ${{ needs.release.outputs.released }}
+          PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
-          HFROG="${{ env.HFROG_API }}"
+          set -euo pipefail
 
-          declare -A TOOL_DESC=(
-            [img_resize]="图片批量缩放/压缩工具"
-            [bulk_upload]="批量下载上传工具"
-            [textexture]="艺术字图片生成（阴影/描边/渐变/发光/霓虹）"
-            [mj_atlas]="MJ atlas / sprite 工具"
-            [group_vibe_workbench]="桌面协作工作台"
-            [maquette]="Kit-based low-poly 建模与导出工具"
+          HFROG="${HFROG_API}"
+
+          # PLATFORM_DICT maps a Rust target triple → "os|arch|display_name".
+          # Keep exactly the targets the build matrix actually produces.
+          declare -A PLATFORM_DICT=(
+            [x86_64-unknown-linux-gnu]="linux|x86_64|Linux x86_64"
+            [aarch64-unknown-linux-gnu]="linux|aarch64|Linux ARM64"
+            [aarch64-apple-darwin]="macos|aarch64|macOS ARM64 (Apple Silicon)"
+            [x86_64-apple-darwin]="macos|x86_64|macOS Intel"
+            [x86_64-pc-windows-msvc]="windows|x86_64|Windows x86_64"
+            [aarch64-pc-windows-msvc]="windows|aarch64|Windows ARM64"
           )
 
-          # GUI projects ship as a signed/notarized .dmg on macOS,
-          # and only build for native Linux/Windows targets (no musl).
-          declare -A GUI_TOOLS=(
-            [maquette]=1
-            [group_vibe_workbench]=1
-          )
-
-          PLATFORMS=(
-            "x86_64-unknown-linux-gnu|linux|x86_64|Linux x86_64"
-            "x86_64-unknown-linux-musl|linux|x86_64|Linux x86_64 (musl)"
-            "i686-unknown-linux-musl|linux|i686|Linux i686 (musl)"
-            "aarch64-unknown-linux-musl|linux|aarch64|Linux ARM64 (musl)"
-            "x86_64-apple-darwin|macos|x86_64|macOS Intel"
-            "aarch64-apple-darwin|macos|aarch64|macOS ARM64 (Apple Silicon)"
-            "x86_64-pc-windows-msvc|windows|x86_64|Windows x86_64"
-            "i686-pc-windows-msvc|windows|i686|Windows i686"
-          )
-
+          # POST + parse JSON body, treat code != 0 (other than "exists") as failure.
           hfrog_post() {
-            local endpoint=$1 data=$2
-            local resp code body
+            local endpoint=$1 data=$2 ; local resp http body code msg
             resp=$(curl -sS -w "\n%{http_code}" -X POST "${HFROG}${endpoint}" \
-              -H 'Content-Type: application/json' -d "$data" 2>&1)
-            code=$(echo "$resp" | tail -1)
+                   -H 'Content-Type: application/json' -d "$data" 2>&1) || true
+            http=$(echo "$resp" | tail -1)
             body=$(echo "$resp" | head -n -1)
-            if [[ "$code" =~ ^2 ]] || echo "$body" | grep -qi "exist"; then
-              echo "  ✓ ${endpoint} (${code})"
-            else
-              echo "  ✗ ${endpoint} (${code}): ${body}"
+            code=$(echo "$body" | jq -r '.code // empty' 2>/dev/null || echo '')
+            msg=$(echo  "$body" | jq -r '.msg  // empty' 2>/dev/null || echo '')
+
+            if [[ "$http" =~ ^2 ]] && [ "$code" = "0" ]; then
+              echo "  ✓ ${endpoint}"
+              return 0
             fi
+            # Idempotent re-creation (already-exists) is fine; treat as success.
+            if echo "$msg $body" | grep -qiE 'already.*exist|AlreadyExist'; then
+              echo "  = ${endpoint} (already exists)"
+              return 0
+            fi
+            echo "::error::${endpoint} failed (http=${http} code=${code} msg=${msg})"
+            echo "    body=${body}"
+            return 1
           }
 
-          echo "$RELEASED" | jq -c '.[]' | while read -r item; do
+          # Iterate. Use a here-string + plain `for` so we never lose context to
+          # a pipe sub-shell (the old version of this script silently dropped
+          # PLATFORM_DICT and TOOL_DESC when run under `while read` in a pipe).
+          while IFS= read -r item; do
             NAME=$(echo "$item" | jq -r '.name')
             VERSION=$(echo "$item" | jq -r '.version')
             TAG=$(echo "$item" | jq -r '.tag')
-            DESC="${TOOL_DESC[$NAME]:-r_lit - ${NAME}}"
-            GH_DL="https://github.com/${{ env.GITHUB_REPO }}/releases/download/${TAG}"
 
-            echo ""
-            echo "━━━ HFrog: ${NAME} v${VERSION} ━━━"
+            # Pull enriched metadata from PROJECTS (description, category, source_type, targets, gui).
+            META=$(echo "$PROJECTS" | jq -c --arg n "$NAME" '.[] | select(.name==$n)')
+            DESC=$(echo "$META"        | jq -r '.description')
+            CATEGORY=$(echo "$META"    | jq -r '.category')
+            SOURCE_TYPE=$(echo "$META" | jq -r '.source_type')
+            GUI=$(echo "$META"         | jq -r '.gui')
+            TARGETS=$(echo "$META"     | jq -r '.targets[]')
+
+            INSTALL_CMD="curl -fsSL https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh | bash"
+            INSTALL_SH_URL="https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh"
+            GH_DL="https://github.com/${GITHUB_REPO}/releases/download/${TAG}"
+
+            # Use the actual GitHub Release notes as hfrog release_notes.
+            RELEASE_NOTES_FILE="pkg-${NAME}/RELEASE_NOTES.md"
+            if [ -f "$RELEASE_NOTES_FILE" ]; then
+              RELEASE_NOTES=$(cat "$RELEASE_NOTES_FILE")
+            else
+              RELEASE_NOTES="${NAME} v${VERSION}"
+            fi
+
+            echo ""; echo "━━━ HFrog: ${NAME} v${VERSION} (cat=${CATEGORY}) ━━━"
 
             # 1. Software
-            hfrog_post "/api/release/softwares" \
-              "{\"name\":\"${NAME}\",\"description\":\"${DESC}\",\"install_command\":\"gh release download ${TAG} -p '${NAME}-*' -R ${{ env.GITHUB_REPO }}\"}"
+            payload=$(jq -nc \
+              --arg n "$NAME" --arg d "$DESC" \
+              --arg ic "$INSTALL_CMD" --arg is "$INSTALL_SH_URL" \
+              '{name:$n, description:$d, install_command:$ic, install_script_url:$is}')
+            hfrog_post "/api/release/softwares" "$payload"
 
-            # 2. Platforms
-            for p in "${PLATFORMS[@]}"; do
-              IFS='|' read -r code os arch display <<< "$p"
-              hfrog_post "/api/release/platforms" \
-                "{\"code\":\"${code}\",\"os\":\"${os}\",\"arch\":\"${arch}\",\"display_name\":\"${display}\"}"
+            # 2. Platforms (only those this tool actually targets)
+            for tgt in $TARGETS; do
+              spec="${PLATFORM_DICT[$tgt]:-}"
+              [ -n "$spec" ] || { echo "::warning::unknown target ${tgt}, skip"; continue; }
+              IFS='|' read -r os arch display <<< "$spec"
+              payload=$(jq -nc \
+                --arg c "$tgt" --arg o "$os" --arg a "$arch" --arg d "$display" \
+                '{code:$c, os:$o, arch:$a, display_name:$d}')
+              hfrog_post "/api/release/platforms" "$payload"
             done
 
             # 3. Version
-            hfrog_post "/api/release/versions" \
-              "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"is_latest\":true,\"release_notes\":\"Built by GitHub Actions\",\"created_by\":\"github-actions/${{ github.run_number }}\"}"
+            payload=$(jq -nc \
+              --arg n "$NAME" --arg v "v${VERSION}" \
+              --arg notes "$RELEASE_NOTES" \
+              --arg by "github-actions/${{ github.run_number }}" \
+              '{software_name:$n, version:$v, is_latest:true,
+                release_notes:$notes, created_by:$by}')
+            hfrog_post "/api/release/versions" "$payload"
 
-            # 4. Release records
-            IS_GUI="${GUI_TOOLS[$NAME]:-0}"
-            for p in "${PLATFORMS[@]}"; do
-              IFS='|' read -r code os arch display <<< "$p"
+            # 4. Releases — only for targets we actually shipped
+            for tgt in $TARGETS; do
+              spec="${PLATFORM_DICT[$tgt]:-}"
+              [ -n "$spec" ] || continue
+              IFS='|' read -r os arch display <<< "$spec"
 
-              # GUI tools don't ship for musl-based Linux targets.
-              if [[ "$IS_GUI" == "1" && "$code" == *-musl ]]; then
+              if [ "$os" = "windows" ]; then
+                fname="${NAME}-${tgt}.zip"
+              elif [ "$GUI" = "true" ] && [ "$os" = "macos" ]; then
+                fname="${NAME}-${tgt}.dmg"
+              else
+                fname="${NAME}-${tgt}.tar.gz"
+              fi
+
+              local_path="pkg-${NAME}/${fname}"
+              if [ ! -f "$local_path" ]; then
+                echo "  ⚠ ${fname} not produced (likely unsigned/skipped), skip release record"
                 continue
               fi
 
-              if [[ "$os" == "windows" ]]; then
-                DL_URL="${GH_DL}/${NAME}-${code}.zip"
-              elif [[ "$IS_GUI" == "1" && "$os" == "macos" ]]; then
-                DL_URL="${GH_DL}/${NAME}-${code}.dmg"
-              else
-                DL_URL="${GH_DL}/${NAME}-${code}.tar.gz"
-              fi
-              hfrog_post "/api/release/releases" \
-                "{\"software_name\":\"${NAME}\",\"version\":\"v${VERSION}\",\"platform_code\":\"${code}\",\"download_url\":\"${DL_URL}\"}"
+              size=$(stat -c%s "$local_path")
+              sha=$(sha256sum "$local_path" | cut -d' ' -f1)
+              dl="${GH_DL}/${fname}"
+
+              payload=$(jq -nc \
+                --arg n "$NAME" --arg v "v${VERSION}" --arg c "$tgt" \
+                --arg url "$dl" --argjson sz "$size" \
+                --arg sha "$sha" --arg src "$SOURCE_TYPE" \
+                '{software_name:$n, version:$v, platform_code:$c,
+                  download_url:$url, file_size:$sz, checksum_sha256:$sha,
+                  source_type:$src}')
+              hfrog_post "/api/release/releases" "$payload"
             done
-          done
 
-  # ╔══════════════════════════════════════════════╗
-  # ║ Job 5: Mirror to Nexus (optional)            ║
-  # ╚══════════════════════════════════════════════╝
-  mirror-nexus:
-    name: Mirror to Nexus
-    needs: release
-    if: success() && vars.ENABLE_NEXUS_MIRROR == 'true'
-    runs-on: ubuntu-latest
+            # 5. Category — hfrog HTTP API does not (yet) accept category;
+            #    if the optional Postgres credentials are set we patch directly.
+            if [ -n "${POSTGRES_HFROG_HOST:-}" ] && command -v psql >/dev/null 2>&1; then
+              echo "  ⌁ patching category=${CATEGORY} via SQL"
+              PGPASSWORD="${POSTGRES_HFROG_PASSWORD}" psql -v ON_ERROR_STOP=1 \
+                "postgresql://${POSTGRES_HFROG_USER}@${POSTGRES_HFROG_HOST}:${POSTGRES_HFROG_PORT:-5432}/${POSTGRES_HFROG_DB}" \
+                -c "UPDATE rb_softwares
+                       SET category_id = (SELECT id FROM rb_categories WHERE code = '${CATEGORY}')
+                     WHERE name = '${NAME}';" >/dev/null
+              echo "  ✓ category set"
+            else
+              echo "  · POSTGRES_HFROG_* not set — category sync skipped"
+            fi
+          done < <(echo "$RELEASED" | jq -c '.[]')
 
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Upload to Nexus
+          echo ""; echo "✓ All hfrog records synced"
         env:
-          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
-          RELEASED: ${{ needs.release.outputs.released }}
-        run: |
-          mkdir -p flat
-          find artifacts -type f -exec cp {} flat/ \; 2>/dev/null || true
-
-          echo "$RELEASED" | jq -c '.[]' | while read -r item; do
-            NAME=$(echo "$item" | jq -r '.name')
-            VERSION=$(echo "$item" | jq -r '.version')
-            NEXUS_PATH="r_lit/${NAME}"
-
-            echo "=== ${NAME} v${VERSION} → Nexus ==="
-            for f in flat/${NAME}-*.tar.gz; do
-              [ -f "$f" ] || continue
-              BASENAME=$(basename "$f")
-              PLATFORM=$(echo "$BASENAME" | sed "s/^${NAME}-//" | sed 's/\.tar\.gz$//')
-
-              tar xzf "$f" -C /tmp/ 2>/dev/null
-              gzip -9 -f "/tmp/${NAME}"
-
-              for dest in "v${VERSION}" "latest"; do
-                curl -f --max-time 120 -u "${NEXUS_USER}:${NEXUS_PASS}" \
-                  --upload-file "/tmp/${NAME}.gz" \
-                  "${{ env.NEXUS_PUBLIC_URL }}/repository/${{ env.NEXUS_REPO }}/${NEXUS_PATH}/${dest}/${PLATFORM}/${NAME}.gz" \
-                  && echo "  ✓ ${dest}/${PLATFORM}" \
-                  || echo "  ✗ ${dest}/${PLATFORM}"
-              done
-              rm -f "/tmp/${NAME}" "/tmp/${NAME}.gz"
-            done
-          done
-
+          # Optional — wire these as repo secrets if you want
+          # category_id auto-patching. Without them, sync still works
+          # (hfrog default category remains 'cli').
+          POSTGRES_HFROG_HOST:     ${{ secrets.POSTGRES_HFROG_HOST }}
+          POSTGRES_HFROG_PORT:     ${{ secrets.POSTGRES_HFROG_PORT }}
+          POSTGRES_HFROG_DB:       ${{ secrets.POSTGRES_HFROG_DB }}
+          POSTGRES_HFROG_USER:     ${{ secrets.POSTGRES_HFROG_USER }}
+          POSTGRES_HFROG_PASSWORD: ${{ secrets.POSTGRES_HFROG_PASSWORD }}

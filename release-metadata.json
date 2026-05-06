@@ -1,0 +1,49 @@
+{
+  "$comment": [
+    "Per-tool release metadata. Single source of truth for:",
+    "  - hfrog software description / install_command / install_script_url / source_type",
+    "  - hfrog category (cli / desktop / service)",
+    "  - GUI bundling (mac app name)",
+    "  - Build matrix (which targets to build for this tool)",
+    "Edit this file when adding/removing a tool, NOT release.yml."
+  ],
+  "defaults": {
+    "source_type": "open_source",
+    "category": "cli",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "tools": {
+    "bulk_upload": {
+      "description": "High-speed batch file upload/download CLI for S3-compatible storage (AWS S3, Cloudflare R2, Aliyun OSS, iDrive E2). Multi-threaded parallel transfers, resume capability, checksum verification.",
+      "category": "cli"
+    },
+    "img_resize": {
+      "description": "图片批量缩放/压缩工具 — 多线程批量处理 JPEG/PNG/WebP，支持目标尺寸/质量/格式。",
+      "category": "cli"
+    },
+    "textexture": {
+      "description": "艺术字图片生成（阴影/描边/渐变/发光/霓虹）— 一行 CLI 把任意文字渲染成可商用的 PNG 文字贴图。",
+      "category": "cli"
+    },
+    "mj_atlas": {
+      "description": "MJAtlas — 游戏 sprite 图集打包工具，UV-stable 增量构建、多边形 mesh、manifest 一等公民（inspect/diff/verify/tag）、可选 hfrog mirror、Godot native 输出。",
+      "category": "cli"
+    },
+    "maquette": {
+      "description": "Kit-based low-poly 建模与导出工具 — GUI 堆方块，导出 glTF/OBJ 3D 模型与 2D sprite。",
+      "category": "desktop",
+      "gui": true,
+      "macos_app_name": "Maquette"
+    },
+    "group_vibe_workbench": {
+      "description": "桌面协作工作台 — GPUI + Murmur P2P，多人远程协同。",
+      "category": "desktop",
+      "gui": true,
+      "macos_app_name": "Group Vibe Workbench"
+    }
+  }
+}

@@ -69,8 +69,11 @@ S3_REGION=auto
 ## Installation
 
 ```bash
-# One-line install (Linux x86_64, macOS ARM64)
-curl -fsSL https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh | TOOL_NAME=bulk_upload bash
+# One-line install (Linux x86_64/aarch64, macOS Intel/ARM64, Windows-Git-Bash)
+curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+
+# Custom install dir
+curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | INSTALL_DIR=$HOME/.local/bin bash
 
 # Build from source
 cargo build --release
@@ -101,6 +104,8 @@ cargo build --release
 ## Links
 
 - Tool page: https://snappywatt.com/tools/bulk-upload
-- Install script: https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh
+- Install script: https://gamesci-lite.com/r_lit/bulk_upload/install.sh
+- Release tracker: https://hfrog.gamesci-lite.com/api/release/softwares/bulk_upload
+- GitHub Releases: https://github.com/dwbmio/r_lit/releases?q=bulk_upload-
 - Repository: https://github.com/dwbmio/r_lit/tree/main/bulk_upload
 - For humans: see README.md in the same directory

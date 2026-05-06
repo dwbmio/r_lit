@@ -5,8 +5,8 @@
 ## Quick Start
 
 ```bash
-# Install
-curl -fsSL https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh | TOOL_NAME=bulk_upload bash
+# Install (auto-detects Linux / macOS / Windows-Git-Bash)
+curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 
 # Create config
 cat > .s3 << EOF

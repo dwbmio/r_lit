@@ -24,11 +24,53 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 
 详细使用说明请进入各子目录查看对应 README。
 
+## 安装预编译二进制
+
+所有 CLI 工具同时发布到三处：
+- **GitHub Releases** — `https://github.com/dwbmio/r_lit/releases`
+- **Cloudflare R2（镜像，稳定 URL）** — `https://gamesci-lite.com/r_lit/<tool>/`
+- **HFrog 制品中心** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
+
+一行安装（自动识别 Linux / macOS / Windows-Git-Bash）：
+
+```bash
+curl -fsSL https://gamesci-lite.com/r_lit/<tool>/install.sh | bash
+```
+
+示例：
+
+```bash
+curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+curl -fsSL https://gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
+```
+
+GUI 应用（`maquette`、`group_vibe_workbench`）在 macOS 以
+notarized `.dmg` 形式发布，请到 GitHub Release 页面下载。
+
 ## 构建
 
 ```bash
 cd <tool_dir> && cargo build --release
 ```
+
+## 发布
+
+任何 `<tool>/Cargo.toml` 的 `version` 字段变更并 push 到 `main` 后，
+`Release` workflow 会自动：
+
+1. 按 `release-metadata.json` 中该工具声明的 `targets` 构建。
+2. 创建 GitHub Release，附带二进制 + `SHA256SUMS` + 每个产物的校验和。
+3. 同步到 R2（`s3://prod-gamesci-lite/r_lit/<tool>/v<ver>/`），
+   并刷新 `r_lit/<tool>/install.sh` 入口脚本。
+4. 把 `software / version / release / platform` 全套记录写入 HFrog，
+   带上真实的 `file_size`、`checksum_sha256`、`source_type`、
+   `install_script_url`。
+
+新增工具：只需在 `release-metadata.json` 中追加一项
+（`description` / `category` / 可选 `gui`、`macos_app_name`、`targets`），
+其余文件无需改动。
+
+完整流程图与所需的 GitHub Secrets 见 [`docs/release.md`](docs/release.md)。
 
 ## License
 

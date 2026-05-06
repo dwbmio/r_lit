@@ -5,8 +5,8 @@
 ## 快速开始
 
 ```bash
-# 安装
-curl -fsSL https://nexus.gamesci-lite.com/repository/raw-prod/r_lit/bulk_upload/install.sh | TOOL_NAME=bulk_upload bash
+# 安装（自动检测 Linux / macOS / Windows-Git-Bash）
+curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 
 # 创建配置
 cat > .s3 << EOF
