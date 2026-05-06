@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# Local P2P storage (Murmur swarm DB + user DB) — runtime data, never tracked
+/workbench_data/
+/workbench_data_*/
+
 # IDE
 .vscode/
 .idea/
