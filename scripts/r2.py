@@ -4,7 +4,7 @@ local fallback when aws-cli is broken.
 
 Usage:
     R2_ENDPOINT=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... \\
-    R2_BUCKET=prod-gamesci-lite \\
+    R2_BUCKET=prod-hfrog \\
         python3 scripts/r2.py ls   r_lit/
         python3 scripts/r2.py cp   ./install.sh r_lit/bulk_upload/install.sh \\
             --content-type "text/x-shellscript; charset=utf-8" \\

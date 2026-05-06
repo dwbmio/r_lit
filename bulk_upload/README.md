@@ -6,7 +6,7 @@
 
 ```bash
 # Install (auto-detects Linux / macOS / Windows-Git-Bash)
-curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 
 # Create config
 cat > .s3 << EOF

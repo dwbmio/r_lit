@@ -11,7 +11,7 @@
 | Path | Status |
 |---|---|
 | `.github/workflows/release.yml` | ✅ rewritten — `mirror-nexus` job removed, `mirror-r2` added |
-| `bulk_upload/README.md` `README_CN.md` `llms.txt` `llms_cn.txt` | ✅ install URLs swapped to `https://gamesci-lite.com/r_lit/...` |
+| `bulk_upload/README.md` `README_CN.md` `llms.txt` `llms_cn.txt` | ✅ install URLs swapped to `https://r2.gamesci-lite.com/r_lit/...` |
 | `README.md` `README_CN.md` | ✅ added Install + Release sections pointing at R2 |
 
 No other r_lit file references Nexus.
@@ -109,7 +109,7 @@ curl -fsS -u "$NEXUS_USER:$NEXUS_PASS" \
 
 ```bash
 aws --endpoint-url "$R2_ENDPOINT" s3 cp ./build.gz \
-  "s3://prod-gamesci-lite/<proj>/v1.2.3/<target>/build.gz" \
+  "s3://prod-hfrog/<proj>/v1.2.3/<target>/build.gz" \
   --content-type "application/octet-stream" \
   --cache-control "public, max-age=31536000, immutable"
 # Public URL → https://gamesci-lite.com/<proj>/v1.2.3/<target>/build.gz
@@ -124,6 +124,6 @@ AWS_DEFAULT_REGION=auto
 R2_ENDPOINT=https://240d77865abd8ef6f48521ba34845508.r2.cloudflarestorage.com
 ```
 
-Bucket `prod-gamesci-lite` is bound to the public custom domain
+Bucket `prod-hfrog` is bound to the public custom domain
 `gamesci-lite.com`, so any S3 key becomes
 `https://gamesci-lite.com/<key>` with no auth needed.

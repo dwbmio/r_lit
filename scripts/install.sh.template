@@ -2,11 +2,11 @@
 # {{TOOL}} v{{VERSION}} - one-shot installer
 #
 # Usage:
-#   curl -fsSL https://gamesci-lite.com/r_lit/{{TOOL}}/install.sh | bash
-#   curl -fsSL https://gamesci-lite.com/r_lit/{{TOOL}}/install.sh | INSTALL_DIR=$HOME/.local/bin bash
+#   curl -fsSL https://r2.gamesci-lite.com/r_lit/{{TOOL}}/install.sh | bash
+#   curl -fsSL https://r2.gamesci-lite.com/r_lit/{{TOOL}}/install.sh | INSTALL_DIR=$HOME/.local/bin bash
 #
-# Sources binaries from Cloudflare R2 (bucket: prod-gamesci-lite,
-# public domain: gamesci-lite.com). Falls back to GitHub Releases when
+# Sources binaries from Cloudflare R2 (bucket: prod-hfrog,
+# public domain: r2.gamesci-lite.com). Falls back to GitHub Releases when
 # R2 is unreachable.
 #
 # Generated automatically by .github/workflows/release.yml — do not edit
@@ -18,7 +18,7 @@ TOOL="{{TOOL}}"
 VERSION="{{VERSION}}"
 GITHUB_REPO="{{GITHUB_REPO}}"
 
-R2_BASE="${R2_PUBLIC_BASE:-https://gamesci-lite.com/r_lit/${TOOL}}"
+R2_BASE="${R2_PUBLIC_BASE:-https://r2.gamesci-lite.com/r_lit/${TOOL}}"
 GH_BASE="https://github.com/${GITHUB_REPO}/releases/download/${TOOL}-v${VERSION}"
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"

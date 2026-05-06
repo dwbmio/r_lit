@@ -51,7 +51,7 @@ bulk_upload --json jq '{"img":"https://example.com/photo.jpg"}' --s3 .s3
 
 ```bash
 # 一键安装（自动检测平台）
-curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 
 # 源码构建
 cargo build --release

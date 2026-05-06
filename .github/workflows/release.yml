@@ -24,7 +24,7 @@ env:
   CARGO_TERM_COLOR: always
   HFROG_API: https://hfrog.gamesci-lite.com
   GITHUB_REPO: dwbmio/r_lit
-  R2_PUBLIC_DOMAIN: gamesci-lite.com
+  R2_PUBLIC_DOMAIN: r2.gamesci-lite.com
   R2_KEY_PREFIX: r_lit
 
 jobs:
@@ -470,7 +470,7 @@ jobs:
             fi
 
             # Render per-tool install.sh from template and upload as the
-            # canonical entry point: https://gamesci-lite.com/r_lit/<tool>/install.sh
+            # canonical entry point: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
             install_sh="$(mktemp)"
             sed -e "s|{{TOOL}}|${NAME}|g" \
                 -e "s|{{VERSION}}|${VERSION}|g" \

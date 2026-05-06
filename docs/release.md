@@ -30,7 +30,7 @@ push:main / workflow_dispatch / repository_dispatch
 └──────┬───────┘
        │  released = [{name, version, tag}]   pkg-* artifact
        ▼
-┌──────────────┐  Cloudflare R2 — bucket prod-gamesci-lite
+┌──────────────┐  Cloudflare R2 — bucket prod-hfrog
 │  mirror-r2   │  → r_lit/<tool>/install.sh                (latest)
 │              │  → r_lit/<tool>/v<ver>/<assets>           (immutable)
 └──────┬───────┘
@@ -59,10 +59,10 @@ gracefully.
 
 | Secret | Required by | Notes |
 |---|---|---|
-| `R2_ACCESS_KEY_ID` | `mirror-r2` | Cloudflare R2 access key (in `ci-all-in-one/secrets/.credentials.env` as `R2_ACCESS_KEY_ID`) |
-| `R2_SECRET_ACCESS_KEY` | `mirror-r2` | Cloudflare R2 secret key |
+| `R2_ACCESS_KEY_ID` | `mirror-r2` | Cloudflare R2 access key — value of `R2_HFROG_ACCESS_KEY_ID` in `ci-all-in-one/secrets/.credentials.env` |
+| `R2_SECRET_ACCESS_KEY` | `mirror-r2` | Cloudflare R2 secret key — value of `R2_HFROG_SECRET_ACCESS_KEY` |
 | `R2_ENDPOINT` | `mirror-r2` | `https://240d77865abd8ef6f48521ba34845508.r2.cloudflarestorage.com` |
-| `R2_BUCKET` | `mirror-r2` | `prod-gamesci-lite` |
+| `R2_BUCKET` | `mirror-r2` | `prod-hfrog` (bound to public domain `r2.gamesci-lite.com`) |
 | `MACOS_CERTIFICATE` | `build` (macOS GUI only) | base64-encoded `.p12` Developer ID Application cert. Skip → unsigned build |
 | `MACOS_CERTIFICATE_PWD` | `build` (macOS GUI only) | password for the .p12 |
 | `MACOS_KEYCHAIN_PASSWORD` | `build` (macOS GUI only) | transient keychain pwd, any string |
@@ -127,8 +127,8 @@ The `mirror-nexus` job in the previous `release.yml` is gone. If you have
 external scripts still pointing at Nexus, switch them to:
 
 ```
-https://gamesci-lite.com/r_lit/<tool>/install.sh
-https://gamesci-lite.com/r_lit/<tool>/v<ver>/<tool>-<target>.tar.gz
+https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
+https://r2.gamesci-lite.com/r_lit/<tool>/v<ver>/<tool>-<target>.tar.gz
 ```
 
 A scan of remaining Nexus references in the sister `ci-all-in-one`

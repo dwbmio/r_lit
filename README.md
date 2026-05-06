@@ -28,20 +28,20 @@ See each subdirectory's README for detailed usage.
 
 Every CLI tool is published to:
 - **GitHub Releases** — `https://github.com/dwbmio/r_lit/releases`
-- **Cloudflare R2 (mirror, stable URL)** — `https://gamesci-lite.com/r_lit/<tool>/`
+- **Cloudflare R2 (mirror, stable URL)** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
 - **HFrog tracker** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
 
 One-line install (auto-detects Linux / macOS / Windows-Git-Bash):
 
 ```bash
-curl -fsSL https://gamesci-lite.com/r_lit/<tool>/install.sh | bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/<tool>/install.sh | bash
 ```
 
 Examples:
 
 ```bash
-curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
-curl -fsSL https://gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
 ```
 
 GUI apps (`maquette`, `group_vibe_workbench`) ship as a notarized `.dmg`
@@ -60,7 +60,7 @@ Bump `version` in any `<tool>/Cargo.toml`, push to `main`, and the
 
 1. Build the matrix of `targets` declared in `release-metadata.json` for that tool.
 2. Create a GitHub Release with binaries + `SHA256SUMS` + per-asset checksum table.
-3. Mirror everything to R2 (`s3://prod-gamesci-lite/r_lit/<tool>/v<ver>/`)
+3. Mirror everything to R2 (`s3://prod-hfrog/r_lit/<tool>/v<ver>/`)
    and refresh `r_lit/<tool>/install.sh`.
 4. Sync `software / version / release / platform` records to HFrog with
    real `file_size`, `checksum_sha256`, `source_type`, and `install_script_url`.

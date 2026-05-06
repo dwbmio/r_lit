@@ -10,7 +10,7 @@
 #      to hfrog with the COMPLETE field set: install_script_url, file_size,
 #      checksum_sha256, source_type, real release_notes, category.
 #   3. Render scripts/install.sh.template for every released tool and upload
-#      it to R2 (bucket prod-gamesci-lite, public domain gamesci-lite.com).
+#      it to R2 (bucket prod-hfrog, public domain r2.gamesci-lite.com).
 #
 # Run this ONCE locally after the new release.yml lands but before the next
 # real release fires. Re-running is safe (idempotent).
@@ -29,9 +29,15 @@ set -euo pipefail
 
 GITHUB_REPO="${GITHUB_REPO:-dwbmio/r_lit}"
 HFROG_API="${HFROG_API:-https://hfrog.gamesci-lite.com}"
-R2_PUBLIC_DOMAIN="${R2_PUBLIC_DOMAIN:-gamesci-lite.com}"
+# R2_HFROG_* (the prod-hfrog bucket-scoped token added 2026-05-06) takes
+# precedence over the legacy R2_* (prod-gamesci-lite, currently 401).
+R2_PUBLIC_DOMAIN="${R2_HFROG_PUBLIC_DOMAIN:-${R2_PUBLIC_DOMAIN:-r2.gamesci-lite.com}}"
 R2_KEY_PREFIX="${R2_KEY_PREFIX:-r_lit}"
-R2_BUCKET="${R2_BUCKET:-prod-gamesci-lite}"
+R2_BUCKET="${R2_HFROG_BUCKET:-${R2_BUCKET:-prod-hfrog}}"
+R2_ENDPOINT="${R2_HFROG_ENDPOINT:-${R2_ENDPOINT:-}}"
+R2_ACCESS_KEY_ID="${R2_HFROG_ACCESS_KEY_ID:-${R2_ACCESS_KEY_ID:-}}"
+R2_SECRET_ACCESS_KEY="${R2_HFROG_SECRET_ACCESS_KEY:-${R2_SECRET_ACCESS_KEY:-}}"
+export R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET
 
 c_red='\033[0;31m'; c_grn='\033[0;32m'; c_ylw='\033[1;33m'; c_off='\033[0m'
 info() { printf "${c_grn}[info]${c_off} %s\n" "$*"; }
@@ -171,7 +177,9 @@ hfrog_post() {
         echo "    ✓ ${endpoint}"
         return 0
     fi
-    if echo "$msg $body" | grep -qiE 'already.*exist|AlreadyExist'; then
+    # hfrog returns code=1002 + "duplicate key value violates unique constraint"
+    # when re-POSTing an already-created version/release. Treat as success.
+    if echo "$msg $body" | grep -qiE 'already.*exist|AlreadyExist|duplicate key value'; then
         echo "    = ${endpoint} (already exists)"
         return 0
     fi

@@ -6,7 +6,7 @@
 
 ```bash
 # 安装（自动检测 Linux / macOS / Windows-Git-Bash）
-curl -fsSL https://gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
+curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 
 # 创建配置
 cat > .s3 << EOF
