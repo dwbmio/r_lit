@@ -295,20 +295,23 @@ jobs:
               continue
             fi
 
-            # GUI on macOS → signed + notarized .dmg
+            # GUI on macOS → prefer signed .app + notarized .dmg, fall back to a
+            # plain tar.gz (raw binary, same as cli) when no signing identity
+            # is configured. This keeps the "all 3 platforms shipped" guarantee
+            # working before MACOS_CERTIFICATE secrets are wired up.
             if [ "$GUI" = "true" ] && [ "${{ runner.os }}" = "macOS" ]; then
-              if [ "${MACOS_SIGNED:-0}" != "1" ]; then
-                echo "::warning::skipping ${NAME} DMG — no signing identity"
+              if [ "${MACOS_SIGNED:-0}" = "1" ]; then
+                APP_NAME="$APP_NAME" \
+                BIN_NAME="$NAME" \
+                PROJECT_DIR="$NAME" \
+                TARGET_TRIPLE="${{ matrix.target }}" \
+                VERSION="$VERSION" \
+                OUT_DIR="$(pwd)/release" \
+                  bash .github/scripts/macos-bundle.sh
                 continue
               fi
-              APP_NAME="$APP_NAME" \
-              BIN_NAME="$NAME" \
-              PROJECT_DIR="$NAME" \
-              TARGET_TRIPLE="${{ matrix.target }}" \
-              VERSION="$VERSION" \
-              OUT_DIR="$(pwd)/release" \
-                bash .github/scripts/macos-bundle.sh
-              continue
+              echo "::warning::${NAME}: no MACOS_CERTIFICATE — falling back to raw tar.gz (no .dmg)"
+              # fall through to the generic tar.gz packaging below
             fi
 
             (
