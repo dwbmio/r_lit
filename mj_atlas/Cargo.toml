@@ -6,7 +6,12 @@ description = "MJAtlas — game-ready texture atlas packer (UV-stable incrementa
 
 [features]
 default = []
-gui = ["dep:eframe", "dep:egui", "dep:rfd"]
+# `gui` 启用 egui + eframe (wgpu 后端)；同时显式声明 eframe 的 `x11` /
+# `wayland` 子特性 — eframe 0.31 用了 default-features=false 把 winit 默
+# 认的 X11/Wayland backend 都关了，Linux 上不显式打开 → winit 报 "The
+# platform you're compiling for is not supported"。其它平台 (macOS /
+# Windows) 会自动用各自后端不受影响。
+gui = ["dep:eframe", "dep:egui", "dep:rfd", "eframe/x11", "eframe/wayland"]
 
 [dependencies]
 clap = { version = "^4", features = ["cargo", "derive"] }
