@@ -20,12 +20,15 @@ set -euo pipefail
 GITHUB_REPO="${GITHUB_REPO:-dwbmio/r_lit}"
 HFROG_API="${HFROG_API:-https://hfrog.gamesci-lite.com}"
 
-# R2_HFROG_* takes precedence over legacy R2_* (the latter currently 401s).
-export R2_ENDPOINT="${R2_HFROG_ENDPOINT:-${R2_ENDPOINT:-}}"
-export R2_BUCKET="${R2_HFROG_BUCKET:-${R2_BUCKET:-prod-hfrog}}"
-export R2_ACCESS_KEY_ID="${R2_HFROG_ACCESS_KEY_ID:-${R2_ACCESS_KEY_ID:-}}"
-export R2_SECRET_ACCESS_KEY="${R2_HFROG_SECRET_ACCESS_KEY:-${R2_SECRET_ACCESS_KEY:-}}"
-R2_PUBLIC_DOMAIN="${R2_HFROG_PUBLIC_DOMAIN:-${R2_PUBLIC_DOMAIN:-r2.gamesci-lite.com}}"
+# Both naming conventions work — pick whichever is already in your env:
+#   HFROG_R2_*  (canonical, from ci-all-in-one/secrets/.credentials.env)
+#   R2_HFROG_*  (alias from this script's first iteration, kept for back-compat)
+# Last fallback: the legacy R2_* (prod-gamesci-lite, currently 401).
+export R2_ENDPOINT="${HFROG_R2_ENDPOINT:-${R2_HFROG_ENDPOINT:-${R2_ENDPOINT:-}}}"
+export R2_BUCKET="${HFROG_R2_BUCKET:-${R2_HFROG_BUCKET:-${R2_BUCKET:-prod-hfrog}}}"
+export R2_ACCESS_KEY_ID="${HFROG_R2_ACCESS_KEY_ID:-${R2_HFROG_ACCESS_KEY_ID:-${R2_ACCESS_KEY_ID:-}}}"
+export R2_SECRET_ACCESS_KEY="${HFROG_R2_SECRET_ACCESS_KEY:-${R2_HFROG_SECRET_ACCESS_KEY:-${R2_SECRET_ACCESS_KEY:-}}}"
+R2_PUBLIC_DOMAIN="${HFROG_R2_PUBLIC_DOMAIN:-${R2_HFROG_PUBLIC_DOMAIN:-${R2_PUBLIC_DOMAIN:-r2.gamesci-lite.com}}}"
 R2_KEY_PREFIX="${R2_KEY_PREFIX:-r_lit}"
 
 # Postgres URL is consumed by publisher.py via --postgres-url.
