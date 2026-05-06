@@ -132,10 +132,18 @@ jobs:
           fi
 
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          echo "projects=$(echo "$PROJECTS" | jq -c)" >> "$GITHUB_OUTPUT"
+          # Use heredoc form so the value is binary-safe (preserves the JSON
+          # exactly even when descriptions contain CJK / em-dash / parentheses
+          # / multiline / quote characters that would otherwise corrupt single
+          # `key=value\n` lines).
+          {
+            printf 'projects<<__JSONEOF__\n'
+            printf '%s\n' "$PROJECTS" | jq -c .
+            printf '__JSONEOF__\n'
+          } >> "$GITHUB_OUTPUT"
 
           # Build matrix is the *union* of all targets across all projects, mapped to OS.
-          MATRIX=$(echo "$PROJECTS" | jq -c '
+          MATRIX=$(printf '%s' "$PROJECTS" | jq -c '
             [.[].targets[]] | unique | map(
               if   . == "x86_64-unknown-linux-gnu"  then {os:"ubuntu-latest", target:.}
               elif . == "aarch64-apple-darwin"     then {os:"macos-latest",  target:.}
@@ -145,7 +153,11 @@ jobs:
               else null end
             ) | map(select(. != null)) | {include: .}
           ')
-          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          {
+            printf 'matrix<<__MATRIXEOF__\n'
+            printf '%s\n' "$MATRIX"
+            printf '__MATRIXEOF__\n'
+          } >> "$GITHUB_OUTPUT"
 
   # ╔══════════════════════════════════════════════════════════════════╗
   # ║ Job 2 — Build per-target binaries                                ║
@@ -219,10 +231,13 @@ jobs:
           PROJECTS: ${{ needs.detect.outputs.projects }}
         run: |
           set -euo pipefail
-          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
-            NAME=$(echo "$item" | jq -r '.name')
-            TARGETS=$(echo "$item" | jq -r '.targets[]')
-            if ! echo "$TARGETS" | grep -qx "${{ matrix.target }}"; then
+          # Iterate via while-read so descriptions containing spaces / em-dash
+          # / parentheses don't break the shell word-splitting that `for item
+          # in $(jq…)` would do.
+          printf '%s' "$PROJECTS" | jq -c '.[]' | while IFS= read -r item; do
+            NAME=$(printf '%s' "$item" | jq -r '.name')
+            TARGETS=$(printf '%s' "$item" | jq -r '.targets[]')
+            if ! printf '%s\n' "$TARGETS" | grep -qx "${{ matrix.target }}"; then
               echo "⤳ ${NAME} skipped (does not target ${{ matrix.target }})"
               continue
             fi
@@ -250,14 +265,14 @@ jobs:
           set -euo pipefail
           mkdir -p release
 
-          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
-            NAME=$(echo "$item" | jq -r '.name')
-            VERSION=$(echo "$item" | jq -r '.version')
-            GUI=$(echo "$item" | jq -r '.gui')
-            APP_NAME=$(echo "$item" | jq -r '.macos_app_name')
-            TARGETS=$(echo "$item" | jq -r '.targets[]')
+          printf '%s' "$PROJECTS" | jq -c '.[]' | while IFS= read -r item; do
+            NAME=$(printf '%s' "$item" | jq -r '.name')
+            VERSION=$(printf '%s' "$item" | jq -r '.version')
+            GUI=$(printf '%s' "$item" | jq -r '.gui')
+            APP_NAME=$(printf '%s' "$item" | jq -r '.macos_app_name')
+            TARGETS=$(printf '%s' "$item" | jq -r '.targets[]')
 
-            if ! echo "$TARGETS" | grep -qx "${{ matrix.target }}"; then
+            if ! printf '%s\n' "$TARGETS" | grep -qx "${{ matrix.target }}"; then
               continue
             fi
 
@@ -338,10 +353,12 @@ jobs:
           set -euo pipefail
           RELEASED='[]'
 
-          for item in $(echo "$PROJECTS" | jq -c '.[]'); do
-            NAME=$(echo "$item" | jq -r '.name')
-            VERSION=$(echo "$item" | jq -r '.version')
-            DESC=$(echo "$item" | jq -r '.description')
+          # Same `while IFS= read` pattern as in the build step — descriptions
+          # contain spaces / em-dash / parens that would break `for in $(jq…)`.
+          while IFS= read -r item; do
+            NAME=$(printf '%s' "$item" | jq -r '.name')
+            VERSION=$(printf '%s' "$item" | jq -r '.version')
+            DESC=$(printf '%s' "$item" | jq -r '.description')
             TAG="${NAME}-v${VERSION}"
 
             echo ""; echo "━━━ Release: ${TAG} ━━━"
@@ -396,12 +413,16 @@ jobs:
               --notes-file "pkg-${NAME}/RELEASE_NOTES.md"
 
             echo "  ✓ ${TAG} created with ${ASSETS} assets"
-            RELEASED=$(echo "$RELEASED" | jq -c \
+            RELEASED=$(printf '%s' "$RELEASED" | jq -c \
               --arg n "$NAME" --arg v "$VERSION" --arg t "$TAG" \
               '. + [{"name":$n,"version":$v,"tag":$t}]')
-          done
+          done < <(printf '%s' "$PROJECTS" | jq -c '.[]')
 
-          echo "released=$(echo "$RELEASED" | jq -c)" >> "$GITHUB_OUTPUT"
+          {
+            printf 'released<<__RELEASEDEOF__\n'
+            printf '%s\n' "$RELEASED" | jq -c .
+            printf '__RELEASEDEOF__\n'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload pkg-* dirs for downstream jobs
         uses: actions/upload-artifact@v4
