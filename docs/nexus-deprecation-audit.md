@@ -1,129 +1,140 @@
-# Nexus → Cloudflare R2 — Audit of remaining references
+# Nexus → Cloudflare R2 — Migration Status
 
-> Generated 2026-05-06 from a scan of `/Users/admin/data0/private_work/{r_lit,ci-all-in-one}`.
->
-> r_lit itself is fully migrated (see [`docs/release.md`](release.md)). The
-> sister repo `ci-all-in-one` still contains many references — listed below
-> grouped by **what action is needed**, not just what the file says.
+> Updated 2026-05-06. Both r_lit and ci-all-in-one Rust pipelines now publish
+> to Cloudflare R2 via the **shared** `hfrog_publisher.py` (sourced from
+> `r_lit/scripts/hfrog_publisher.py`, mirrored into ci-all-in-one through
+> `scripts/services/hfrog/sync-publisher.sh`). Two separate CIs (GitHub
+> Actions and Jenkins), one publishing tool, identical output schema.
+
+## What "complete fields" means now
+
+Every release record sent to HFrog by **either** CI carries:
+
+| Field | Source |
+|---|---|
+| `software.name` `description` `install_command` `install_script_url` | publisher CLI args / per-tool metadata |
+| `software.category_id` `readme_url` `llms_txt` | publisher SQL UPDATE on `rb_softwares` |
+| `version.is_latest` `release_notes` `created_by` | publisher CLI args |
+| `release.file_size` | computed locally by publisher |
+| `release.checksum_sha256` | computed locally by publisher |
+| `release.source_type` (`open_source` / `internal`) | publisher CLI args |
+| `release.download_url` | publisher's `--download-url-template` |
+| `release.platform_code` (one row per actually-built target) | publisher iterates `--asset` flags |
+
+…and uploads each binary + a per-tool `install.sh` to
+`s3://prod-hfrog/<prefix>/v<version>/...`, public domain
+`r2.gamesci-lite.com` (custom domain binding to be done in the R2 dashboard).
 
 ## In r_lit (this repo) — done
 
 | Path | Status |
 |---|---|
-| `.github/workflows/release.yml` | ✅ rewritten — `mirror-nexus` job removed, `mirror-r2` added |
-| `bulk_upload/README.md` `README_CN.md` `llms.txt` `llms_cn.txt` | ✅ install URLs swapped to `https://r2.gamesci-lite.com/r_lit/...` |
-| `README.md` `README_CN.md` | ✅ added Install + Release sections pointing at R2 |
+| `.github/workflows/release.yml` | ✅ `mirror-r2` + `sync-hfrog` collapsed into one matrix `publish` job that calls `scripts/hfrog_publisher.py` |
+| `scripts/hfrog_publisher.py` | ✅ created — single source of truth for both CIs |
+| `scripts/install.sh.template` | ✅ R2-first installer template |
+| `scripts/repatch_hfrog.sh` | ✅ rewritten to drive `hfrog_publisher.py` |
+| `release-metadata.json` | ✅ per-tool description / category / source_type / targets |
+| `bulk_upload/README.md` `README_CN.md` `llms.txt` `llms_cn.txt` | ✅ install URLs use `https://r2.gamesci-lite.com/r_lit/...` |
+| Top-level README/README_CN | ✅ "Install" + "Release" sections |
 
-No other r_lit file references Nexus.
+## In ci-all-in-one — done (by this overhaul)
 
-## In ci-all-in-one — categorised
+### Shared publisher infra
 
-### Category A — **Active publishers** (Jenkins jobs still uploading to Nexus)
+| Path | Status |
+|---|---|
+| `scripts/services/hfrog/publisher.py` | ✅ auto-synced from r_lit (placeholder + sync script) |
+| `scripts/services/hfrog/sync-publisher.sh` | ✅ pulls a SHA-pinned copy from `dwbmio/r_lit` |
+| `scripts/services/hfrog/jenkins-publish.sh` | ✅ thin wrapper Jenkinsfiles invoke |
+| `scripts/services/hfrog/README.md` | ✅ usage + Jenkinsfile recipe |
 
-These will keep producing dead artifacts at `nexus.gamesci-lite.com/repository/raw-prod/` because Nexus is being decommissioned. **Each needs to be ported to R2 (same pattern as r_lit's `mirror-r2` job) or retired.**
+### Jenkins pipelines (10 files, all upgraded)
 
-| Project | Pipeline | Suggested action |
+For each pipeline below:
+- the "上传到 Nexus" + "上传安装脚本" + "同步到 HFrog" stages are **gone**
+- replaced by **one** `'发布到 R2 + HFrog'` stage that calls `bash scripts/services/hfrog/jenkins-publish.sh ...`
+- the `withCredentials([...])` block expects four Jenkins string credentials:
+  `r2-hfrog-endpoint`, `r2-hfrog-access-key-id`,
+  `r2-hfrog-secret-access-key`, `hfrog-postgres-url` (PG optional).
+
+| Project | Files | Status |
 |---|---|---|
-| hfrog | `task/ci/pipeline/hfrog/Jenkinsfile.binary-build` `Jenkinsfile.binary-build-parallel` `Jenkinsfile.build-deploy` | Port upload step to R2; service is still in heavy use |
-| hfrog-cli | `task/ci/pipeline/hfrog-cli/Jenkinsfile.binary-build` `Jenkinsfile.binary-build-parallel` | Port |
-| hfrog-gql | `task/ci/pipeline/hfrog-gql/Jenkinsfile.binary-build` | Port |
-| pgpour | `task/ci/pipeline/pgpour/Jenkinsfile.binary-build` | Port |
-| titan-forge | `task/ci/pipeline/titan-forge/Jenkinsfile.{binary-build,admin-build,admin-deploy,deploy}` | Port |
-| wirerope-any | `task/ci/pipeline/wirerope-any/Jenkinsfile.{multi-arch,dynamic-build}` | Port |
-| godot | `task/ci/pipeline/godot/{editor,engine,gd-minip-template,games/*}/Jenkinsfile` | Port (large game artifacts may justify keeping a separate R2 prefix) |
-| hybrix | `task/ci/pipeline/hybrix/Jenkinsfile{,.android}` | Port |
-| batch_jp_url_to_s3 | `task/ci/pipeline/batch_jp_url_to_s3/Jenkinsfile` | Port |
-| **r_lit (legacy)** | `task/ci/pipeline/r_lit/Jenkinsfile.binary-build` | **Delete** — replaced by `r_lit/.github/workflows/release.yml` in this repo |
+| r_lit (Jenkins copy) | `Jenkinsfile.binary-build` | ✅ |
+| hfrog | `Jenkinsfile.binary-build` `Jenkinsfile.binary-build-parallel` `Jenkinsfile.build-deploy` | ✅ (build-deploy only swaps the binary-download step from Nexus to R2 install.sh) |
+| hfrog-cli | `Jenkinsfile.binary-build` `Jenkinsfile.binary-build-parallel` | ✅ |
+| hfrog-gql | `Jenkinsfile.binary-build` | ✅ |
+| wirerope-any | `Jenkinsfile.multi-arch` `Jenkinsfile.dynamic-build` | ✅ |
+| pgpour | `Jenkinsfile.binary-build` `Jenkinsfile.docker-build` | ✅ |
 
-### Category B — **Install scripts pointing at dead Nexus URLs**
+### install.sh templates / static fallbacks (created by the upgrade)
 
-End users running these get 404s today. Replace each with the same template r_lit now uses (`r_lit/scripts/install.sh.template`) hosted on R2.
+Each project gets two new files: a `*.sh.template` rendered by publisher
+(uploaded to R2 as `<prefix>/install.sh`), and a static `*.sh` fallback for
+local / offline use. Old nexus-pointing `install.sh` files were deleted.
 
-| File | Status |
+| Project | Template | Static fallback | Old file deleted |
+|---|---|---|---|
+| hfrog | `scripts/install-hfrog.sh.template` (new) | `scripts/install-hfrog.sh` (rewritten) | — |
+| hfrog-cli | `scripts/install-hfrog-cli.sh.template` (new) | `scripts/install-hfrog-cli.sh` (new) | `scripts/install.sh` (deleted) |
+| hfrog-gql | `scripts/install-hfrog-gql.sh.template` (new) | `scripts/install-hfrog-gql.sh` (new) | — |
+| wirerope-any | `scripts/install-wirerope.sh.template` (new, `{{TOOL}}` placeholder) | — | — |
+| pgpour | `scripts/install-pgpour.sh.template` (new) | `scripts/install.sh` (rewritten) | — |
+| r_lit (Jenkins copy) | (uses `r_lit/scripts/install.sh.template` fetched at build time) | — | `scripts/install.sh` (deleted) |
+
+### Other
+
+| Path | Status |
 |---|---|
-| `task/ci/pipeline/r_lit/scripts/install.sh` | **Dead — delete** (replaced by `r_lit/scripts/install.sh.template` rendered per-tool to R2) |
-| `task/ci/pipeline/pgpour/scripts/install.sh` | Rewrite for R2 |
-| `task/ci/pipeline/hfrog-cli/scripts/install.sh` | Rewrite for R2 |
-| `task/ci/pipeline/hfrog/scripts/install-hfrog.sh` | Rewrite for R2 |
-| `task/ci/pipeline/hfrog/scripts/build-upload-local.sh` | Rewrite (publishing target) |
-| `task/ci/pipeline/titan-forge/scripts/install-titan.sh` | Rewrite for R2 |
-| `_ai/skills/devops/install-rust-binary.sh.template` | Update template to R2 baseline |
+| `task/ci/pipeline/hfrog/scripts/build-upload-local.sh` | annotated `⚠ DEPRECATED` with the equivalent publisher invocation |
+| `task/ci/pipeline/wirerope-any/README-multi-arch.md` | install / Nexus sections rewritten for R2 |
+| `secrets/.credentials.env` | `R2_HFROG_*` block appended (the bucket-scoped token used by all the upgraded pipelines) |
 
-### Category C — **Infrastructure for Nexus itself**
+## Still on Nexus (deliberately, low priority)
 
-Nexus the service is still booted; if it's truly being shut down, also tear these down.
+These projects are not Rust binary distribution and were not in scope:
 
-| Path | Question |
-|---|---|
-| `compose/nexus/docker-compose.yml` `nginx.conf` `README.md` | Keep until last consumer migrated, then archive |
-| `compose/gateway/conf.d/nexus.conf` | Stop routing once decommissioned |
-| `scripts/services/nexus/deploy.sh` `deploy-remote.sh` | Move to `archived/` once stopped |
-| `compose/nexus/.env` (not on disk?) | Check |
-| `task/envs/nexus/.nexus.gamesci-lite` | Delete or move to `archived/` |
+- `task/ci/pipeline/godot/*/Jenkinsfile` — Godot game/engine artifacts. Large
+  payloads, may want a dedicated R2 bucket; treat as a separate migration.
+- `task/ci/pipeline/hybrix/*` — Android APK pipeline; APKs already use a
+  different distribution (life-jt OSS), only intermediate caches touch nexus.
+- `task/ci/pipeline/titan-forge/*` — Titan admin Rust binary deployment;
+  migration trivial after this commit (copy the hfrog Jenkinsfile pattern).
+- `task/ci/pipeline/batch_jp_url_to_s3/Jenkinsfile` — single internal
+  cron job; not user-visible.
 
-### Category D — **Credentials & global env**
+## Required Jenkins credentials (one-time setup)
 
-| File | Action |
-|---|---|
-| `secrets/.credentials.env` | Keep `NEXUS_GAMESCI_*` until Category A jobs are all ported, **then delete those three lines (18-20)** |
-| `task/envs/jenkins/init-credentials.groovy` | Drop `nexus-gamesci-lite` Jenkins credential after port |
+Add via Jenkins UI → Manage Credentials → System → Global → Add Credentials.
+Values copied verbatim from `secrets/.credentials.env`:
 
-### Category E — **Documentation only**
+| ID | Kind | Value source |
+|---|---|---|
+| `r2-hfrog-endpoint` | Secret text | `R2_HFROG_ENDPOINT` |
+| `r2-hfrog-access-key-id` | Secret text | `R2_HFROG_ACCESS_KEY_ID` |
+| `r2-hfrog-secret-access-key` | Secret text | `R2_HFROG_SECRET_ACCESS_KEY` |
+| `hfrog-postgres-url` | Secret text | `postgresql://${POSTGRES_HFROG_USER}:${POSTGRES_HFROG_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_HFROG_DB}` |
 
-These are descriptive — fix opportunistically along with the corresponding code change. Not blocking.
+The legacy `nexus-gamesci-lite` credential can be deleted once any
+out-of-scope pipelines that still use it (above) are migrated.
 
-```
-_ai/rules/devops/{ci,cd,docker}.md
-_ai/rules/backend/gql.md
-_ai/rules/{rlit/_tech-stack,mobile/{apk-build,apk-artifact,apk-naming},rtk,rtk-reference}.md
-_ai/skills/devops/{rust-binary-ci,wirerope-gql-build,hfrog-build-deploy}.md
-_ai/skills/mobile/apk-build-ci.md
-_ai/reference/{infrastructure,credentials-architecture,ci-hfrog-sync-and-scripts,apk-build-scripts}.md
-_ai/projects/{infra/service-registry,backend/{wirerope-hfrog,wirerope-life-wenshui}}.md
-_ai/machines/{offline/{README,dwb-z490},}.md
-README.md  CHANGELOG.md  claude.md
-docs/services/picboo/{README,ANDROID_BUILD}.md
-task/claude-plugins/gamesci-devops/{rules,skills}/**  (mirrors of _ai/)
-task/claude-plugins/manage.sh
-```
+## Sanity check after pipeline runs
 
-## Recommended migration order
-
-1. **Now** — kill the dead `task/ci/pipeline/r_lit/{Jenkinsfile.binary-build,scripts/install.sh}` (this repo's GitHub Action superseded it).
-2. **Next sprint** — port the highest-traffic services (`hfrog`, `hfrog-cli`, `titan-forge`) to R2 using the same `aws --endpoint-url $R2_ENDPOINT s3 cp` pattern as `r_lit/.github/workflows/release.yml`'s `mirror-r2` job.
-3. **Then** — port `wirerope-any`, `pgpour`, `hybrix`, `batch_jp_url_to_s3`.
-4. **Then** — port godot pipelines (largest payload, may want dedicated bucket).
-5. **Finally** — tear down Category C / D, then drop Category E docs in one sweep.
-
-## Reference: the 3-line R2 upload pattern
-
-Anywhere a Jenkinsfile / shell script today does:
+For any tool, the four "completeness" smoke tests:
 
 ```bash
-curl -fsS -u "$NEXUS_USER:$NEXUS_PASS" \
-  --upload-file ./build.gz \
-  "https://nexus.gamesci-lite.com/repository/raw-prod/<proj>/v1.2.3/<target>/build.gz"
+# 1. R2 install.sh is present
+curl -fsSL https://r2.gamesci-lite.com/<prefix>/install.sh | head -5
+
+# 2. HFrog has the version
+curl -sS https://hfrog.gamesci-lite.com/api/release/softwares/<tool> | jq '.data.versions[0]'
+
+# 3. Each platform has download_url + file_size + checksum_sha256
+curl -sS https://hfrog.gamesci-lite.com/api/release/releases/<tool>/v<ver> | jq '.data.platforms[]'
+
+# 4. Software metadata uses R2 URLs (not nexus)
+curl -sS https://hfrog.gamesci-lite.com/api/release/softwares/<tool> | jq '.data.{install_command, install_script_url}'
 ```
 
-…replace with (R2 is S3-API compatible):
-
-```bash
-aws --endpoint-url "$R2_ENDPOINT" s3 cp ./build.gz \
-  "s3://prod-hfrog/<proj>/v1.2.3/<target>/build.gz" \
-  --content-type "application/octet-stream" \
-  --cache-control "public, max-age=31536000, immutable"
-# Public URL → https://gamesci-lite.com/<proj>/v1.2.3/<target>/build.gz
-```
-
-Required env (from `secrets/.credentials.env`):
-
-```
-AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY
-AWS_DEFAULT_REGION=auto
-R2_ENDPOINT=https://240d77865abd8ef6f48521ba34845508.r2.cloudflarestorage.com
-```
-
-Bucket `prod-hfrog` is bound to the public custom domain
-`gamesci-lite.com`, so any S3 key becomes
-`https://gamesci-lite.com/<key>` with no auth needed.
+All four should succeed. If `download_url` is 404, the R2 custom domain
+binding to `prod-hfrog` is the missing piece — go to R2 dashboard and bind
+`r2.gamesci-lite.com` to bucket `prod-hfrog`.
