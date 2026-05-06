@@ -508,7 +508,7 @@ jobs:
   # ╚══════════════════════════════════════════════════════════════════╝
   sync-hfrog:
     name: Sync to HFrog
-    needs: [release, mirror-r2]
+    needs: [detect, release, mirror-r2]
     if: ${{ needs.release.outputs.released != '' && needs.release.outputs.released != '[]' }}
     runs-on: ubuntu-latest
     steps:
@@ -520,10 +520,23 @@ jobs:
           name: release-pkgs
           path: .
 
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client jq
+
       - name: Sync to HFrog
         env:
           RELEASED: ${{ needs.release.outputs.released }}
           PROJECTS: ${{ needs.detect.outputs.projects }}
+          # Optional — wire these as repo secrets if you want
+          # category_id auto-patching. Without them, sync still works
+          # (hfrog default category remains 'cli').
+          POSTGRES_HFROG_HOST:     ${{ secrets.POSTGRES_HFROG_HOST }}
+          POSTGRES_HFROG_PORT:     ${{ secrets.POSTGRES_HFROG_PORT }}
+          POSTGRES_HFROG_DB:       ${{ secrets.POSTGRES_HFROG_DB }}
+          POSTGRES_HFROG_USER:     ${{ secrets.POSTGRES_HFROG_USER }}
+          POSTGRES_HFROG_PASSWORD: ${{ secrets.POSTGRES_HFROG_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -671,12 +684,3 @@ jobs:
           done < <(echo "$RELEASED" | jq -c '.[]')
 
           echo ""; echo "✓ All hfrog records synced"
-        env:
-          # Optional — wire these as repo secrets if you want
-          # category_id auto-patching. Without them, sync still works
-          # (hfrog default category remains 'cli').
-          POSTGRES_HFROG_HOST:     ${{ secrets.POSTGRES_HFROG_HOST }}
-          POSTGRES_HFROG_PORT:     ${{ secrets.POSTGRES_HFROG_PORT }}
-          POSTGRES_HFROG_DB:       ${{ secrets.POSTGRES_HFROG_DB }}
-          POSTGRES_HFROG_USER:     ${{ secrets.POSTGRES_HFROG_USER }}
-          POSTGRES_HFROG_PASSWORD: ${{ secrets.POSTGRES_HFROG_PASSWORD }}
