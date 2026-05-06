@@ -104,6 +104,7 @@ jobs:
             gui=$(echo "$tool_meta"          | jq -r '.gui // false')
             mac_app_name=$(echo "$tool_meta" | jq -r --arg fb "$name"                '.macos_app_name // $fb')
             targets=$(echo "$tool_meta"      | jq -c --argjson d "$DEFAULT_TARGETS"  '.targets // $d')
+            features=$(echo "$tool_meta"     | jq -c '.cargo_features // []')
 
             entry=$(jq -nc \
               --arg n   "$name" \
@@ -114,8 +115,9 @@ jobs:
               --arg map "$mac_app_name" \
               --argjson g "$gui" \
               --argjson t "$targets" \
+              --argjson f "$features" \
               '{name:$n, version:$v, description:$d, category:$c, source_type:$s,
-                gui:$g, macos_app_name:$map, targets:$t}')
+                gui:$g, macos_app_name:$map, targets:$t, cargo_features:$f}')
             PROJECTS=$(echo "$PROJECTS" | jq -c --argjson e "$entry" '. + [$e]')
             echo "  + ${name} v${new_ver} (cat=${category} gui=${gui} targets=$(echo "$targets"|jq -c .))"
           done
@@ -241,14 +243,24 @@ jobs:
               echo "⤳ ${NAME} skipped (does not target ${{ matrix.target }})"
               continue
             fi
-            echo "🔨 Building ${NAME} for ${{ matrix.target }}"
+
+            # cargo --features arg from metadata's cargo_features list (joined by ',')
+            FEATURES=$(printf '%s' "$item" | jq -r '.cargo_features // [] | join(",")')
+            FEAT_ARG=""
+            if [ -n "$FEATURES" ]; then
+              FEAT_ARG="--features $FEATURES"
+              echo "🔨 Building ${NAME} for ${{ matrix.target }}  (features: ${FEATURES})"
+            else
+              echo "🔨 Building ${NAME} for ${{ matrix.target }}"
+            fi
+
             (
               cd "$NAME"
               if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
                 RUSTFLAGS='-C linker=cc -C link-args=-L/usr/lib/x86_64-linux-gnu' \
-                  cargo build --release --target ${{ matrix.target }}
+                  cargo build --release --target ${{ matrix.target }} $FEAT_ARG
               else
-                cargo build --release --target ${{ matrix.target }}
+                cargo build --release --target ${{ matrix.target }} $FEAT_ARG
               fi
             )
           done

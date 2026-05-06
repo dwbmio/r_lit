@@ -5,6 +5,10 @@
     "  - hfrog category (cli / desktop / service)",
     "  - GUI bundling (mac app name)",
     "  - Build matrix (which targets to build for this tool)",
+    "  - cargo_features: list of features to enable on `cargo build` (default: none).",
+    "    For tools that gate GUI behind a non-default feature (mj_atlas), include 'gui'",
+    "    so the published binary can launch the GUI in addition to its CLI subcommands.",
+    "    For tools where GUI is already in [features].default (maquette), this is redundant.",
     "Edit this file when adding/removing a tool, NOT release.yml."
   ],
   "defaults": {
@@ -30,14 +34,16 @@
       "category": "cli"
     },
     "mj_atlas": {
-      "description": "MJAtlas — 游戏 sprite 图集打包工具，UV-stable 增量构建、多边形 mesh、manifest 一等公民（inspect/diff/verify/tag）、可选 hfrog mirror、Godot native 输出。",
-      "category": "cli"
+      "description": "MJAtlas — 游戏 sprite 图集打包工具，UV-stable 增量构建、多边形 mesh、manifest 一等公民（inspect/diff/verify/tag）、可选 hfrog mirror、Godot native 输出。带 GUI 浏览器 + CLI 子命令双模。",
+      "category": "cli",
+      "cargo_features": ["gui"]
     },
     "maquette": {
       "description": "Kit-based low-poly 建模与导出工具 — GUI 堆方块，导出 glTF/OBJ 3D 模型与 2D sprite。",
       "category": "desktop",
       "gui": true,
-      "macos_app_name": "Maquette"
+      "macos_app_name": "Maquette",
+      "cargo_features": ["gui"]
     },
     "group_vibe_workbench": {
       "description": "桌面协作工作台 — GPUI + Murmur P2P，多人远程协同。",
