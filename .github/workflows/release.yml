@@ -84,7 +84,7 @@ jobs:
             done
           else
             echo "=== Checking version diffs (HEAD vs HEAD^) ==="
-            for dir in bulk_upload img_resize omniplan_covers_ding group_vibe_workbench maquette; do
+            for dir in bulk_upload img_resize textexture mj_atlas group_vibe_workbench maquette; do
               [ -f "${dir}/Cargo.toml" ] || continue
               NEW_VER=$(grep '^version' "${dir}/Cargo.toml" | head -1 | cut -d'"' -f2)
               OLD_VER=$(git show HEAD^:"${dir}/Cargo.toml" 2>/dev/null | grep '^version' | head -1 | cut -d'"' -f2 || echo "")
@@ -394,7 +394,8 @@ jobs:
           declare -A TOOL_DESC=(
             [img_resize]="图片批量缩放/压缩工具"
             [bulk_upload]="批量下载上传工具"
-            [omniplan_covers_ding]="OmniPlan 封面生成工具"
+            [textexture]="艺术字图片生成（阴影/描边/渐变/发光/霓虹）"
+            [mj_atlas]="MJ atlas / sprite 工具"
             [group_vibe_workbench]="桌面协作工作台"
             [maquette]="Kit-based low-poly 建模与导出工具"
           )

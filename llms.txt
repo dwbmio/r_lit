@@ -10,8 +10,10 @@
 
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
 - img_resize/ — Image resizing and compression
+- textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)
+- mj_atlas/ — Sprite atlas / packing tool with incremental builds
+- maquette/ — Kit-based low-poly modeling + glTF export (GUI + headless CLI)
 - group_vibe_workbench/ — Desktop collaboration workbench (GPUI + P2P)
-- omniplan_covers_ding/ — Internal tool (external path dependency, not portable)
 - video-generator/ — Video generation tools
 - crates/murmur/ — P2P collaboration library (iroh-net + Automerge CRDT)
 
