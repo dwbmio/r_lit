@@ -411,13 +411,32 @@ jobs:
           retention-days: 7
 
   # ╔══════════════════════════════════════════════════════════════════╗
-  # ║ Job 4 — Mirror to Cloudflare R2 (binaries + per-tool install.sh) ║
+  # ║ Job 4 — Publish to R2 + HFrog (single-tool, in parallel)         ║
+  # ║                                                                  ║
+  # ║ Both R2 mirroring and the HFrog 4-API sync (software / platform  ║
+  # ║ / version / release) live in scripts/hfrog_publisher.py — the    ║
+  # ║ same script all ci-all-in-one Jenkins pipelines now invoke. So    ║
+  # ║ "complete fields" here is identical to "complete fields" there.   ║
   # ╚══════════════════════════════════════════════════════════════════╝
-  mirror-r2:
-    name: Mirror to R2
-    needs: release
+  publish:
+    name: Publish ${{ matrix.tool.name }} v${{ matrix.tool.version }}
+    needs: [ detect, release ]
     if: ${{ needs.release.outputs.released != '' && needs.release.outputs.released != '[]' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: ${{ fromJson(needs.detect.outputs.projects) }}
+    env:
+      R2_ENDPOINT:           ${{ secrets.R2_ENDPOINT }}
+      R2_ACCESS_KEY_ID:      ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY:  ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+      HFROG_API:             https://hfrog.gamesci-lite.com
+      # Optional — wire these to enable category_id / readme_url / llms_txt
+      # SQL patch. Without them publisher still pushes the 4 hfrog APIs.
+      HFROG_PG_URL: ${{ secrets.POSTGRES_HFROG_HOST != '' && format('postgresql://{0}:{1}@{2}:{3}/{4}', secrets.POSTGRES_HFROG_USER, secrets.POSTGRES_HFROG_PASSWORD, secrets.POSTGRES_HFROG_HOST, secrets.POSTGRES_HFROG_PORT, secrets.POSTGRES_HFROG_DB) || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -427,260 +446,74 @@ jobs:
           name: release-pkgs
           path: .
 
-      - name: Mirror to R2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install publisher deps
+        run: pip install boto3 psycopg2-binary
+
+      - name: Build --asset args (one per actually-produced binary)
+        id: assets
         env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    auto
-          R2_ENDPOINT:           ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET:             ${{ secrets.R2_BUCKET }}
-          RELEASED:              ${{ needs.release.outputs.released }}
+          TOOL: ${{ toJson(matrix.tool) }}
         run: |
           set -euo pipefail
+          NAME=$(echo "$TOOL" | jq -r '.name')
+          VERSION=$(echo "$TOOL" | jq -r '.version')
+          GUI=$(echo "$TOOL" | jq -r '.gui')
 
-          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
-            echo "::error::Missing R2_* secrets — see docs/release.md for setup"
-            exit 1
-          fi
-
-          aws() { command aws --endpoint-url "$R2_ENDPOINT" "$@"; }
-
-          for item in $(echo "$RELEASED" | jq -c '.[]'); do
-            NAME=$(echo "$item" | jq -r '.name')
-            VERSION=$(echo "$item" | jq -r '.version')
-            PREFIX="${R2_KEY_PREFIX}/${NAME}"
-            VPREFIX="${PREFIX}/v${VERSION}"
-
-            echo ""; echo "━━━ R2: ${NAME} v${VERSION} ━━━"
-
-            for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
-              [ -f "$f" ] || continue
-              base=$(basename "$f")
-              echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/${base}"
-              aws s3 cp "$f" "s3://${R2_BUCKET}/${VPREFIX}/${base}" \
-                --content-type "application/octet-stream" \
-                --cache-control "public, max-age=31536000, immutable"
-            done
-
-            if [ -f "pkg-${NAME}/SHA256SUMS" ]; then
-              echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/SHA256SUMS"
-              aws s3 cp "pkg-${NAME}/SHA256SUMS" "s3://${R2_BUCKET}/${VPREFIX}/SHA256SUMS" \
-                --content-type "text/plain; charset=utf-8" \
-                --cache-control "public, max-age=300"
-            fi
-
-            # Render per-tool install.sh from template and upload as the
-            # canonical entry point: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
-            install_sh="$(mktemp)"
-            sed -e "s|{{TOOL}}|${NAME}|g" \
-                -e "s|{{VERSION}}|${VERSION}|g" \
-                -e "s|{{GITHUB_REPO}}|${GITHUB_REPO}|g" \
-                scripts/install.sh.template > "$install_sh"
-            chmod +x "$install_sh"
-            echo "  ↑ s3://${R2_BUCKET}/${PREFIX}/install.sh"
-            aws s3 cp "$install_sh" "s3://${R2_BUCKET}/${PREFIX}/install.sh" \
-              --content-type "text/x-shellscript; charset=utf-8" \
-              --cache-control "public, max-age=300"
-            echo "  ↑ s3://${R2_BUCKET}/${VPREFIX}/install.sh"
-            aws s3 cp "$install_sh" "s3://${R2_BUCKET}/${VPREFIX}/install.sh" \
-              --content-type "text/x-shellscript; charset=utf-8" \
-              --cache-control "public, max-age=31536000, immutable"
-            rm -f "$install_sh"
+          # GUI on macOS ships dmg, others ship tar.gz / zip.  Walk
+          # pkg-<name>/ to find what the build job actually produced;
+          # this also covers the case where MACOS_CERTIFICATE wasn't set
+          # and a target was silently skipped.
+          ASSET_ARGS=""
+          for f in pkg-${NAME}/${NAME}-*.tar.gz pkg-${NAME}/${NAME}-*.zip pkg-${NAME}/${NAME}-*.dmg; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            triple=$(echo "$base" | sed -E "s/^${NAME}-//; s/\\.(tar\\.gz|zip|dmg)\$//")
+            ASSET_ARGS="${ASSET_ARGS} --asset ${triple}=${f}"
           done
+          [ -n "$ASSET_ARGS" ] || { echo "::error::no assets for ${NAME}, abort"; exit 1; }
+          {
+            echo "asset_args<<EOF"
+            echo "${ASSET_ARGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          echo ""
-          echo "✓ All artifacts mirrored to https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/<tool>/{install.sh,v<ver>/...}"
-
-  # ╔══════════════════════════════════════════════════════════════════╗
-  # ║ Job 5 — Sync release records to HFrog                            ║
-  # ║                                                                  ║
-  # ║ Each hfrog API returns HTTP 200 even on business errors          ║
-  # ║ (with code != 0 in the body). We MUST inspect the JSON body.     ║
-  # ║                                                                  ║
-  # ║ Field map (hfrog accepts these — others are silently ignored):    ║
-  # ║   software : name, description, install_command, install_script_url ║
-  # ║   platform : code, os, arch, display_name                        ║
-  # ║   version  : software_name, version, is_latest, release_notes,   ║
-  # ║              created_by                                          ║
-  # ║   release  : software_name, version, platform_code, download_url,║
-  # ║              file_size, checksum_sha256, source_type             ║
-  # ║              (open_source | internal)                            ║
-  # ╚══════════════════════════════════════════════════════════════════╝
-  sync-hfrog:
-    name: Sync to HFrog
-    needs: [detect, release, mirror-r2]
-    if: ${{ needs.release.outputs.released != '' && needs.release.outputs.released != '[]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download release-pkgs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-pkgs
-          path: .
-
-      - name: Install psql client
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client jq
-
-      - name: Sync to HFrog
+      - name: Publish via hfrog_publisher.py
         env:
-          RELEASED: ${{ needs.release.outputs.released }}
-          PROJECTS: ${{ needs.detect.outputs.projects }}
-          # Optional — wire these as repo secrets if you want
-          # category_id auto-patching. Without them, sync still works
-          # (hfrog default category remains 'cli').
-          POSTGRES_HFROG_HOST:     ${{ secrets.POSTGRES_HFROG_HOST }}
-          POSTGRES_HFROG_PORT:     ${{ secrets.POSTGRES_HFROG_PORT }}
-          POSTGRES_HFROG_DB:       ${{ secrets.POSTGRES_HFROG_DB }}
-          POSTGRES_HFROG_USER:     ${{ secrets.POSTGRES_HFROG_USER }}
-          POSTGRES_HFROG_PASSWORD: ${{ secrets.POSTGRES_HFROG_PASSWORD }}
+          TOOL_JSON: ${{ toJson(matrix.tool) }}
+          ASSET_ARGS: ${{ steps.assets.outputs.asset_args }}
         run: |
           set -euo pipefail
+          NAME=$(echo "$TOOL_JSON"        | jq -r '.name')
+          VERSION=$(echo "$TOOL_JSON"     | jq -r '.version')
+          DESC=$(echo "$TOOL_JSON"        | jq -r '.description')
+          CATEGORY=$(echo "$TOOL_JSON"    | jq -r '.category')
+          SOURCE_TYPE=$(echo "$TOOL_JSON" | jq -r '.source_type')
 
-          HFROG="${HFROG_API}"
+          NOTES_FILE="pkg-${NAME}/RELEASE_NOTES.md"
+          [ -f "$NOTES_FILE" ] || NOTES_FILE=/dev/null
 
-          # PLATFORM_DICT maps a Rust target triple → "os|arch|display_name".
-          # Keep exactly the targets the build matrix actually produces.
-          declare -A PLATFORM_DICT=(
-            [x86_64-unknown-linux-gnu]="linux|x86_64|Linux x86_64"
-            [aarch64-unknown-linux-gnu]="linux|aarch64|Linux ARM64"
-            [aarch64-apple-darwin]="macos|aarch64|macOS ARM64 (Apple Silicon)"
-            [x86_64-apple-darwin]="macos|x86_64|macOS Intel"
-            [x86_64-pc-windows-msvc]="windows|x86_64|Windows x86_64"
-            [aarch64-pc-windows-msvc]="windows|aarch64|Windows ARM64"
-          )
+          INSTALL_URL="https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh"
 
-          # POST + parse JSON body, treat code != 0 (other than "exists") as failure.
-          hfrog_post() {
-            local endpoint=$1 data=$2 ; local resp http body code msg
-            resp=$(curl -sS -w "\n%{http_code}" -X POST "${HFROG}${endpoint}" \
-                   -H 'Content-Type: application/json' -d "$data" 2>&1) || true
-            http=$(echo "$resp" | tail -1)
-            body=$(echo "$resp" | head -n -1)
-            code=$(echo "$body" | jq -r '.code // empty' 2>/dev/null || echo '')
-            msg=$(echo  "$body" | jq -r '.msg  // empty' 2>/dev/null || echo '')
-
-            if [[ "$http" =~ ^2 ]] && [ "$code" = "0" ]; then
-              echo "  ✓ ${endpoint}"
-              return 0
-            fi
-            # Idempotent re-creation (already-exists) is fine; treat as success.
-            if echo "$msg $body" | grep -qiE 'already.*exist|AlreadyExist'; then
-              echo "  = ${endpoint} (already exists)"
-              return 0
-            fi
-            echo "::error::${endpoint} failed (http=${http} code=${code} msg=${msg})"
-            echo "    body=${body}"
-            return 1
-          }
-
-          # Iterate. Use a here-string + plain `for` so we never lose context to
-          # a pipe sub-shell (the old version of this script silently dropped
-          # PLATFORM_DICT and TOOL_DESC when run under `while read` in a pipe).
-          while IFS= read -r item; do
-            NAME=$(echo "$item" | jq -r '.name')
-            VERSION=$(echo "$item" | jq -r '.version')
-            TAG=$(echo "$item" | jq -r '.tag')
-
-            # Pull enriched metadata from PROJECTS (description, category, source_type, targets, gui).
-            META=$(echo "$PROJECTS" | jq -c --arg n "$NAME" '.[] | select(.name==$n)')
-            DESC=$(echo "$META"        | jq -r '.description')
-            CATEGORY=$(echo "$META"    | jq -r '.category')
-            SOURCE_TYPE=$(echo "$META" | jq -r '.source_type')
-            GUI=$(echo "$META"         | jq -r '.gui')
-            TARGETS=$(echo "$META"     | jq -r '.targets[]')
-
-            INSTALL_CMD="curl -fsSL https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh | bash"
-            INSTALL_SH_URL="https://${R2_PUBLIC_DOMAIN}/${R2_KEY_PREFIX}/${NAME}/install.sh"
-            GH_DL="https://github.com/${GITHUB_REPO}/releases/download/${TAG}"
-
-            # Use the actual GitHub Release notes as hfrog release_notes.
-            RELEASE_NOTES_FILE="pkg-${NAME}/RELEASE_NOTES.md"
-            if [ -f "$RELEASE_NOTES_FILE" ]; then
-              RELEASE_NOTES=$(cat "$RELEASE_NOTES_FILE")
-            else
-              RELEASE_NOTES="${NAME} v${VERSION}"
-            fi
-
-            echo ""; echo "━━━ HFrog: ${NAME} v${VERSION} (cat=${CATEGORY}) ━━━"
-
-            # 1. Software
-            payload=$(jq -nc \
-              --arg n "$NAME" --arg d "$DESC" \
-              --arg ic "$INSTALL_CMD" --arg is "$INSTALL_SH_URL" \
-              '{name:$n, description:$d, install_command:$ic, install_script_url:$is}')
-            hfrog_post "/api/release/softwares" "$payload"
-
-            # 2. Platforms (only those this tool actually targets)
-            for tgt in $TARGETS; do
-              spec="${PLATFORM_DICT[$tgt]:-}"
-              [ -n "$spec" ] || { echo "::warning::unknown target ${tgt}, skip"; continue; }
-              IFS='|' read -r os arch display <<< "$spec"
-              payload=$(jq -nc \
-                --arg c "$tgt" --arg o "$os" --arg a "$arch" --arg d "$display" \
-                '{code:$c, os:$o, arch:$a, display_name:$d}')
-              hfrog_post "/api/release/platforms" "$payload"
-            done
-
-            # 3. Version
-            payload=$(jq -nc \
-              --arg n "$NAME" --arg v "v${VERSION}" \
-              --arg notes "$RELEASE_NOTES" \
-              --arg by "github-actions/${{ github.run_number }}" \
-              '{software_name:$n, version:$v, is_latest:true,
-                release_notes:$notes, created_by:$by}')
-            hfrog_post "/api/release/versions" "$payload"
-
-            # 4. Releases — only for targets we actually shipped
-            for tgt in $TARGETS; do
-              spec="${PLATFORM_DICT[$tgt]:-}"
-              [ -n "$spec" ] || continue
-              IFS='|' read -r os arch display <<< "$spec"
-
-              if [ "$os" = "windows" ]; then
-                fname="${NAME}-${tgt}.zip"
-              elif [ "$GUI" = "true" ] && [ "$os" = "macos" ]; then
-                fname="${NAME}-${tgt}.dmg"
-              else
-                fname="${NAME}-${tgt}.tar.gz"
-              fi
-
-              local_path="pkg-${NAME}/${fname}"
-              if [ ! -f "$local_path" ]; then
-                echo "  ⚠ ${fname} not produced (likely unsigned/skipped), skip release record"
-                continue
-              fi
-
-              size=$(stat -c%s "$local_path")
-              sha=$(sha256sum "$local_path" | cut -d' ' -f1)
-              dl="${GH_DL}/${fname}"
-
-              payload=$(jq -nc \
-                --arg n "$NAME" --arg v "v${VERSION}" --arg c "$tgt" \
-                --arg url "$dl" --argjson sz "$size" \
-                --arg sha "$sha" --arg src "$SOURCE_TYPE" \
-                '{software_name:$n, version:$v, platform_code:$c,
-                  download_url:$url, file_size:$sz, checksum_sha256:$sha,
-                  source_type:$src}')
-              hfrog_post "/api/release/releases" "$payload"
-            done
-
-            # 5. Category — hfrog HTTP API does not (yet) accept category;
-            #    if the optional Postgres credentials are set we patch directly.
-            if [ -n "${POSTGRES_HFROG_HOST:-}" ] && command -v psql >/dev/null 2>&1; then
-              echo "  ⌁ patching category=${CATEGORY} via SQL"
-              PGPASSWORD="${POSTGRES_HFROG_PASSWORD}" psql -v ON_ERROR_STOP=1 \
-                "postgresql://${POSTGRES_HFROG_USER}@${POSTGRES_HFROG_HOST}:${POSTGRES_HFROG_PORT:-5432}/${POSTGRES_HFROG_DB}" \
-                -c "UPDATE rb_softwares
-                       SET category_id = (SELECT id FROM rb_categories WHERE code = '${CATEGORY}')
-                     WHERE name = '${NAME}';" >/dev/null
-              echo "  ✓ category set"
-            else
-              echo "  · POSTGRES_HFROG_* not set — category sync skipped"
-            fi
-          done < <(echo "$RELEASED" | jq -c '.[]')
-
-          echo ""; echo "✓ All hfrog records synced"
+          python3 scripts/hfrog_publisher.py publish \
+            --tool "$NAME" --version "$VERSION" \
+            $ASSET_ARGS \
+            --description "$DESC" \
+            --category    "$CATEGORY" \
+            --source-type "$SOURCE_TYPE" \
+            --install-command    "curl -fsSL ${INSTALL_URL} | bash" \
+            --install-script-url "${INSTALL_URL}" \
+            --readme-url   "https://github.com/${GITHUB_REPO}/blob/main/${NAME}/README.md" \
+            --llms-txt-url "https://raw.githubusercontent.com/${GITHUB_REPO}/main/${NAME}/llms.txt" \
+            --r2-prefix          "${R2_KEY_PREFIX}/${NAME}" \
+            --r2-public-domain   "${R2_PUBLIC_DOMAIN}" \
+            --upload-r2 \
+            --install-template   scripts/install.sh.template \
+            --github-repo        "${GITHUB_REPO}" \
+            --download-url-template "https://github.com/${GITHUB_REPO}/releases/download/${NAME}-v{version_no_v}/{filename}" \
+            --release-notes "$(cat "$NOTES_FILE" 2>/dev/null || echo "${NAME} v${VERSION}")" \
+            --created-by "github-actions/${{ github.run_number }}"
