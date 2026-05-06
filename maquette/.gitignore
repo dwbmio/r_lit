@@ -6,3 +6,12 @@
 !docs/export/*.md
 !docs/icons/*.md
 !docs/texture/*.md
+
+# Bench harness transient output (worker stdout / GNU time / .pid / .ps).
+# Keep raw/ JSONL + summaries/ JSON+MD as the persistent evidence.
+reports/**/logs/
+
+# Re-include summary markdowns under reports/ — the *.md ignore from the
+# repo-root .gitignore would otherwise hide them, but they are part of the
+# evidence chain referenced from README.md / NEXT.md.
+!reports/**/*.md
