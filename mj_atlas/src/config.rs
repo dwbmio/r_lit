@@ -70,7 +70,7 @@ fn default_endpoint() -> String {
 impl Default for HfrogConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             endpoint: default_endpoint(),
             token: String::new(),
             default_runtime: default_runtime(),

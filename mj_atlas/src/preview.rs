@@ -2547,6 +2547,7 @@ impl MJAtlasApp {
         // ── React to config save attempts (deferred from settings panel) ──
         if save_config_ok {
             self.toast("Settings saved", ToastKind::Success);
+            self.retry_probe();
         }
         if let Some(e) = save_config_err {
             self.toast(format!("Settings save failed: {}", e), ToastKind::Error);
