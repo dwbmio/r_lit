@@ -1715,9 +1715,8 @@ impl MJAtlasApp {
                 //   ☁︎  = only on hfrog
                 //   💾 = only on disk (recent_files)
                 //   ☁︎💾 = both (display name matches a cloud project AND a
-                //          local recent path). Clicking a synced row prefers
-                //          local — it's instant and the cloud copy is
-                //          identical bytes.
+                //          local recent path). Rows are informational only;
+                //          explicit action buttons on the right open things.
                 //
                 // Connection status decides what we can show:
                 //   Probing  → spinner placeholder
@@ -1738,9 +1737,17 @@ impl MJAtlasApp {
             ui.label(egui::RichText::new("Projects").size(13.0).color(egui::Color32::GRAY));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Refresh re-probes hfrog AND re-fetches the cloud list.
-                if ui
-                    .small_button("Refresh")
-                    .on_hover_text("Re-probe hfrog and refresh project list")
+                let refresh_busy = self.probe_rx.is_some() || self.cloud_list_rx.is_some();
+                let refresh = ui.add_enabled(
+                    !refresh_busy,
+                    egui::Button::new(if refresh_busy { "Checking..." } else { "Refresh" }),
+                );
+                if refresh
+                    .on_hover_text(if refresh_busy {
+                        "hfrog probe or project refresh is already running"
+                    } else {
+                        "Re-probe hfrog and refresh project list"
+                    })
                     .clicked()
                 {
                     self.retry_probe();
@@ -1750,6 +1757,52 @@ impl MJAtlasApp {
                 }
             });
         });
+        ui.add_space(4.0);
+
+        match self.connection.mode {
+            ConnectionMode::Probing => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new("Cloud status: checking hfrog...")
+                            .size(12.0)
+                            .color(egui::Color32::GRAY),
+                    );
+                });
+            }
+            ConnectionMode::Online => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Cloud status: online · {}",
+                            host_of(&self.connection.probed_endpoint)
+                        ))
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(60, 180, 90)),
+                    );
+                    if self.cloud_list_rx.is_some() {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Loading cloud projects...")
+                                .size(12.0)
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
+                });
+            }
+            ConnectionMode::Offline => {
+                let detail = if self.connection.last_error.is_empty() {
+                    "local-only".to_string()
+                } else {
+                    format!("local-only ({})", self.connection.last_error)
+                };
+                ui.label(
+                    egui::RichText::new(format!("Cloud status: offline · {}", detail))
+                        .size(12.0)
+                        .color(egui::Color32::DARK_GRAY),
+                );
+            }
+        }
         ui.add_space(4.0);
 
         // Build a unified row list with origin tags. Use a BTreeMap keyed by
@@ -1775,20 +1828,9 @@ impl MJAtlasApp {
             rows.entry(display).or_default().local = Some(path.clone());
         }
 
-        // Probing placeholder so the user doesn't think "empty list = bug".
-        if matches!(self.connection.mode, ConnectionMode::Probing) {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    egui::RichText::new("Checking hfrog…")
-                        .size(12.0)
-                        .color(egui::Color32::GRAY),
-                );
-            });
-        }
-
         if rows.is_empty()
             && !matches!(self.connection.mode, ConnectionMode::Probing)
+            && self.cloud_list_rx.is_none()
         {
             ui.label(
                 egui::RichText::new("(no projects yet — click New Project)")
@@ -1812,22 +1854,11 @@ impl MJAtlasApp {
                         .size(12.0)
                         .color(egui::Color32::GRAY),
                 );
-                let resp = ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(display)
-                            .size(13.0)
-                            .color(egui::Color32::from_rgb(100, 180, 255)),
-                    )
-                    .sense(egui::Sense::click()),
+                ui.label(
+                    egui::RichText::new(display)
+                        .size(13.0)
+                        .color(egui::Color32::from_rgb(100, 180, 255)),
                 );
-                if resp.clicked() {
-                    // Prefer local on synced rows (instant + identical bytes).
-                    if let Some(p) = &origins.local {
-                        open_local = Some(p.clone());
-                    } else if let Some(cp) = &origins.cloud {
-                        open_cloud = Some(cp.clone());
-                    }
-                }
                 if let Some(cp) = &origins.cloud {
                     ui.label(
                         egui::RichText::new(format!("v{}", short_ver(&cp.ver)))
@@ -1835,6 +1866,23 @@ impl MJAtlasApp {
                             .color(egui::Color32::DARK_GRAY),
                     );
                 }
+                let remaining = ui.available_width().max(120.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(remaining, 22.0),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if let Some(cp) = &origins.cloud {
+                            if ui.small_button("Open Cloud").clicked() {
+                                open_cloud = Some(cp.clone());
+                            }
+                        }
+                        if let Some(p) = &origins.local {
+                            if ui.small_button("Open Local").clicked() {
+                                open_local = Some(p.clone());
+                            }
+                        }
+                    },
+                );
             });
         }
 

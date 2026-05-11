@@ -378,28 +378,12 @@ pub fn download_project(cfg: &HfrogConfig, project: &CloudProject) -> Result<Vec
         .text()
         .map_err(|e| AppError::Custom(format!("hfrog: presign body: {}", e)))?;
 
-    // Server replies with `RespVO<String>` where `data` is the presigned URL.
-    #[derive(serde::Deserialize)]
-    struct PresignResp {
-        code: i32,
-        #[serde(default)]
-        msg: String,
-        #[serde(default)]
-        data: String,
-    }
-    let parsed: PresignResp = serde_json::from_str(&body)
-        .map_err(|e| AppError::Custom(format!("hfrog: presign parse: {} (body={})", e, body)))?;
-    if parsed.code != 0 || parsed.data.is_empty() {
-        return Err(AppError::Custom(format!(
-            "hfrog: presign code={} msg={}",
-            parsed.code, parsed.msg
-        )));
-    }
+    let presigned_url = parse_presigned_url(&body)?;
 
     // Hop two: GET the S3 URL. No auth header — the URL is signed.
     let s3_resp = client
         .inner
-        .get(&parsed.data)
+        .get(&presigned_url)
         .send()
         .map_err(|e| AppError::Custom(format!("hfrog: S3 fetch: {}", e)))?;
     if !s3_resp.status().is_success() {
@@ -412,6 +396,37 @@ pub fn download_project(cfg: &HfrogConfig, project: &CloudProject) -> Result<Vec
         .bytes()
         .map_err(|e| AppError::Custom(format!("hfrog: S3 body: {}", e)))?;
     Ok(bytes.to_vec())
+}
+
+fn parse_presigned_url(body: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct PresignResp {
+        code: i32,
+        #[serde(default)]
+        msg: String,
+        #[serde(default)]
+        data: serde_json::Value,
+    }
+
+    let parsed: PresignResp = serde_json::from_str(body)
+        .map_err(|e| AppError::Custom(format!("hfrog: presign parse: {} (body={})", e, body)))?;
+
+    let url = match &parsed.data {
+        // Older hfrog returned RespVO<String>.
+        serde_json::Value::String(s) => s.as_str(),
+        // Current hfrog returns RespVO<{ url: String }>.
+        serde_json::Value::Object(map) => map.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+        _ => "",
+    };
+
+    if parsed.code != 0 || url.is_empty() {
+        return Err(AppError::Custom(format!(
+            "hfrog: presign code={} msg={}",
+            parsed.code, parsed.msg
+        )));
+    }
+
+    Ok(url.to_string())
 }
 
 fn urlencode(s: &str) -> String {
@@ -651,5 +666,20 @@ mod tests {
         assert_eq!(mime_for("a.tres"), "text/plain");
         assert_eq!(mime_for("a.log"), "text/plain");
         assert_eq!(mime_for("a.unknown"), "application/octet-stream");
+    }
+
+    #[test]
+    fn presigned_url_accepts_string_or_object_data() {
+        let legacy = r#"{"code":0,"msg":"","data":"https://example.test/file"}"#;
+        assert_eq!(
+            parse_presigned_url(legacy).unwrap(),
+            "https://example.test/file"
+        );
+
+        let current = r#"{"code":0,"msg":"","data":{"url":"https://example.test/file"}}"#;
+        assert_eq!(
+            parse_presigned_url(current).unwrap(),
+            "https://example.test/file"
+        );
     }
 }
