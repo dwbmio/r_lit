@@ -38,6 +38,10 @@
       "category": "cli",
       "cargo_features": ["gui"]
     },
+    "looplog": {
+      "description": "本地日志摄入 / 查询工具 — SQLite 落盘、24 小时短周期保留、loopback HTTP 协议、CLI JSON 查询，并提供微信小程序 AI 自主循环调试指南。",
+      "category": "cli"
+    },
     "maquette": {
       "description": "Kit-based low-poly 建模与导出工具 — GUI 堆方块，导出 glTF/OBJ 3D 模型与 2D sprite。",
       "category": "desktop",

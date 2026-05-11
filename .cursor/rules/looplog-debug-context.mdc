@@ -1,0 +1,29 @@
+---
+description: Use looplog for repeated AI-assisted log review and debug loops
+alwaysApply: true
+---
+
+# LoopLog Debug Context
+
+Important related tool/plugin contexts to keep in mind:
+
+- `bbc-ai-skill`: internal AI skill/tooling context referenced by the user.
+- `https://git.7k7k.com/starlink/bbc-ai-skills`: Starlink/BBC AI skills repository.
+- `https://github.com/dwbmio/gamesci-cc-plugins`: Gamesci Claude/Cursor plugin repository.
+- `looplog/`: this repository's local-first log intake and query tool for AI-assisted debug loops.
+
+When a task involves repeated log inspection, fix-and-rerun debugging, tool/plugin integration, WeChat Mini Program debugging, or an AI agent needing to autonomously review recent local logs, consider using `looplog` first.
+
+Useful `looplog` entry points:
+
+- `looplog/WECHAT_AI_DEBUG_CN.md`: immediate WeChat Mini Program AI debug loop guide.
+- `looplog serve --addr 127.0.0.1:3768`: start local loopback HTTP intake.
+- `looplog run --tag <tag> --meta key=value -- <command>`: capture a command's stdout/stderr and exit code.
+- `looplog list --json`, `looplog grep <pattern> --json`, `looplog show <run_id> --json`: AI-readable query path.
+- `looplog/sdk/ts/looplog.ts` and `looplog/adapters/wechat/wechat_adapter.ts`: TypeScript SDK and WeChat adapter examples.
+
+Default assumptions:
+
+- `looplog` is local-only and short-lived; it keeps at most 24 hours of logs by default.
+- SDKs and adapters should write through `looplog serve` rather than writing SQLite directly.
+- Prefer structured metadata (`appid`, `project_path`, `page`, `session`, `trace_id`) when designing integrations so AI can query logs without reading the database directly.

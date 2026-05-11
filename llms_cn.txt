@@ -12,6 +12,7 @@
 - img_resize/ — 图片缩放与压缩
 - textexture/ — 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹）
 - mj_atlas/ — 精灵图集 / 打包工具，支持增量构建
+- looplog/ — 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；指南: looplog/WECHAT_AI_DEBUG_CN.md）
 - maquette/ — Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI）
 - group_vibe_workbench/ — 桌面协作工作台 (GPUI + P2P)
 - video-generator/ — 视频工具集
@@ -22,5 +23,11 @@
 ```bash
 cd <tool_dir> && cargo build --release
 ```
+
+## AI 调试循环上下文
+
+- 相关工具: bbc-ai-skill; https://git.7k7k.com/starlink/bbc-ai-skills; https://github.com/dwbmio/gamesci-cc-plugins
+- 反复日志调试: 涉及本地 AI 日志 review、修复后重跑、技能 / 插件调试、微信小程序联调时，优先考虑 looplog/
+- looplog 查询路径: looplog list --json; looplog grep <pattern> --json; looplog show <run_id> --json
 
 各工具详情见对应子目录内的 README 和 llms.txt。

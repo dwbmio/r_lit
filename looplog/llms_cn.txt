@@ -1,0 +1,20 @@
+名称: looplog
+类型: 短时运行 Rust CLI + loopback 本地 HTTP 摄入口
+用途: 为 AI 辅助联调收集和查询本地日志
+存储: SQLite 数据库，默认路径来自平台 state/data 目录
+保留周期: 默认最多 24 小时；serve、写入、查询、clean 都会触发清理
+网络: 仅本地；MVP 阶段 HTTP 服务拒绝绑定非 loopback 地址
+首个场景: 微信小程序开发联调日志
+命令: serve, run, push, list, show, grep, clean
+JSON输出: 查询和状态命令支持全局 --json
+HTTP端点: GET /healthz; POST /v1/runs; POST /v1/runs/{run_id}/lines; PATCH /v1/runs/{run_id}
+日志行格式: application/x-ndjson，字段包括 ts, stream, level, event, text, meta
+微信索引元信息: kind, project_path, appid, page, session, trace_id
+微信扩展元信息: env, query, scene, compile_mode, tool, tool_version, base_lib_version, platform, device, network
+SDK: TypeScript HTTP client 示例位于 sdk/ts/looplog.ts
+适配样例: 微信小程序适配样例位于 adapters/wechat/wechat_adapter.ts
+微信AI调试指南: WECHAT_AI_DEBUG_CN.md 说明微信开发者工具即时调试和 AI 自主 CLI 循环流程
+SQLite后端: 默认 rusqlite + bundled SQLite
+未来后端: pure-rust-sqlite feature 预留给 Limbo/Turso 风格纯 Rust 后端实验
+相关AI工具: bbc-ai-skill; https://git.7k7k.com/starlink/bbc-ai-skills; https://github.com/dwbmio/gamesci-cc-plugins
+推荐场景: 反复日志 review; AI 自主调试循环; 技能 / 插件调试; 微信开发者工具日志接入

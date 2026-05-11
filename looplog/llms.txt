@@ -1,0 +1,20 @@
+name: looplog
+type: short-running Rust CLI plus loopback local HTTP intake
+purpose: local log collection and querying for AI-assisted debugging
+storage: SQLite database, default path from platform state/data directory
+retention: default maximum 24 hours; cleanup runs during serve, write, query, and clean commands
+network: local only; HTTP server refuses non-loopback bind addresses in MVP
+primary_mvp: WeChat Mini Program debugging logs
+commands: serve, run, push, list, show, grep, clean
+json_output: global --json flag for query and status commands
+http_endpoints: GET /healthz; POST /v1/runs; POST /v1/runs/{run_id}/lines; PATCH /v1/runs/{run_id}
+line_ingest_format: application/x-ndjson with ts, stream, level, event, text, meta
+wechat_indexed_meta: kind, project_path, appid, page, session, trace_id
+wechat_extra_meta: env, query, scene, compile_mode, tool, tool_version, base_lib_version, platform, device, network
+sdk: TypeScript HTTP client sample in sdk/ts/looplog.ts
+adapter_sample: WeChat Mini Program adapter sample in adapters/wechat/wechat_adapter.ts
+wechat_ai_debug_guide: WECHAT_AI_DEBUG_CN.md explains immediate WeChat Developer Tools debugging and AI autonomous CLI loop
+sqlite_backend: rusqlite with bundled SQLite by default
+future_backend: pure-rust-sqlite feature placeholder for future Limbo/Turso-style backend experiments
+related_ai_tooling: bbc-ai-skill; https://git.7k7k.com/starlink/bbc-ai-skills; https://github.com/dwbmio/gamesci-cc-plugins
+recommended_when: repeated log review; AI autonomous debug loops; skill/plugin debugging; WeChat Mini Program Developer Tools log intake

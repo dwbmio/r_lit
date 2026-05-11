@@ -17,6 +17,7 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 | [img_resize](img_resize/) | Image resizing and compression |
 | [textexture](textexture/) | Art-text image generation (shadow / stroke / gradient / glow / neon) |
 | [mj_atlas](mj_atlas/) | Sprite atlas / packing tool with incremental builds |
+| [looplog](looplog/) | Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; see [WeChat AI debug guide](looplog/WECHAT_AI_DEBUG_CN.md)) |
 | [maquette](maquette/) | Kit-based low-poly modeling + glTF export (GUI + headless CLI) |
 | [group_vibe_workbench](group_vibe_workbench/) | Desktop collaboration workbench (GPUI + P2P) |
 | [video-generator](video-generator/) | Video generation tools |

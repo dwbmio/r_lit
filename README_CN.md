@@ -17,6 +17,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 | [img_resize](img_resize/) | 图片缩放与压缩 |
 | [textexture](textexture/) | 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹） |
 | [mj_atlas](mj_atlas/) | 精灵图集 / 打包工具，支持增量构建 |
+| [looplog](looplog/) | 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；见 [微信 AI 调试指南](looplog/WECHAT_AI_DEBUG_CN.md)） |
 | [maquette](maquette/) | Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI） |
 | [group_vibe_workbench](group_vibe_workbench/) | 桌面协作工作台 (GPUI + P2P) |
 | [video-generator](video-generator/) | 视频工具集 |

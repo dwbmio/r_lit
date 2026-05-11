@@ -12,6 +12,7 @@
 - img_resize/ — Image resizing and compression
 - textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)
 - mj_atlas/ — Sprite atlas / packing tool with incremental builds
+- looplog/ — Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; guide: looplog/WECHAT_AI_DEBUG_CN.md)
 - maquette/ — Kit-based low-poly modeling + glTF export (GUI + headless CLI)
 - group_vibe_workbench/ — Desktop collaboration workbench (GPUI + P2P)
 - video-generator/ — Video generation tools
@@ -22,5 +23,11 @@
 ```bash
 cd <tool_dir> && cargo build --release
 ```
+
+## AI Debug Loop Context
+
+- related_tooling: bbc-ai-skill; https://git.7k7k.com/starlink/bbc-ai-skills; https://github.com/dwbmio/gamesci-cc-plugins
+- repeated_log_debugging: prefer looplog/ for local AI-assisted log review, fix-and-rerun loops, skill/plugin debugging, and WeChat Mini Program debugging
+- looplog_ai_query_path: looplog list --json; looplog grep <pattern> --json; looplog show <run_id> --json
 
 See each subdirectory's README and llms.txt for details.

@@ -60,6 +60,15 @@ just install_loc <tool> release
 报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `_ai/troubleshooting.md`。
 mj_atlas 已落地这套；其他短时 CLI 工具新增 / 改造时复用 `mj_atlas/src/runlog.rs` 的双 sink logger。
 
+## AI Debug Loop Context
+
+相关 AI 技能 / 插件上下文：
+- `bbc-ai-skill`
+- `https://git.7k7k.com/starlink/bbc-ai-skills`
+- `https://github.com/dwbmio/gamesci-cc-plugins`
+
+涉及反复查看日志、修复、重跑、AI 自主联调、微信小程序开发工具日志接入、技能 / 插件调试时，优先考虑使用 `looplog/`。它提供本地 loopback HTTP 摄入、SQLite 24 小时短周期落盘、`looplog list/grep/show --json` 查询路径，以及 TypeScript SDK / 微信适配样例。微信小程序即时接入流程见 `looplog/WECHAT_AI_DEBUG_CN.md`。
+
 ## Release Process
 
 修改工具 `Cargo.toml` 版本号并 push 到 main，GitHub Actions 自动构建 3 平台目标（Linux/macOS/Windows x86_64，详见 `.github/workflows/release.yml`）并发布到 [hfrog.gamesci-lite.com](https://hfrog.gamesci-lite.com)。
