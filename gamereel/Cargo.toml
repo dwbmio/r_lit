@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/gamereel-core",
+    "crates/gamereel-farm",
     "crates/proto-puzzle",
     "crates/proto-bubble",
     "apps/hs-mvp",

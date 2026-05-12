@@ -479,3 +479,86 @@ The M3 commit landed the CUDA pipeline but **the demo never used it** — `apps/
 - ~1000 ms wall (300 fps) is the **floor without M4/M5**. The 284 ms CUDA init + 419 ms CPU compose are unavoidable on a 13700K + RTX 3060 with the current architecture.
 - M5 batch alone would push 100-video throughput to 485 fps — a real production-shaped number.
 - M4 + M5 combined would target ≥1500 fps single-video on this same hardware (predicted, not yet validated).
+
+---
+
+## M5 — Worker pool: amortize CUDA init across batches
+
+### O-018 — `LocalWorker` with persistent CUDA + ffmpeg context    [milestone: M5-2]
+
+**Hypothesis**
+- Expected impact: **single-worker steady state ≥ 600 fps** by paying CUDA init exactly once per worker process (vs once per render in the M3 single-shot path that the demo had been using).
+- Mechanism: `LocalWorker` owns `CudaConverter` + `CudaHwContext` for its lifetime; only the ffmpeg encoder context (which holds h264_nvenc DPB / B-frame state that *cannot* be reused across videos) is rebuilt per job. CUDA init = ~290 ms one-shot; per-job overhead = ~17 ms ffmpeg encoder open + ~265 ms render loop.
+
+**Test (self-proof)**
+- File: `crates/gamereel-farm/tests/local_worker_amortizes_init.rs::worker_init_then_5_jobs_amortizes_cuda_setup`
+- Spins up one worker, runs 5 jobs, asserts:
+  * `worker.init_wall_ms` is in [100, 1500] ms (~290 expected on RTX 3060)
+  * Median wall of jobs 1..5 is ≤ first job × 0.95 (proves amortization)
+  * Total wall < 5 × first (proves it's not just luck)
+
+**Measurement**
+- worker init: 293 ms
+- first job:   323 ms
+- jobs 1..5 median: **287 ms each** ← steady state
+- savings vs naive 5 × first:  141 ms (8.7%)
+
+This translates to **287 ms per video = 1045 fps** on hs-mvp (300 frames / 0.287 s) — **3.4× over the M3 single-shot demo (980 ms / 306 fps)** and **2.2× over `cuda_vram_leak`'s sequential 100-cycle 484 fps baseline** (which rebuilt CudaConverter per cycle).
+
+**Retro**
+- Hypothesis vs reality: **massively over-delivered**. We expected ≥ 600 fps, got 1045 fps. The win was bigger than projected because keeping `CudaConverter`'s persistent device buffers and `CudaHwContext`'s NV12 pool *also* keeps the NVENC encoder warm across jobs — NVENC's first-encode latency (kernel scheduling, GPU clock ramp) doesn't reset between jobs.
+- Lessons:
+  1. **Persistence pays compounding interest.** CUDA + hwframes + encoder state all share warm-up costs that amortize together.
+  2. The 17 ms/job ffmpeg encoder rebuild is the unavoidable floor — `h264_nvenc`'s reference-frame DPB doesn't survive a video boundary cleanly. Worth revisiting if NVENC API ever exposes a "reset" path.
+
+---
+
+### O-019 — `WorkerPool` measurement — throughput peaks at 2 workers, not 6    [milestone: M5-3 + M5-7]
+
+**Hypothesis**
+- Expected impact: **6 workers × LocalWorker on RTX 3060** would give 4–5× scaling (the consensus assumption from the M3 NVENC concurrency probe that suggested 6+ sessions saturate the engine).
+- Mechanism: `WorkerPool` spawns N `LocalWorker`s on dedicated OS threads (CUDA context affinity); jobs round-robin through bounded mpsc channels (capacity 1 per worker, total = N).
+
+**Test (self-proof)**
+- File: `apps/hs-mvp/src/bin/farm_bench.rs` — sweeps {1, 2, 3, 4, 6, 8} workers × 100 hs-mvp jobs, records wall + p50 + p99 + throughput. Output: `benches/results/m5_farm.json`.
+
+**Measurement** (RTX 3060, 100 jobs of 720x1080 × 30 fps × 10 s hs-mvp)
+
+| Workers | Wall (s) | Throughput (fps) | videos/min | p50 (ms) | p99 (ms) |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 29.9 | 1004 | 201 | **284** | **290** |
+| **2** | **26.9** | **1113** | **223** | 518 | 547 |
+| 3 | 27.1 | 1107 | 221 | 781 | 810 |
+| 4 | 27.4 | 1095 | 219 | 1047 | 1101 |
+| 6 | 27.8 | 1078 | 216 | 1583 | 1695 |
+| 8 | 28.3 | 1062 | 212 | 2112 | 2329 |
+
+**Retro: hypothesis was wrong, the data revealed something more useful**
+- **Throughput peak at workers=2** (1113 fps) — beyond that, throughput slightly *declines* and p99 latency scales linearly with worker count.
+- **NVENC is the bottleneck.** Single LocalWorker already hits 1004 fps which is essentially the RTX 3060's NVENC engine ceiling for 720x1080. Adding workers just queues more jobs against the same hardware encoder; they wait their turn.
+- The "6 workers per RTX 3060" rule of thumb (which I had baked into `probe::workers_for_gpu`) came from the standalone NVENC concurrency test, where 6 streams *can* coexist. But "coexist without erroring" is not the same as "scale linearly" — at 1080p the engine is fully utilized by ~2 streams.
+- **Critical user-facing implication**: for "near-real-time" use cases (sub-300 ms per video), use **workers=1** — same throughput within 10%, p99 cut in half (290 ms vs 547 ms). For pure batch throughput, workers=2.
+- Lessons:
+  1. **Lookup tables built from hardware spec sheets lie.** Always validate the rule of thumb against the actual workload.
+  2. p50/p99 latency reveals queue contention earlier than throughput does. Throughput plateau + latency rise = hardware saturated.
+
+**Updated `probe::workers_for_gpu`**: now returns 2 (not 6) for RTX 3060 / RTX 4060, with new `workers_for_latency()` companion that always returns 1 for the latency-sensitive branch.
+
+---
+
+### O-020 — Cloud-ready `Worker` trait abstraction (RemoteWorker stub)    [milestone: M5 — interface only]
+
+**Hypothesis**
+- Expected impact: zero runtime cost today, **zero mainline code changes required** to add a future RemoteWorker (gRPC/HTTP to a cloud GPU node).
+- Mechanism: `Worker` async trait with `LocalWorker` and stub `RemoteWorker` implementations. The job queue / dispatch layer (`WorkerPool`) is generic over `Worker` and never names the concrete type.
+
+**Test (self-proof)**
+- The stub `RemoteWorker::new()` returns `WorkerError::Init("not implemented yet — would target ...")` so accidental wire-up fails loudly.
+- `RenderJob` and `RenderResult` derive `serde::{Serialize, Deserialize}` — the gRPC/HTTP wire format is already nailed down.
+
+**Measurement**
+- N/A as a perf change. The cost is entirely "an extra trait + stub module".
+
+**Retro**
+- Lessons: pre-defining the trait + the wire-format contract today (cheap) is far less work than retrofitting them after a concrete LocalWorker has grown its own assumptions about being in-process. The user explicitly asked for cloud-ready — landed it as scaffolding now.
+- Followup: M5+1 implements RemoteWorker. The contract guarantees no `WorkerPool`, `JobQueue`, or CLI changes needed — if the implementation has to leak details into the dispatcher, that's a smell to refactor.

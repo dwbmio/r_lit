@@ -53,8 +53,9 @@ Single-stream 720x1080 / 30 fps / 10 s on RTX 3060 + i7-13700K. Two columns matt
 | **M1** | h264_nvenc p4 balanced (auto) | **377 (2.48× M0)** | NVENC p4: 475, NVENC p2: **619**, libx264: 520 | 98.42 / 99.05 | encoder auto-pick, scaler hoisted, z-order deterministic |
 | **M2** | EncoderProfile::Balanced (default) | **381 (1.01× M1)** | Fast 474 / Balanced 462 / TikTokHQ 400 / IgReelsHDR 416 | Fast 97.87 / Balanced 97.73 / **TikTokHQ 97.48** / HDR 97.48 | 4 named profiles, 144-point VMAF grid; e2e flat — see [O-011](docs/optimization-log.md#o-011) |
 | **M3** | CUDA hwframes + h264_nvenc (cudarc kernel) | **456 (1.23× M2)** | (CUDA-only path) | unchanged from M2 | full GPU pipeline; cudarc RGBA→NV12 kernel; ffmpeg CUDA hwframes pool; **0 MB VRAM leak / 100 cycles** ([O-012..014](docs/optimization-log.md)) |
-| M4 (target) | wgpu compositor + CUDA + NVENC | ≥ 1500 | ≥ 3000 | ≥ 95 | replaces image_effect.rs CPU compositor |
-| M5 (target) | actix actor pool, batch-100 | 100 × 10 s in ≤ 120 s wall | — | ≥ 95 | hardware-bounded concurrency |
+| **M5 (1 worker)** | LocalWorker (persistent CUDA) | **1004 fps** (3.3× M3) | — | unchanged | **p99 290 ms** per video; latency-best ([O-018..020](docs/optimization-log.md)) |
+| **M5 (2 workers)** | WorkerPool, throughput-tuned | **1113 fps** (3.7× M3) | — | unchanged | 100 hs-mvp videos in **26.9 s** wall; p99 547 ms |
+| M4 (target) | wgpu compositor + CUDA + NVENC | (target ≥ 1500 single, multi unknown) | — | ≥ 95 | replaces image_effect.rs CPU compositor |
 
 **Where the CPU time really goes** (measured in M2's [`cpu_breakdown`](crates/gamereel-core/tests/cpu_breakdown.rs) test): for the perf_main scene, RGBA→YUV color conversion (`sws_scale`, CPU SIMD) was **46%** of phase time; NVENC submit+wait **41%**; CPU compositing only **13%**. M3 eliminated the sws_scale slug; M4's wgpu compositor will eliminate the compositing slug; M5's actor pool will multiply the throughput across the GPU's NVENC ceiling.
 
