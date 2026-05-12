@@ -261,3 +261,34 @@ This isn't a single optimization but a methodology entry, kept here so M3+ inher
 - Building tests around fps numbers from a specific machine (use ratios instead).
 - Parking heavy synthetic sources in git (250 MB lossless mandelbrot is a hard no — `.gitignore` it, regenerate from filter scripts).
 - Tuning a profile on one content class and shipping it as a global default.
+
+---
+
+### O-011 — Where CPU time actually goes (forensic correction)    [milestone: M2]
+
+**Observation triggering this entry**
+- I claimed in the M1 retro and the README trend table that "CPU compositing is ~80% of e2e wall time". A direct measurement (`tests/cpu_breakdown.rs`, run with `--ignored`) shows the actual breakdown for the perf_main scene is very different.
+
+**Test (self-proof)**
+- File: `movie-maker/tests/cpu_breakdown.rs::cpu_breakdown_perf_main` (marked `#[ignore]`; run with `cargo test --release ... -- --ignored`).
+- Times three phases in isolation: scene composition, sws_scale (RGBA→YUV), and the NVENC submit/receive loop.
+
+**Measurement (300 frames, 720×1080, perf_main scene)**
+| Phase | ms | Share |
+|---|---:|---:|
+| Compose (`Scene::on_render`, CPU pixel blends) | 85 | 12.7% |
+| RGBA→YUV (`sws_scale`, CPU SIMD) | 311 | **46.1%** |
+| NVENC submit/recv (CPU + GPU wait) | 278 | 41.2% |
+| Total | 674 | 100% |
+
+`/usr/bin/time -v` on the same binary: 0.97s user + 0.37s sys CPU vs 0.98s wall, 137% CPU. Phases overlap in the real hot loop, so individual ms don't sum to wall time.
+
+**Retro: the 80% figure was wrong**
+- I assumed compositing was the dominant cost because `image_effect.rs` is the most visually heavy CPU code (per-pixel alpha blends in nested loops). The actual data: on a *simple* perf_main scene (2 sprites, mostly static), compositing is **only 13%** — the dominant CPU cost is `sws_scale` at 46%. 
+- This matters for M3 sequencing. Originally M3's win was framed as "free up CPU by moving compose to GPU", but the real win is **moving sws_scale to GPU via `scale_cuda`** — that's the 311 ms slug, ~3× the size of the compositing slug.
+- Lessons:
+  1. **Always measure before claiming a bottleneck percentage**. Phase-isolation tests are cheap to write and stop you from optimizing the wrong thing.
+  2. The compose-vs-scale-vs-encode breakdown changes with scene complexity. Demo's `hs-mvp` (game data card with many overlays + dynamic images) likely shifts more weight to compositing — re-measure when M5's batch bench includes real scenes.
+- Followup:
+  - Update README trend table to reflect that **sws_scale** is the M3 target, not compositing.
+  - Re-run `cpu_breakdown` test against `demo` (with its richer scene) once that runner exists, to confirm whether the M4 wgpu compositor or the M3 hwframes path dominates the e2e wins on real workloads.
