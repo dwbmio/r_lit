@@ -16,10 +16,14 @@ const FRAMES: u32 = 30;
 
 fn make_sprite(seed: usize) -> DynamicImage {
     let mut img = RgbaImage::new(W, H);
-    let tint = (50 + seed * 35) as u8;
-    let alpha = (90 - seed as u8 * 5).max(40);
+    // Compute everything in u32 to dodge debug-mode u8 overflow panics
+    // (release mode wraps silently — test passed there but debug
+    // tripped the overflow check on `seed as u8 * 50` for seed ≥ 6).
+    let tint = ((50 + seed * 35) % 256) as u8;
+    let alpha = (90u32.saturating_sub(seed as u32 * 5)).max(40) as u8;
+    let blue = ((seed * 50) % 256) as u8;
     for p in img.pixels_mut() {
-        *p = Rgba([tint, 255 - tint, (seed as u8 * 50) % 255, alpha]);
+        *p = Rgba([tint, 255 - tint, blue, alpha]);
     }
     DynamicImage::ImageRgba8(img)
 }

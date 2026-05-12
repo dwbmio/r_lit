@@ -59,8 +59,13 @@ fn render_unknown_protocol_returns_helpful_error() {
 
 #[test]
 fn render_with_known_protocol_succeeds_and_emits_metadata() {
+    // PuzzleParser now decodes real JSON per
+    // docs/protocols/match3-replay-spec.md (S1). Pre-S1 it accepted
+    // any bytes — that "skeleton" behavior is gone.
     let mut tmp = NamedTempFile::new().expect("tmpfile");
-    tmp.write_all(b"some-bytes-for-puzzle").expect("write");
+    let mock = proto_puzzle::mock_replay();
+    let bytes = serde_json::to_vec(&mock).expect("serialize mock_replay");
+    tmp.write_all(&bytes).expect("write");
     cli()
         .args(["render", "--protocol", "puzzle", "--input"])
         .arg(tmp.path())
@@ -74,6 +79,9 @@ fn render_with_known_protocol_succeeds_and_emits_metadata() {
 #[test]
 fn render_json_payload_is_structurally_valid() {
     let mut tmp = NamedTempFile::new().expect("tmpfile");
+    // proto-bubble is still skeleton (accepts any bytes); proto-puzzle
+    // now requires valid JSON. This test exercises the bubble path so
+    // its assertion shape is deliberately permissive.
     tmp.write_all(b"abc").expect("write");
     let out = cli()
         .args(["--json", "render", "--protocol", "bubble", "--input"])

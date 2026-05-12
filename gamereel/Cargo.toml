@@ -4,6 +4,7 @@ members = [
     "crates/gamereel-core",
     "crates/gamereel-compositor",
     "crates/gamereel-farm",
+    "crates/gamereel-output",
     "crates/proto-puzzle",
     "crates/proto-bubble",
     "apps/hs-mvp",

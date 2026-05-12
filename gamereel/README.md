@@ -176,16 +176,38 @@ gamereel/
 ├── Cargo.toml                         # workspace root
 ├── crates/
 │   ├── gamereel-core/                 # video generation engine + ProtocolParser trait
+│   ├── gamereel-compositor/           # wgpu compositor (M4) — opt-in heavy-scene path
 │   ├── gamereel-farm/                 # worker pool, hardware probe, Worker trait
-│   ├── proto-puzzle/                  # 方块游戏 protocol parser (skeleton)
+│   ├── gamereel-output/               # OutputSink trait + LocalDiskSink + ObjectStorageSink
+│   ├── proto-puzzle/                  # 方块游戏 v0 JSON parser + Scene translator
 │   └── proto-bubble/                  # 泡泡龙 protocol parser (skeleton)
 ├── apps/
 │   ├── gamereel-cli/                  # CLI entry: `gamereel render --protocol …`
 │   └── hs-mvp/                        # Hearthstone-style demo + trace + farm_bench bins
 ├── benches/results/                   # m{0..3}.json + m5_farm.json trend artifacts
 ├── tools/quality-eval/                # VMAF + grid_search + scale_path_bench
-└── docs/optimization-log.md           # every perf change with hypothesis/test/measurement/retro
+└── docs/
+    ├── optimization-log.md            # every perf change with hypothesis/test/measurement/retro
+    └── protocols/match3-replay-spec.md # v0 wire format for proto-puzzle
 ```
+
+## Output delivery (S3-compatible, env-driven)
+
+`gamereel-output::ObjectStorageSink` uploads rendered MP4s to any S3-compatible endpoint via env vars — same binary works on AWS, Aliyun OSS, Cloudflare R2, MinIO, GCP-via-S3:
+
+```bash
+export GAMEREEL_S3_REGION=cn-hangzhou
+export GAMEREEL_S3_BUCKET=gamereel-replays
+export GAMEREEL_S3_ACCESS_KEY_ID=LTAI…
+export GAMEREEL_S3_SECRET_ACCESS_KEY=…
+# Optional:
+export GAMEREEL_S3_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com   # omit for AWS S3
+export GAMEREEL_S3_PREFIX=prod/match3/
+export GAMEREEL_S3_PUBLIC_URL_BASE=https://cdn.example.com/        # CDN URL for end-user share
+export GAMEREEL_S3_PATH_STYLE=1                                    # set for MinIO/local
+```
+
+The receipt's `location` field is the public URL the player shares. CompositeSink fans out to multiple sinks in parallel for "upload + push notification" patterns.
 
 ## Build
 

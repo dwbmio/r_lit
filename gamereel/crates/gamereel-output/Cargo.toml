@@ -1,0 +1,30 @@
+[package]
+name = "gamereel-output"
+version = "0.1.0"
+edition = "2021"
+description = "Output sinks for gamereel — where rendered MP4s go. LocalDiskSink is built-in; ObjectStorageSink targets any S3-compatible endpoint (AWS S3 / Aliyun OSS / GCP via S3-API / MinIO / Cloudflare R2) configured via env vars. Future sinks (TikTok / IG / WeChat push) plug into the OutputSink trait."
+
+[dependencies]
+gamereel-core = { path = "../gamereel-core" }
+gamereel-farm = { path = "../gamereel-farm" }
+async-trait   = "0.1"
+log           = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+thiserror     = { workspace = true }
+tokio         = { version = "1.41", features = ["fs", "io-util", "rt", "macros"] }
+# AWS SDK for S3-compatible providers. The endpoint URL is configured
+# via env var so the same code talks to AWS S3 / Aliyun OSS / R2 / MinIO.
+aws-sdk-s3    = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-config    = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-credential-types = "1"
+aws-smithy-types = "1"
+aws-types     = "1"
+url           = "2"
+
+[dev-dependencies]
+tempfile          = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio             = { version = "1.41", features = ["macros", "rt-multi-thread"] }
+env_logger        = { workspace = true }
+proto-puzzle      = { path = "../proto-puzzle" }

@@ -774,3 +774,80 @@ Real hs-mvp 100-job batch (workers=1):
 3. Always run the proposed faster path against the *real* workload, not
    just the synthetic case it was designed for. Without farm_bench we'd
    have shipped wgpu as default and made hs-mvp 5 % slower.
+
+---
+
+## S1 — Business integration foundation
+
+### O-025 — Closed-loop protocol → render → URL    [milestone: S1]
+
+**Hypothesis**
+- Expected impact: a binary blob from the game side reaches a public
+  URL with no per-job manual intervention. Latency budget: protocol
+  decode + render + upload < 1 s for a 10-s replay on the reference
+  machine. Pure plumbing milestone — perf gains are implicit
+  (existing M5/M3 numbers don't regress).
+- Mechanism: 3 new pieces compose end-to-end.
+  1. `proto-puzzle` decodes match-3 replay JSON → `MetaSceneList`
+     translation (no game-logic re-simulation; mechanical event
+     mapping per `docs/protocols/match3-replay-spec.md`).
+  2. `gamereel-output::OutputSink` async trait + `LocalDiskSink` +
+     `ObjectStorageSink` (S3-compatible: AWS / Aliyun OSS / R2 /
+     MinIO / GCP-via-S3 / configured per env vars).
+  3. e2e test wires `mock_replay → PuzzleParser::parse →
+     LocalWorker::render → LocalDiskSink::deliver → DeliveryReceipt`.
+
+**Test (self-proof)**
+- Schema spec: `docs/protocols/match3-replay-spec.md` — v0 JSON,
+  v1 protobuf path documented.
+- File: `crates/proto-puzzle/tests/parse_and_translate.rs` — 3 tests
+  validating mock-replay round-trip, scene shape (≥ 65 nodes for
+  8×8 board + bg), and helpful error on bad JSON input.
+- File: `crates/gamereel-output/tests/local_disk_sink.rs` — 2
+  tests validating bytes-on-disk match payload + filename
+  sanitization for adversarial job_ids.
+- File: `crates/gamereel-output/tests/e2e_render_to_sink.rs`
+  (#[ignore], CUDA-gated) — full closure: decode → render → upload,
+  asserts receipt URL points at a real file with the rendered bytes.
+
+**Measurement** (RTX 3060 e2e single shot)
+- proto-puzzle decode of 9-event mock: < 1 ms
+- LocalWorker init (cudarc + hwframes + wgpu): 476 ms one-shot
+- Render hs-mvp scene 10s @ 30fps: 307 ms wall (285 ms render loop)
+- LocalDiskSink upload 42.9 KB: < 1 ms
+- **Total e2e: 793 ms** (cold start). Subsequent jobs amortize the
+  476 ms init via M5 worker pool to ~290 ms each per O-018.
+
+**Retro**
+- Plumbing milestone delivered cleanly. The translation in
+  `proto-puzzle::translate` uses 9 event variants for what the spec
+  calls out; ScoreChange / Combo / MatchEnd are decoded but not yet
+  rendered (text rendering is a separate milestone). Documented as
+  "v0 — no UI nodes yet" in source comments.
+- The Cargo dependency graph now correctly cascades:
+  proto-puzzle → gamereel-core (no circular dep);
+  gamereel-output → gamereel-core + gamereel-farm;
+  apps/gamereel-cli already depends on proto-puzzle and gets the
+  PuzzleParser via inventory at link time. No core changes needed.
+- Lessons:
+  1. **Define the wire spec before writing the parser.**
+     `docs/protocols/match3-replay-spec.md` exists as a contract the
+     game team can review WITHOUT reading Rust. v0 JSON lets the
+     schema iterate while v1 protobuf path is documented but
+     unblocked.
+  2. **OutputSink trait gives Sinks the same plug-in shape as
+     ProtocolParsers.** Future TikTok / IG / WeChat sinks add zero
+     plumbing — implement `OutputSink` and they compose into
+     `CompositeSink` for fan-out delivery.
+  3. **S3-compatible API + env-driven config** = single binary works
+     on AWS / Aliyun OSS / Cloudflare R2 / MinIO / GCP without code
+     branches. The right level of abstraction for "we don't know
+     which cloud yet".
+
+**Followups (next sprint S2)**
+- `gamereel-farm-server` binary wrapping LocalWorker behind gRPC
+- `RemoteWorker` client implementation in `gamereel-farm`
+- Dockerfile + cloud-deploy manifests
+- ObjectStorageSink integration test against MinIO local docker
+- Replace text-render TODOs in proto-puzzle::translate with cosmic-text
+  (parallel work, can hand off)
