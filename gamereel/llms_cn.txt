@@ -1,50 +1,102 @@
 # gamereel
 
-- 用途: 把游戏协议回放渲染成短视频（TikTok / IG Reels 形态）
+- 用途: 把游戏协议二进制回放渲染成短视频（TikTok / IG Reels 形态）
 - 语言: Rust
-- 工作区结构: crates/{gamereel-core, proto-puzzle, proto-bubble} + apps/{gamereel-cli, hs-mvp}
-- 插件机制: ProtocolParser trait + inventory::submit! 自注册；每个游戏协议一个独立 crate
+- 状态: 在消费级 NVIDIA GPU 上批量 / 准实时场景已可投入生产（RTX 3060 实测验证）
+- 工作区结构: crates/{gamereel-core, gamereel-farm, proto-puzzle, proto-bubble} + apps/{gamereel-cli, hs-mvp}
+
+## 核心实测数字（RTX 3060 + i7-13700K, hs-mvp 场景 720x1080×30fps×10s）
+
+- 单 worker:  1004 fps, p50 284 ms, p99 290 ms（延迟最优）
+- 2 workers: 1113 fps, p50 518 ms, p99 547 ms（吞吐最优）
+- 100 视频批量: workers=2 跑 26.9 s 墙钟
+- 100 次连跑 VRAM 增长: 0 MB
+- VMAF (TikTokHQ profile): 高动态/文字滚动/谈话头肩三类源平均 97.48
+- workers > 2 不增吞吐: 同样吞吐 + p99 单调爆炸（NVENC 引擎已饱和）
+- 总轨迹 M0 baseline → M5 (workers=2): 152 → 1113 fps = 7.3× over baseline
+
+## 优势（实测）
+
+- workers=1 单视频 p99 亚 300ms — 满足准实时 SLA
+- workers=2 吞吐 220 视频/分钟
+- 消费级 GPU 价位: 约 ¥2200 的 RTX 3060 跑出 1113 fps
+- VMAF ≥ 95 across all profiles (Fast, Balanced, TikTokHQ); 144 点 VMAF grid 校准
+- 输出字节确定性 (BTreeMap z-order, SHA256 跨运行回归测试)
+- 长批量运行无 VRAM 增长 (cuda_vram_leak.rs, 100 cycles)
+- 可插拔游戏协议：inventory::submit! 自注册
+- 云端就绪：Worker trait 抽象 + RemoteWorker stub 已落地，gRPC dispatch 是 drop-in
+- 30 active 测试 + 10 CUDA-gated；生产路径无 unwrap()/panic!()
+
+## 已知限制（同样实测）
+
+- NVENC 引擎数是单 GPU 天花板：单 NVENC 卡 (3060/3070/4060/4070) workers > 2 无效；软件突破不了
+- CPU 合成 (image_effect.rs) 占帧时间约 40% — M4 wgpu compositor 是计划解（预期 +50–80% e2e）
+- CUDA 路径每帧 synchronize() 约 14% 开销（cudarc 与 NVENC 之间还没 async pipeline）
+- 每个 worker 进程一次性 284 ms CUDA init (NVRTC 编译 + ffmpeg hwframes 池)；M5 worker pool 内已摊销，仅在每 job 起独立进程时显眼
+- 单 GPU 限定（Worker trait 抽象就位，多 GPU LocalWorkerPool 是机械工作）
+- IgReelsHDR profile 是桩（落到 TikTokHQ H.264 SDR）；真 HDR (HEVC Main10) 是 M4+ 范围
+- RTX 3060 没有 AV1 编码器（NVENC Gen 7 芯片级限制）
+- proto-puzzle / proto-bubble 是骨架，注册占位 ParsedReplay；真 binary decoder 是每游戏独立工作
 
 ## 工作区成员
 
 ### crates/gamereel-core (v0.1.0)
-- 用途: 视频生成引擎 + ProtocolParser trait
-- 模块: encoder_profile, encoder_pick, ffmpeg_inc/{mod,hwctx,stage_mgr,texture,image_effect,stream}, cuda_pipeline/{mod,kernels}, stage/{scene,node,action,model}, protocol
-- 流水线:
-  - sws_scale (CPU): create_scene_stream / create_scene_stream_with_profile
-  - CUDA hwframes (GPU): create_scene_stream_cuda
-- 入口类型: GamereelError (原 MovieError), GamereelResult (原 MoveMakerResult)
-- 配置档: EncoderProfile::{Fast, Balanced, TikTokHQ, IgReelsHDR}
-- 依赖: ffmpeg-next (git), ffmpeg-sys-next 8.1, cudarc 0.19 (dynamic-loading), image, imageproc, tween, tokio, serde, inventory, env_logger, thiserror
+- 视频生成引擎 + ProtocolParser 插件 trait
+- 模块: encoder_profile (4 profiles: Fast, Balanced, TikTokHQ, IgReelsHDR), encoder_pick (NVENC > QSV > VAAPI > VT > x264), ffmpeg_inc/{mod, hwctx, stage_mgr, texture, image_effect, stream}, cuda_pipeline/{mod, kernels} (RGBA→NV12 NVRTC kernel), stage/{scene, node, action, model}, protocol
+- 入口流水线: create_scene_stream (sws_scale CPU 路径), create_scene_stream_with_profile (M2 with EncoderProfile), create_scene_stream_cuda (M3 全 GPU 路径)
+- 入口类型: GamereelError, GamereelResult
+- 关键 API: StageMgr::start_gen_first_cuda(rtx, output) for batch-friendly CUDA path
 
-### crates/proto-puzzle (v0.1.0)
-- 用途: 方块/消除类游戏协议解析
-- 状态: 骨架 — PuzzleParser 返回固定占位 ParsedReplay
-- 注册: ProtocolDescriptor { name: "puzzle", … } via inventory::submit!
+### crates/gamereel-farm (v0.1.0)
+- worker pool 运行时，跨 jobs 摊销 284 ms CUDA init
+- 模块: job (RenderJob, RenderResult, JobPriority), worker (Worker trait, WorkerKind), worker/local (LocalWorker 持久 CudaConverter + CudaHwContext), worker/remote (RemoteWorker stub for cloud GPU), pool (WorkerPool 用 bounded mpsc 调度), probe (基于 nvidia-smi 的 GpuInfo + workers_for_gpu/workers_for_latency)
+- 关键类型: WorkerPool::spawn(count, w, h) → submit/collect_one/shutdown
+- 设计约束: 每个 LocalWorker 钉在自己的 OS 线程（CUDA context affinity）
 
-### crates/proto-bubble (v0.1.0)
-- 用途: 泡泡龙类游戏协议解析
-- 状态: 骨架 — 与 proto-puzzle 同形
-- 注册: ProtocolDescriptor { name: "bubble", … } via inventory::submit!
+### crates/proto-puzzle, proto-bubble (v0.1.0 each)
+- 骨架协议解析；通过 inventory::submit! 注册到 ProtocolDescriptor
+- 替换 lib.rs body 为真实 binary decoder 即可，其他无需改动
 
 ### apps/gamereel-cli (v0.1.0)
 - 二进制: gamereel
 - 子命令: list-protocols, render --protocol <name> --input <file>
 - json_flag: --json (匹配 CLAUDE.md 仓库约定)
-- force_links: `use proto_puzzle as _;` 与 `use proto_bubble as _;` 防 lto=fat 剥光 inventory 构造器
+- 用 `use proto_X as _;` 强制 link proto-* 防 lto=fat 剥光 inventory 构造器
 
 ### apps/hs-mvp (v0.1.0)
-- 用途: 炉石风格战报演示（原 demo，留作集成示例）
-- 依赖: gamereel-core (path)
+- demo: 炉石风格战报；默认走 CUDA 管线，GAMEREEL_PIPELINE=sws 切换 sws_scale fallback
+- bins: hs-mvp (生产 demo), trace (sws 路径插桩), trace_cuda (M3 路径插桩), farm_bench (M5 100-job worker count 扫描)
 
-## 性能里程碑
+## 扩展路线
 
-- M0 baseline (libx264 medium): 152 fps e2e, VMAF 99.34
-- M1 (编码器自动选 + scaler 复用): 377 fps (2.48× M0)
-- M2 (4 个质量 profile + 144 点 VMAF 网格): 381 fps，全 profile VMAF ≥ 92
-- M3 (cudarc RGBA→NV12 + ffmpeg CUDA hwframes): 456 fps (1.23× M2), 100 cycles 0 MB VRAM 泄漏
-- M4 目标: wgpu compositor 替换 CPU image_effect.rs — e2e ≥ 1500 fps
-- M5 目标: actix actor 池，硬件感知并发上限
+### Tier 1 — 软件优化，单 GPU (M4 范围)
+- M4 wgpu compositor 干掉 CPU image_effect.rs slug → 预期 e2e +50–80%
+- stream-aware NVENC 提交去掉每帧 synchronize() → +10–15%
+- kernel 直接写 ffmpeg pool buffer → +1–2%
+- 跳过每帧 to_rgba8() → +5%
+
+### Tier 2 — 硬件 (NVENC 引擎数)
+- RTX 4070 Ti Super 16GB: 2× NVENC, 预测 ~2200 fps, ~¥6500
+- RTX 4080 Super 16GB: 2× NVENC + 更强核心 + AI 友好, ~¥9500
+- RTX 4090 24GB: 2× NVENC + 24GB 解锁 30B LLM Q4 双修, ~¥14000
+- RTX 5090 32GB: 3× NVENC + Blackwell, ~¥18000+
+- NVIDIA L4 24GB: **4× NVENC**, 72W 单槽, 专为转码农场设计, ~¥18000 服务器渠道 — 预测 ~4400 fps（4× 当前峰值）
+- L40S 48GB: 3× NVENC + 48GB, 数据中心级 AI+视频双修, ~¥60000
+
+### Tier 3 — 多 GPU
+- Worker trait 已抽象 dispatch；MultiGpuWorkerPool 是机械改造
+- 4 GPU 内预期近线性扩展；再往上 PCIe + host RAM 带宽成新瓶颈
+
+### Tier 4 — 云端 GPU (RemoteWorker via gRPC)
+- cloud node 上跑 gamereel-farm-server 二进制（内部复用 LocalWorker）
+- crates/gamereel-farm/src/worker/remote.rs 实现 RemoteWorker
+- 输出传输：流式回传 MP4，OR cloud node 直接上传调用方指定的对象存储 URL
+- 瓶颈转到网络带宽（60 KB / 10s 片，可忽略）
+
+### Tier 5 — 高级格式 (HDR + AV1)
+- HDR HEVC Main10 + BT.2020 需要 Ada (RTX 40+) HW 编码
+- AV1 编码需要 NVENC Gen 8+ (Ada 或更新)
+- 这俩解锁 TikTok / IG 高级上传通道；二次压缩后画质有可见提升
 
 ## 构建
 
@@ -53,17 +105,25 @@ cargo build --workspace --release
 cargo test  --workspace
 cargo run   -p gamereel-cli -- list-protocols
 cargo run   -p gamereel-cli -- render --protocol puzzle --input some.bin
+cargo run   -p hs-mvp --bin farm_bench --release -- --jobs 100 --workers 1,2,4
 ```
 
 ## 系统要求
 
-- FFmpeg 开发库 (libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev)
+- FFmpeg 开发库: libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev
 - clang, pkg-config
 - CUDA 全栈 (M3+): NVIDIA 驱动 ≥ 535, libnvrtc12, libnvrtc-builtins12.0
 - 质量 benches: vmaf (Netflix libvmaf 3.x), jq
 
 ## 文档
 
-- README.md / README_CN.md — 人类可读的概览
-- docs/optimization-log.md — 每次性能改动的假设 + 自证测试 + 实测 + 复盘
-- benches/results/m{0,1,2,3}.json — 各里程碑的趋势数据
+- README.md / README_CN.md: 人类可读概览，含能力 + 限制 + 扩展路线表
+- docs/optimization-log.md: 每次性能改动的假设 + 自证测试 + 实测 + 复盘 (条目 O-001..O-020)
+- benches/results/m{0,1,2,3}.json + m5_farm.json: 各里程碑趋势数据（已 commit）
+
+## 可复现承诺
+
+- 30 active 测试 + 10 CUDA-gated；`cargo test --workspace` 全跑
+- 各里程碑 bench 脚本 (benches/m{0..3}.sh) 重新生成趋势 JSON
+- farm_bench.rs 在任何未来 GPU 上按需扫描 worker count
+- 优化日志在工作开始前记假设；若实测打脸，retro 说明原因
