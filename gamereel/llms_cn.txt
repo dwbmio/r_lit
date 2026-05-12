@@ -1,0 +1,69 @@
+# gamereel
+
+- 用途: 把游戏协议回放渲染成短视频（TikTok / IG Reels 形态）
+- 语言: Rust
+- 工作区结构: crates/{gamereel-core, proto-puzzle, proto-bubble} + apps/{gamereel-cli, hs-mvp}
+- 插件机制: ProtocolParser trait + inventory::submit! 自注册；每个游戏协议一个独立 crate
+
+## 工作区成员
+
+### crates/gamereel-core (v0.1.0)
+- 用途: 视频生成引擎 + ProtocolParser trait
+- 模块: encoder_profile, encoder_pick, ffmpeg_inc/{mod,hwctx,stage_mgr,texture,image_effect,stream}, cuda_pipeline/{mod,kernels}, stage/{scene,node,action,model}, protocol
+- 流水线:
+  - sws_scale (CPU): create_scene_stream / create_scene_stream_with_profile
+  - CUDA hwframes (GPU): create_scene_stream_cuda
+- 入口类型: GamereelError (原 MovieError), GamereelResult (原 MoveMakerResult)
+- 配置档: EncoderProfile::{Fast, Balanced, TikTokHQ, IgReelsHDR}
+- 依赖: ffmpeg-next (git), ffmpeg-sys-next 8.1, cudarc 0.19 (dynamic-loading), image, imageproc, tween, tokio, serde, inventory, env_logger, thiserror
+
+### crates/proto-puzzle (v0.1.0)
+- 用途: 方块/消除类游戏协议解析
+- 状态: 骨架 — PuzzleParser 返回固定占位 ParsedReplay
+- 注册: ProtocolDescriptor { name: "puzzle", … } via inventory::submit!
+
+### crates/proto-bubble (v0.1.0)
+- 用途: 泡泡龙类游戏协议解析
+- 状态: 骨架 — 与 proto-puzzle 同形
+- 注册: ProtocolDescriptor { name: "bubble", … } via inventory::submit!
+
+### apps/gamereel-cli (v0.1.0)
+- 二进制: gamereel
+- 子命令: list-protocols, render --protocol <name> --input <file>
+- json_flag: --json (匹配 CLAUDE.md 仓库约定)
+- force_links: `use proto_puzzle as _;` 与 `use proto_bubble as _;` 防 lto=fat 剥光 inventory 构造器
+
+### apps/hs-mvp (v0.1.0)
+- 用途: 炉石风格战报演示（原 demo，留作集成示例）
+- 依赖: gamereel-core (path)
+
+## 性能里程碑
+
+- M0 baseline (libx264 medium): 152 fps e2e, VMAF 99.34
+- M1 (编码器自动选 + scaler 复用): 377 fps (2.48× M0)
+- M2 (4 个质量 profile + 144 点 VMAF 网格): 381 fps，全 profile VMAF ≥ 92
+- M3 (cudarc RGBA→NV12 + ffmpeg CUDA hwframes): 456 fps (1.23× M2), 100 cycles 0 MB VRAM 泄漏
+- M4 目标: wgpu compositor 替换 CPU image_effect.rs — e2e ≥ 1500 fps
+- M5 目标: actix actor 池，硬件感知并发上限
+
+## 构建
+
+```bash
+cargo build --workspace --release
+cargo test  --workspace
+cargo run   -p gamereel-cli -- list-protocols
+cargo run   -p gamereel-cli -- render --protocol puzzle --input some.bin
+```
+
+## 系统要求
+
+- FFmpeg 开发库 (libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev)
+- clang, pkg-config
+- CUDA 全栈 (M3+): NVIDIA 驱动 ≥ 535, libnvrtc12, libnvrtc-builtins12.0
+- 质量 benches: vmaf (Netflix libvmaf 3.x), jq
+
+## 文档
+
+- README.md / README_CN.md — 人类可读的概览
+- docs/optimization-log.md — 每次性能改动的假设 + 自证测试 + 实测 + 复盘
+- benches/results/m{0,1,2,3}.json — 各里程碑的趋势数据

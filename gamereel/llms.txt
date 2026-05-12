@@ -1,0 +1,69 @@
+# gamereel
+
+- purpose: Generate short-form videos (TikTok / IG Reels) from game protocol replays
+- language: Rust
+- workspace_layout: crates/{gamereel-core, proto-puzzle, proto-bubble} + apps/{gamereel-cli, hs-mvp}
+- plugin_mechanism: ProtocolParser trait + inventory::submit! self-registration; one crate per game protocol
+
+## Workspace members
+
+### crates/gamereel-core (v0.1.0)
+- purpose: Video generation engine + ProtocolParser trait
+- modules: encoder_profile, encoder_pick, ffmpeg_inc/{mod,hwctx,stage_mgr,texture,image_effect,stream}, cuda_pipeline/{mod,kernels}, stage/{scene,node,action,model}, protocol
+- pipelines:
+  - sws_scale (CPU): create_scene_stream / create_scene_stream_with_profile
+  - CUDA hwframes (GPU): create_scene_stream_cuda
+- entry_types: GamereelError (was MovieError), GamereelResult (was MoveMakerResult)
+- profiles: EncoderProfile::{Fast, Balanced, TikTokHQ, IgReelsHDR}
+- deps: ffmpeg-next (git), ffmpeg-sys-next 8.1, cudarc 0.19 (dynamic-loading), image, imageproc, tween, tokio, serde, inventory, env_logger, thiserror
+
+### crates/proto-puzzle (v0.1.0)
+- purpose: Protocol parser for puzzle-style games (block matching, falling pieces)
+- status: skeleton — registers a placeholder PuzzleParser that produces a constant ParsedReplay
+- registers: ProtocolDescriptor { name: "puzzle", … } via inventory::submit!
+
+### crates/proto-bubble (v0.1.0)
+- purpose: Protocol parser for bubble-shooter games
+- status: skeleton — same shape as proto-puzzle
+- registers: ProtocolDescriptor { name: "bubble", … } via inventory::submit!
+
+### apps/gamereel-cli (v0.1.0)
+- binary: gamereel
+- subcommands: list-protocols, render --protocol <name> --input <file>
+- json_flag: --json (matches CLAUDE.md repo convention)
+- force_links: `use proto_puzzle as _;` and `use proto_bubble as _;` to keep inventory constructors after lto=fat
+
+### apps/hs-mvp (v0.1.0)
+- purpose: Hearthstone-style match recap demo (original demo, kept as integration example)
+- depends_on: gamereel-core (path)
+
+## Performance milestones
+
+- M0 baseline (libx264 medium): 152 fps e2e, VMAF 99.34
+- M1 (encoder auto-pick + scaler hoist): 377 fps (2.48× M0)
+- M2 (4 quality profiles + 144-pt VMAF grid): 381 fps, all profiles VMAF ≥ 92
+- M3 (cudarc RGBA→NV12 + ffmpeg CUDA hwframes): 456 fps (1.23× M2), 0 MB VRAM leak / 100 cycles
+- M4 target: wgpu compositor (replace CPU image_effect.rs) — ≥ 1500 fps e2e
+- M5 target: actix actor pool with hardware-bounded concurrency
+
+## Build
+
+```bash
+cargo build --workspace --release
+cargo test  --workspace
+cargo run   -p gamereel-cli -- list-protocols
+cargo run   -p gamereel-cli -- render --protocol puzzle --input some.bin
+```
+
+## System requirements
+
+- FFmpeg dev libraries (libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev)
+- clang, pkg-config
+- For CUDA pipeline (M3+): NVIDIA driver ≥ 535, libnvrtc12, libnvrtc-builtins12.0
+- For quality benches: vmaf (Netflix libvmaf 3.x), jq
+
+## Documentation
+
+- README.md / README_CN.md — human-readable overview
+- docs/optimization-log.md — every perf change with hypothesis + self-proof test + measurement + retro
+- benches/results/m{0,1,2,3}.json — milestone trend artifacts

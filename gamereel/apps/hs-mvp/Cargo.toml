@@ -1,0 +1,11 @@
+[package]
+name = "hs-mvp"
+version = "0.1.0"
+edition = "2021"
+description = "Demo: hearthstone-style match recap rendered through gamereel-core. Kept as the original integration example until a richer demo lands."
+
+[dependencies]
+gamereel-core = { path = "../../crates/gamereel-core" }
+tokio = { workspace = true }
+image = { workspace = true }
+imageproc = { workspace = true }

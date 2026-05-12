@@ -1,0 +1,47 @@
+[package]
+name = "gamereel-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core video generation engine for gamereel: scene composition, tween animation, ffmpeg encoding (CPU + CUDA), and the ProtocolParser plugin trait that game-specific crates implement."
+
+[lib]
+# Inherits name `gamereel_core` (`-` → `_`).
+path = "src/lib.rs"
+
+[dependencies]
+thiserror   = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+log         = { workspace = true }
+env_logger  = { workspace = true }
+ffmpeg-next = { workspace = true }
+ffmpeg-sys-next = { workspace = true }
+image       = { workspace = true }
+imageproc   = { workspace = true }
+tokio       = { workspace = true }
+tween       = { workspace = true }
+cudarc      = { workspace = true }
+inventory   = { workspace = true }
+
+[dev-dependencies]
+criterion         = { workspace = true }
+tempfile          = { workspace = true }
+pretty_assertions = { workspace = true }
+sha2              = { workspace = true }
+tokio = { version = "1.41", features = ["macros", "rt", "rt-multi-thread", "fs", "io-util"] }
+
+[[bin]]
+name = "perf_main"
+path = "src/perf_main.rs"
+
+[[bench]]
+name = "encode_baseline"
+harness = false
+
+[[bench]]
+name = "m1_quickwin"
+harness = false
+
+[[bench]]
+name = "m2_profile_speed"
+harness = false

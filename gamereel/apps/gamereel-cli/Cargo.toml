@@ -1,0 +1,25 @@
+[package]
+name = "gamereel-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI entry point: pick a registered game protocol, parse a binary message blob, render a video. Adding a game = adding a proto-* dependency line below."
+
+[[bin]]
+name = "gamereel"
+path = "src/main.rs"
+
+[dependencies]
+gamereel-core = { path = "../../crates/gamereel-core" }
+# Each proto-* crate self-registers via inventory::submit! at link time.
+# Adding a new game = adding one line here.
+proto-puzzle  = { path = "../../crates/proto-puzzle" }
+proto-bubble  = { path = "../../crates/proto-bubble" }
+clap        = { workspace = true }
+log         = { workspace = true }
+env_logger  = { workspace = true }
+serde_json  = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = { workspace = true }
