@@ -1,4 +1,3 @@
-pub mod frame;
 pub mod stage_mgr;
 pub mod stream;
 pub mod texture;

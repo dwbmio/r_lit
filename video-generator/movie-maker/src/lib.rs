@@ -58,16 +58,15 @@ impl RuntimeCtx {
         }
     }
 
-    ///初始化ffmpeg上下文
+    /// Initialize the ffmpeg context (idempotent: only runs once per process).
+    /// Bug fix: previously the guard was `if self.init` which only ran when
+    /// already initialized (inverted). Now runs on first call and flips the flag.
     pub fn init(&mut self, proj_path: Option<PathBuf>) -> crate::MoveMakerResult<()> {
-        if self.init {
+        if !self.init {
             ffmpeg_inc::init_env()?;
+            self.init = true;
         }
-        if let Some(p) = proj_path {
-            self.source_path = Some(p);
-        } else {
-            self.source_path = Some(Path::new(".").to_path_buf());
-        }
+        self.source_path = Some(proj_path.unwrap_or_else(|| Path::new(".").to_path_buf()));
         Ok(())
     }
 

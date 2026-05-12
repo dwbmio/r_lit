@@ -1,0 +1,34 @@
+{
+    "meta_scene_list": [
+        {
+            "name": "minimal_scene",
+            "textures": [
+                "tests/fixtures/dummy.png"
+            ],
+            "clear-tp-id": "0",
+            "nodes": [
+                {
+                    "id": 42,
+                    "name": "lone_node",
+                    "tp_id": "1",
+                    "attr": {
+                        "pos": [10, 20, 0],
+                        "active": true,
+                        "is-static": false
+                    }
+                }
+            ],
+            "timeline": {
+                "42": [
+                    {
+                        "action": "move_to",
+                        "start_t": 0.0,
+                        "duration": 1.5,
+                        "pos_star": [10, 20, 0],
+                        "pos_target": [100, 200, 0]
+                    }
+                ]
+            }
+        }
+    ]
+}

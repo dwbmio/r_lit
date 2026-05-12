@@ -1,0 +1,27 @@
+[workspace]
+members = ["movie-maker", "demo"]
+resolver = "2"
+
+# Profile note (Linux/NVENC refactor branch):
+# Repo convention is opt-level="z" for short-running CLI tools (CLAUDE.md).
+# video-generator is CPU+GPU compute-bound (video encoding, image compositing),
+# where opt-level="z" costs 1.5–2x throughput. We override to opt-level=3 + LTO
+# at the workspace level. Keep panic=abort and strip behavior consistent.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = false  # keep symbols for perf/profiling
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = true   # symbols for flamegraphs
+
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = true
+strip = true

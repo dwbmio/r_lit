@@ -80,37 +80,3 @@ impl MetaAction {
     }
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, Default, Hash, Eq, Clone)]
-pub enum NodeAttr {
-    #[serde(rename = "show")]
-    Show,
-    #[serde(rename = "hide")]
-    Hide,
-    #[serde(rename = "pos")]
-    Pos,
-    #[default]
-    Nothing,
-}
-
-#[allow(unused)]
-impl NodeAttr {
-    /// 将字符串转换为枚举
-    fn from_str(action: &str) -> Option<Self> {
-        match action {
-            "show" => Some(NodeAttr::Show),
-            "hide" => Some(NodeAttr::Hide),
-            "pos" => Some(NodeAttr::Pos),
-            _ => Some(NodeAttr::Nothing),
-        }
-    }
-
-    /// 将枚举转换为字符串
-    fn as_str(&self) -> &'static str {
-        match self {
-            NodeAttr::Show => "show",
-            NodeAttr::Hide => "hide",
-            NodeAttr::Pos => "pos",
-            NodeAttr::Nothing => "nothing",
-        }
-    }
-}

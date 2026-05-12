@@ -4,3 +4,8 @@ target/
 cc.png
 _*.meta
 _*.png
+
+# Bench outputs (per-milestone JSONs are committed manually; raw runs are not)
+benches/baseline-out/
+*.yuv
+
