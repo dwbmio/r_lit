@@ -692,3 +692,85 @@ Per-frame breakdown (M4 wgpu+CUDA, sum of 300-frame phases):
 3. Add a synthesized "heavy scene" (50+ overlapping nodes) bench so the wgpu
    advantage shows up even without batch amortization. hs-mvp's tiny dirty
    cache hides the win on simple scenes.
+
+---
+
+## M4.5 — wgpu compositor in worker pool: opt-in with proven case
+
+### O-024 — Wgpu compose has a real case (136× on heavy scenes), but loses on hs-mvp's dirty cache    [milestone: M4.5]
+
+**Hypothesis**
+- Expected impact: wiring `WgpuCompositor` into `LocalWorker` (alongside
+  persistent `CudaConverter` + `CudaHwContext`) would shave the 200+ ms
+  CPU compose slug from each video and push hs-mvp 100-job batch from
+  M5's 26.9 s wall to ~14 s (~2× over M5 baseline).
+
+**Test (self-proof — both branches)**
+- File: `crates/gamereel-compositor/tests/heavy_scene_cpu_vs_wgpu.rs`
+  Runs 5 full-screen RGBA overlays × 60 frames through both CPU
+  `image_effect::blend_images` and wgpu `compose_to_host`. Asserts
+  wgpu speedup ≥ 2× — fails loudly if wgpu has no case.
+- Companion: `apps/hs-mvp/src/bin/farm_bench.rs` re-run with
+  `GAMEREEL_WORKER_COMPOSITOR=wgpu` measures the actual hs-mvp
+  workload through the wgpu worker.
+
+**Measurement**
+
+Heavy synthetic scene (5 full-screen overlapping sprites, 60 frames @ 720×1080):
+| path               | total ms | per-frame ms | vs CPU |
+|--------------------|---------:|-------------:|-------:|
+| CPU image_effect   | 3834     | 63.90        | 1.0×   |
+| wgpu compose       |   28     |  0.47        | **136.93×** |
+
+Real hs-mvp 100-job batch (workers=1):
+| path                    | wall   | throughput | p50  | p99  |
+|-------------------------|-------:|-----------:|-----:|-----:|
+| CPU compose (M5 default)| 29.9 s | 1004 fps   | 284  | 290  |
+| wgpu compose (M4.5)     | 31.3 s |  957 fps   | 297  | 301  |
+
+**Retro: hypothesis wrong on hs-mvp, right in general**
+- Wgpu is decisively faster (136×!) when the scene has heavy
+  per-frame compositing the CPU can't cache around: lots of
+  overlapping full-screen sprites, all moving / changing every frame.
+- Wgpu is 4–7 % SLOWER on hs-mvp because hs-mvp's `Scene::_dirty`
+  cache + small/sparse sprites hit ~80 % cache rate, making CPU
+  compose median 0.07 ms / frame. Wgpu's per-frame compose+readback
+  is constant ~0.5 ms with no cache benefit.
+- The bet was wrong about WHICH workloads matter. We optimized the
+  thing that doesn't bottleneck hs-mvp.
+
+**What we shipped**
+- Wgpu compose path in `LocalWorker` is **opt-in only** via
+  `GAMEREEL_WORKER_COMPOSITOR=wgpu`. Default stays CPU.
+- The decision rule the user can apply at deploy time:
+  * Scene has heavy per-frame compositing (50+ overlays, lots of
+    full-screen layers, no cache wins) → wgpu opt-in.
+  * Scene has small sprites + dirty-cacheable layout (hs-mvp shape) →
+    leave default CPU.
+- Keep the integration code (~50 LOC) because the gain on heavy scenes
+  (>2× per the assertion threshold, 136× on the test case) is real
+  and the ceremony is small.
+
+**Known limitation surfaced by the test (followup)**
+- 5-layer alpha-blend test shows mean per-channel diff of 29.6/255
+  between CPU and wgpu. Cause: wgpu uses Rgba8UnormSrgb with
+  hardware-srgb-aware blending while `image_effect` does linear
+  alpha compositing. Each layer's gamma divergence compounds with
+  alpha < 255. hs-mvp parity passed (0.114/255 mean diff) only
+  because most hs-mvp sprites are opaque. Production users of the
+  wgpu path with semi-transparent layered content need either:
+  (a) Rgba8Unorm framebuffer + manual sRGB convert, or
+  (b) accept the gamma-correct (wgpu) behavior as the new ground
+      truth. Recorded for a future "compositor color space"
+      discussion; not blocking the M4.5 ship.
+
+**Lessons**
+1. "We have an architecture that should be faster" doesn't ship without
+   a measured case. The opt-in lives only because the heavy_scene test
+   passes the 2× bar.
+2. Dirty caches are the silent winner for sparse-update scenes. Don't
+   assume GPU compute beats CPU on workloads that aren't actually
+   compute-bound.
+3. Always run the proposed faster path against the *real* workload, not
+   just the synthetic case it was designed for. Without farm_bench we'd
+   have shipped wgpu as default and made hs-mvp 5 % slower.

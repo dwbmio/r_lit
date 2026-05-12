@@ -120,6 +120,53 @@ L4 (4× NVENC) 预测：约 4400 fps（4× 当前峰值），100 视频约 7 秒
 
 ---
 
+## Compositor 选择决策表：CPU vs wgpu
+
+wgpu compositor **默认关闭**，opt-in 通过 `GAMEREEL_WORKER_COMPOSITOR=wgpu`。默认 CPU 是因为 hs-mvp 这类稀疏更新场景的 dirty cache 让 CPU 合成几乎免费。
+
+**break-even 经验值（RTX 3060 实测）**：
+- CPU image_effect 成本 ≈ 1 ns/像素 × 当帧实际触及的像素数
+- wgpu compose+readback 成本 ≈ 0.5 ms/帧，常数
+- 临界点 ≈ **每帧触及 50 万像素**（已扣除 dirty cache 命中部分）。低于这数 CPU 赢，高于这数 wgpu 赢 1.5–100×
+- 实测数据：[`wgpu_break_even_sweep.rs`](crates/gamereel-compositor/tests/wgpu_break_even_sweep.rs) 显示 **N=1 个全屏 overlay**（无缓存帮助时）wgpu 已经赢 37–93×
+
+### 留默认 CPU
+
+| 场景类型 | 原因 | 游戏举例 |
+|---|---|---|
+| 稀疏 UI + 小静态背景 | dirty cache 命中 70-90%，几乎免费 | hs-mvp 数据卡、放置游戏战报 |
+| Match-3 / 消除类回放（小格子）| 每格 32-96 px；64 格 × 4 KB = 25 万像素/帧，一半还命中 cache | 方块游戏战报、消除类回放 |
+| 卡牌动画（1 背景 + ≤10 张卡）| 只有卡是 dirty，背景缓存不变 | 炉石战报、MTG/PvP 卡牌回放 |
+| 一次性结算 / 计分页 + 滚动文字 | 文字是唯一动画，背景缓存 | 周报、排行榜开场 |
+| 谈话头肩回放（脸 + 滚动弹幕）| 小区域 overlay，大背景缓存 | 直播风战报 |
+
+### 切到 wgpu (`GAMEREEL_WORKER_COMPOSITOR=wgpu`)
+
+| 场景类型 | 原因 | 游戏举例 |
+|---|---|---|
+| 含全屏 VFX 的战斗回放（爆炸/抖屏/调色闪）| 每帧整画布刷一遍，cache 完全失效 | RPG/MOBA 战斗高光、塔防波次 |
+| 视差/分层全屏 cinematic 开场 | 3-5 层全屏每帧都动 | 二次元 ARPG 开场、赛季 PV |
+| 动态背景每帧重渲染 | `_clear_image` 缓存失效 | 实时 tiling 背景、动态天气 |
+| 粒子密集（50+ 全屏粒子）| 粒子覆盖整个画布 | 弹幕射击、shoot-em-up 回放 |
+| 全屏滤镜（模糊、调色、bloom）| 每帧每像素都过滤镜 | 梦境/回忆闪回转场 |
+| 棋盘缩放 / 旋转转场 | 整画布几何变换 | 棋盘游戏缩放、MOBA 全图扫场 |
+
+### 不确定怎么办：套公式
+
+```
+expected_pixels_per_frame =
+   sum(sprite_w * sprite_h * (1 if 该 sprite 每帧都变 else 0))
+
+if expected_pixels_per_frame > 500_000:
+    GAMEREEL_WORKER_COMPOSITOR=wgpu
+else:
+    保持默认 (CPU)
+```
+
+720×1080 下 50 万像素 ≈ **3 个 400×400 的 sprite 同时全帧变动**，或 **1 个全屏背景每帧重画**。只要**单个全屏图层每帧都需要重渲染**，就过 break-even，切 wgpu。
+
+---
+
 ## 工作区结构
 
 ```

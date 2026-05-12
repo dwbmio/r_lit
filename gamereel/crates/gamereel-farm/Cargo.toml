@@ -5,9 +5,10 @@ edition = "2021"
 description = "Worker-pool runtime for batch video rendering. actix-based actors hold persistent CUDA contexts so multi-job batches amortize the 284 ms cuda.init tax. Worker trait is abstract so a future RemoteWorker (gRPC to cloud GPU) plugs in zero-modification to the dispatcher."
 
 [dependencies]
-gamereel-core   = { path = "../gamereel-core" }
-ffmpeg-next     = { workspace = true }
-ffmpeg-sys-next = { workspace = true }
+gamereel-core       = { path = "../gamereel-core" }
+gamereel-compositor = { path = "../gamereel-compositor" }
+ffmpeg-next         = { workspace = true }
+ffmpeg-sys-next     = { workspace = true }
 actix           = "0.13"
 # block_in_place lives in rt-multi-thread feature.
 tokio           = { version = "1.41", features = ["fs","io-util","rt","rt-multi-thread","macros","time","sync","signal"] }

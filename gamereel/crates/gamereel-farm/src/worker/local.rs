@@ -1,32 +1,29 @@
-//! `LocalWorker` — in-process renderer holding persistent CUDA context.
+//! `LocalWorker` — in-process renderer holding persistent GPU context.
 //!
-//! The whole point of this type is **amortizing the 284 ms cuda.init
-//! tax** measured in M3 across many jobs. The worker is constructed
-//! once per OS thread, pays init exactly once, then loops on jobs
-//! delivered by the queue.
+//! Amortizes ALL one-shot costs across many jobs:
+//!   * NVRTC kernel compile (~250 ms) + cudarc CUDA context
+//!   * ffmpeg `AVHWFramesContext` (NV12 pool of 4)
+//!   * **wgpu device + render pipeline + sampler** (~190 ms — M4.5)
+//!   * **uploaded textures** (cached by id; only re-upload on cache miss)
 //!
-//! Key invariants:
-//!   * `CudaConverter` (NVRTC-compiled kernel + persistent device
-//!     buffers) lives for the worker's lifetime.
-//!   * `CudaHwContext` (ffmpeg AVHWFramesContext + AVHWDeviceContext)
-//!     also lives for the worker's lifetime. **The encoder context
-//!     itself is recreated per job** because h264_nvenc holds DPB /
-//!     B-frame state that cannot be safely reused across two videos.
-//!     Recreating it is ~17 ms (measured in trace_cuda) — acceptable
-//!     vs the ~284 ms it would take to also rebuild CUDA + hwframes.
-//!   * Workers are NOT moved across threads after construction —
-//!     CUDA context affinity is per-thread; the actix `SyncArbiter`
-//!     pattern (or a single-thread `Arbiter` per worker) is used by
-//!     `Supervisor` (M5-3) to enforce this.
+//! Per job, only the ffmpeg encoder context is recreated (~17 ms) because
+//! `h264_nvenc` holds DPB / B-frame state that cannot be safely reused
+//! across two distinct videos.
+//!
+//! Workers are NOT moved across threads after construction — CUDA + wgpu
+//! contexts both have per-thread affinity. The pool spawns each worker
+//! on a dedicated `std::thread` and routes jobs through bounded mpsc.
 
 use crate::job::{RenderJob, RenderResult};
 use crate::worker::{Worker, WorkerError, WorkerKind};
 use async_trait::async_trait;
+use gamereel_compositor::{compose_scene_frame, WgpuCompositor};
 use gamereel_core::cuda_pipeline::CudaConverter;
 use gamereel_core::ffmpeg_inc::hwctx::CudaHwContext;
 use gamereel_core::ffmpeg_inc::stage_mgr::StageMgr;
 use gamereel_core::stage::model::meta_scene::MetaSceneList;
 use gamereel_core::RuntimeCtx;
+use std::collections::HashSet;
 use std::time::Instant;
 
 pub struct LocalWorker {
@@ -44,15 +41,24 @@ pub struct LocalWorker {
     /// the worker is shut down.
     converter: CudaConverter,
     hwctx: CudaHwContext,
+    /// M4.5: persistent wgpu compositor. Replaces the per-frame CPU
+    /// `Scene::on_render` path with a GPU render pipeline. Init cost
+    /// (~190 ms wgpu + texture upload) paid once per worker process.
+    compositor: WgpuCompositor,
+    /// Tracks which texture IDs have already been uploaded into the
+    /// compositor's atlas. Same scene across many jobs ⇒ zero
+    /// additional upload cost after the first job.
+    uploaded_textures: HashSet<String>,
 
     init_wall_ms: u64,
     jobs_completed: u64,
 }
 
 impl LocalWorker {
-    /// Construct a worker bound to `width × height`. This does the
-    /// expensive CUDA init (NVRTC compile + hwframes pool); subsequent
-    /// `render()` calls reuse all of it.
+    /// Construct a worker bound to `width × height`. Initializes wgpu
+    /// + cudarc + ffmpeg hwframes one-shot (~430 ms total measured on
+    /// RTX 3060). Subsequent render() calls reuse everything except
+    /// the per-job ffmpeg encoder context.
     pub fn new(id: impl Into<String>, width: u32, height: u32) -> Result<Self, WorkerError> {
         let id = id.into();
         let t = Instant::now();
@@ -60,9 +66,12 @@ impl LocalWorker {
             .map_err(|e| WorkerError::Init(format!("CudaConverter::new: {e}")))?;
         let hwctx = CudaHwContext::new(width, height, 4)
             .map_err(|e| WorkerError::Init(format!("CudaHwContext::new: {e}")))?;
+        let compositor = WgpuCompositor::new(width, height)
+            .map_err(|e| WorkerError::Init(format!("WgpuCompositor::new: {e:?}")))?;
         let init_wall_ms = t.elapsed().as_millis() as u64;
         log::info!(
-            "LocalWorker '{id}' initialized in {init_wall_ms} ms ({width}x{height})"
+            "LocalWorker '{id}' initialized in {init_wall_ms} ms ({width}x{height}) — \
+             cudarc + hwframes + wgpu all warm"
         );
         Ok(Self {
             id,
@@ -70,6 +79,8 @@ impl LocalWorker {
             height,
             converter,
             hwctx,
+            compositor,
+            uploaded_textures: HashSet::new(),
             init_wall_ms,
             jobs_completed: 0,
         })
@@ -135,6 +146,35 @@ impl LocalWorker {
             .ok_or_else(|| "no scene preloaded".to_string())?;
         scene.on_init(&rtx);
 
+        // M4.5: lazy upload of scene textures into the compositor's
+        // atlas. Only uploads IDs we haven't seen before — same scene
+        // across multiple jobs costs zero additional upload after the
+        // first job. Per-job overhead for hs-mvp post-warmup: ~0 ms.
+        // Scene's clear background:
+        if !scene.tp_id.is_empty() && !self.uploaded_textures.contains(&scene.tp_id) {
+            if let Some(arc) = rtx.get_texture(&scene.tp_id).dynamic_image.as_ref() {
+                self.compositor
+                    .upload_texture(scene.tp_id.clone(), arc.as_ref())
+                    .map_err(|e| format!("upload bg texture: {e:?}"))?;
+                self.uploaded_textures.insert(scene.tp_id.clone());
+            }
+        }
+        // Each child node's texture:
+        let needed_ids: Vec<String> = scene
+            .children
+            .values()
+            .filter_map(|n| n.tp_id.clone())
+            .filter(|id| !id.is_empty() && !self.uploaded_textures.contains(id))
+            .collect();
+        for tp_id in needed_ids {
+            if let Some(arc) = rtx.get_texture(&tp_id).dynamic_image.as_ref() {
+                self.compositor
+                    .upload_texture(tp_id.clone(), arc.as_ref())
+                    .map_err(|e| format!("upload tex {tp_id}: {e:?}"))?;
+                self.uploaded_textures.insert(tp_id);
+            }
+        }
+
         // Per-job ffmpeg encoder + container.
         let mut octx = ffmpeg::format::output(&job.output_path)
             .map_err(|e| format!("open output {}: {e}", job.output_path.display()))?;
@@ -178,16 +218,35 @@ impl LocalWorker {
             .ok_or_else(|| "stream 0 missing".to_string())?
             .time_base();
 
+        // M4.5 retro: wgpu compose was wired into LocalWorker but turned
+        // out 4-7% SLOWER on hs-mvp because the CPU dirty cache makes
+        // most frames near-free (0.07 ms median). wgpu's per-frame
+        // compose+readback is constant ~0.5 ms, so net negative for
+        // this scene class.
+        // Default = CPU path (Scene::on_render → to_rgba8). Set
+        // GAMEREEL_WORKER_COMPOSITOR=wgpu to opt into the wgpu path
+        // for scenes where dirty cache doesn't help (50+ moving
+        // overlays, no static layer cache wins). See O-024 for retro.
+        let use_wgpu = std::env::var("GAMEREEL_WORKER_COMPOSITOR")
+            .map(|v| v == "wgpu")
+            .unwrap_or(false);
+
         // Render loop, instrumented for render_loop time.
         let render_t = Instant::now();
         let total_frames = (fps as u64) * duration;
         for f in 0..total_frames {
-            let img = scene
-                .on_render(&mut rtx, f as f32 / fps as f32)
-                .map_err(|e| format!("on_render: {e}"))?;
-            let rgba = img.to_rgba8();
+            let t = f as f32 / fps as f32;
+            let rgba: Vec<u8> = if use_wgpu {
+                compose_scene_frame(&mut self.compositor, scene, &mut rtx, t)
+                    .map_err(|e| format!("wgpu compose: {e:?}"))?
+            } else {
+                let img = scene
+                    .on_render(&mut rtx, t)
+                    .map_err(|e| format!("on_render: {e}"))?;
+                img.to_rgba8().into_raw()
+            };
             self.converter
-                .convert(rgba.as_raw())
+                .convert(&rgba)
                 .map_err(|e| format!("cuda convert: {e}"))?;
             unsafe {
                 let frame_ptr = self

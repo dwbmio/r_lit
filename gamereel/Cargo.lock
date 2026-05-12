@@ -975,6 +975,7 @@ dependencies = [
  "env_logger",
  "ffmpeg-next",
  "ffmpeg-sys-next",
+ "gamereel-compositor",
  "gamereel-core",
  "log",
  "pretty_assertions",

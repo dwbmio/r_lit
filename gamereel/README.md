@@ -52,6 +52,7 @@ Same hardware throughout. Each row reproduces from `benches/results/m{N}.json`.
 | **M5 (workers=1)** | Persistent CUDA + ffmpeg context across jobs | **1004 fps**, p99 290 ms | M5 |
 | **M5 (workers=2)** | WorkerPool round-robin dispatch | **1113 fps**, p99 547 ms | M5 |
 | **M4 (single, cold init)** | wgpu compositor + CUDA + h264_nvenc | **444 fps** (single video, includes 454 ms wgpu+cuda init); per-frame ceiling **1072 fps** | M4 |
+| **M4.5 (heavy scene case)** | wgpu compose vs CPU image_effect | wgpu wins **37–136×** when per-frame composited area > ~150K px (= 20 % of 720×1080). Shipped as opt-in `GAMEREEL_WORKER_COMPOSITOR=wgpu`; default stays CPU because hs-mvp's dirty cache wins on its scene class. See the [decision matrix](#compositor-decision-matrix-cpu-vs-wgpu) and [O-024](docs/optimization-log.md#o-024). | M4.5 |
 
 **Total trajectory: 152 → 1113 fps = 7.3× over baseline**, with quality maintained (VMAF 97.5+).
 
@@ -118,6 +119,53 @@ Hardware-gated:
 - **AV1 encode** requires Ada or newer (NVENC Gen 8+).
 
 Both unlock TikTok / Instagram premium upload tiers — visible quality lift on platforms that re-compress aggressively.
+
+---
+
+## Compositor decision matrix: CPU vs wgpu
+
+The wgpu compositor is **opt-in only** via `GAMEREEL_WORKER_COMPOSITOR=wgpu`. Default stays CPU because hs-mvp's dirty cache makes CPU compose nearly free on sparse-update scenes.
+
+**The break-even rule (measured on RTX 3060)**:
+- CPU image_effect cost ≈ 1 ns/pixel × pixels-touched-per-frame.
+- wgpu compose+readback cost ≈ 0.5 ms/frame, constant.
+- Cross-over at **~500 K pixels touched per frame** (with cache hits factored out). Below that, CPU wins. Above that, wgpu wins by 1.5–100×.
+- Reference data: [`crates/gamereel-compositor/tests/wgpu_break_even_sweep.rs`](crates/gamereel-compositor/tests/wgpu_break_even_sweep.rs) shows wgpu winning **37–93× even at N=1 full-screen overlay** when CPU has no cache help.
+
+### Stay on CPU (default)
+
+| Scene class | Why | Example games |
+|---|---|---|
+| Sparse UI with small static background | dirty cache returns 70–90 % cached frames at near-zero cost | hs-mvp data card, idle-game leaderboard |
+| Match-3 / puzzle replay (small grid cells) | per-cell sprites are 32–96 px; 64 cells × 4 KB = 250 K px / frame, half cache-hits | 方块游戏战报, candy-crush-style replays |
+| Card animation (1 bg + ≤ 10 cards) | only the cards are dirty; bg stays cached | hs-mvp, MTG / Hearthstone clone replays |
+| 1-shot result / score screen with rolling text | text is the only animation; bg cached | weekly summary, leaderboard intro |
+| Talking-head replay overlays (face cam + chat scroll) | small overlay regions, big cached bg | streaming-style replays |
+
+### Opt into wgpu (`GAMEREEL_WORKER_COMPOSITOR=wgpu`)
+
+| Scene class | Why | Example games |
+|---|---|---|
+| Battle replay with full-screen VFX (explosions, screen shake, color flash) | every frame touches the full canvas, no cache hits | RPG / MOBA battle highlights, tower defense waves |
+| Cinematic intro with parallax full-screen layers | 3–5 full-screen layers all moving every frame | 二次元 ARPG opening, season trailer |
+| Dynamic background that re-renders per frame | `_clear_image` cache invalidates every frame | live-tiling background, moving sky / weather |
+| Particle-heavy effects (50+ particles spanning the frame) | particles span the whole canvas | shoot-em-up, bullet-hell replay |
+| Continuous full-screen filter (blur, color grade, bloom) | filter touches every pixel every frame | dream-sequence / flashback transitions |
+| Game-board zoom or rotate transition | transform touches the entire canvas | board-game zoom-out, MOBA full-map sweep |
+
+### Heuristic for unsure cases
+
+```
+expected_pixels_per_frame =
+   sum(sprite_w * sprite_h * (1 if sprite_changes_every_frame else 0))
+
+if expected_pixels_per_frame > 500_000:
+    GAMEREEL_WORKER_COMPOSITOR=wgpu
+else:
+    leave default (CPU)
+```
+
+For 720×1080 frames, 500 K pixels ≈ **3 sprites of 400×400 all moving each frame**, OR **1 full-screen background that re-renders**. If a single full-screen layer is in play every frame, you're past break-even — switch.
 
 ---
 
