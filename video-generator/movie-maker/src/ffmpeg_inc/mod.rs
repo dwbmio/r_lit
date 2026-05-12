@@ -17,25 +17,58 @@ pub fn init_env() -> crate::MoveMakerResult<()> {
     Ok(())
 }
 
-/// Renders a scene to MP4. M1 changes vs the original implementation:
-///   * Encoder is auto-selected (NVENC > QSV > VAAPI > VideoToolbox > libx264).
-///   * Scaler and intermediate frames are constructed once and reused.
-///   * No more `unwrap()` on encoder lookup; failure path returns MovieError.
+/// Renders a scene to MP4 with the [`EncoderProfile::Balanced`] default.
+///
+/// This is the convenience entry point. M2 callers wanting a specific
+/// profile (Fast / TikTokHQ / IgReelsHDR) should use
+/// [`create_scene_stream_with_profile`]. M1 callers wanting a low-level
+/// encoder family preference still have [`create_scene_stream_with`].
 pub fn create_scene_stream(
     ctx: &mut RuntimeCtx,
     output: &PathBuf,
     scene_inc: &mut Scene,
 ) -> MoveMakerResult<()> {
-    create_scene_stream_with(ctx, output, scene_inc, EncoderPreference::AutoBalanced)
+    create_scene_stream_with_profile(
+        ctx,
+        output,
+        scene_inc,
+        crate::encoder_profile::EncoderProfile::Balanced,
+    )
 }
 
-/// As [`create_scene_stream`] but lets the caller force a specific encoder
-/// preference (used by benches and quality-eval to lock x264 baseline).
+/// M1-vintage entry point: selects encoder family by [`EncoderPreference`]
+/// (HW priority chain or forced libx264), with the M1 default param set
+/// for whichever encoder wins.
 pub fn create_scene_stream_with(
     ctx: &mut RuntimeCtx,
     output: &PathBuf,
     scene_inc: &mut Scene,
     pref: EncoderPreference,
+) -> MoveMakerResult<()> {
+    let choice = pick_h264_encoder(pref)?;
+    create_scene_stream_inner(ctx, output, scene_inc, choice)
+}
+
+/// M2 entry point: caller selects an [`EncoderProfile`] (intent), the
+/// profile resolves to an [`EncoderChoice`] (codec + parameter set) at
+/// runtime based on what's linked into ffmpeg.
+pub fn create_scene_stream_with_profile(
+    ctx: &mut RuntimeCtx,
+    output: &PathBuf,
+    scene_inc: &mut Scene,
+    profile: crate::encoder_profile::EncoderProfile,
+) -> MoveMakerResult<()> {
+    let choice = profile.to_encoder_choice()?;
+    create_scene_stream_inner(ctx, output, scene_inc, choice)
+}
+
+/// Shared implementation. Lives behind two API surfaces because M2 added
+/// profile-driven configuration without breaking the M1 contract.
+fn create_scene_stream_inner(
+    ctx: &mut RuntimeCtx,
+    output: &PathBuf,
+    scene_inc: &mut Scene,
+    choice: EncoderChoice,
 ) -> MoveMakerResult<()> {
     let width = ctx.view_port.width;
     let height = ctx.view_port.height;
@@ -51,7 +84,6 @@ pub fn create_scene_stream_with(
         .contains(ffmpeg::format::Flags::GLOBAL_HEADER);
 
     // 2) Encoder selection + opts.
-    let choice: EncoderChoice = pick_h264_encoder(pref)?;
     let codec = ffmpeg::codec::encoder::find_by_name(choice.codec_name).ok_or_else(|| {
         crate::error::MovieError::CustomError(format!(
             "encoder '{}' was selected but find_by_name returned None",

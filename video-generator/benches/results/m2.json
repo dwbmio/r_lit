@@ -1,0 +1,56 @@
+{
+  "milestone": "M2",
+  "branch": "linux-nvenc-refactor",
+  "hardware": "RTX 3060 + i7-13700K + Ubuntu 24.04",
+  "test_sources": [
+    "high_motion (testsrc2+noise)",
+    "text_scroll (drawtext)",
+    "talking_head (gradient+drawbox)"
+  ],
+  "profiles": {
+    "Fast": {
+      "mean_vmaf": 97.87,
+      "floor_vmaf": 88.0,
+      "wall_ms": 633,
+      "encode_fps": 473.9
+    },
+    "Balanced": {
+      "mean_vmaf": 97.73,
+      "floor_vmaf": 92.0,
+      "wall_ms": 649,
+      "encode_fps": 462.2
+    },
+    "TikTokHQ": {
+      "mean_vmaf": 97.48,
+      "floor_vmaf": 95.0,
+      "wall_ms": 751,
+      "encode_fps": 399.5
+    },
+    "IgReelsHDR": {
+      "mean_vmaf": 97.48,
+      "floor_vmaf": 95.0,
+      "wall_ms": 722,
+      "encode_fps": 415.5
+    }
+  },
+  "movie_maker_perf_main": {
+    "scene": "tests/perf_main/scene.meta",
+    "profile_used": "Balanced (default)",
+    "runs_ms": [
+      797,
+      780,
+      787,
+      854,
+      772
+    ],
+    "median_ms": 787,
+    "median_fps_end_to_end": 381.19
+  },
+  "grid_search": {
+    "data_points": 144,
+    "axes": "preset (4) \u00d7 lookahead (3) \u00d7 spatial_aq (2) \u00d7 bf (2) \u00d7 sources (3)",
+    "csv": "tools/quality-eval/grid-out/quality-grid.csv",
+    "summary": "tools/quality-eval/grid-out/summary.json",
+    "key_finding": "Synthetic sources do not reward AQ or B-frames (no perceptual texture, no temporal redundancy). Balanced and Fast use minimal extras; TikTokHQ keeps AQ + lookahead because real-camera content benefits even though our synthetic grid can't measure it directly."
+  }
+}

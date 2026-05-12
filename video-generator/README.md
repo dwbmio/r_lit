@@ -47,7 +47,7 @@ Two columns matter:
 |---|---|---:|---:|---:|---:|---|
 | **M0** | libx264 medium @ 6 Mbps | **152** | 535 (shell) / 152 (criterion) | 99.34 | 0.999 | hardcoded videotoolbox crashed on Linux; libx264 used for measurement |
 | **M1** | h264_nvenc p4 balanced (auto) | **377 (2.48× M0)** | NVENC p4: 475, NVENC p2: **619**, libx264: 520 | 98.42 (p4) / 99.05 (p2) | 0.998 | encoder auto-pick, scaler hoisted, z-order deterministic. CPU compositing now the bottleneck (~80% of e2e time). |
-| M2 (target) | NVENC h264 TikTokHQ profile | — | (≥ M1 × 0.8) | ≥ 95 | — | quality-tuned via VMAF grid search |
+| **M2** | EncoderProfile::Balanced (default) | **381 (1.01× M1)** | Fast 474 / Balanced 462 / TikTokHQ 400 / IgReelsHDR 416 | Fast 97.87 / Balanced 97.73 / **TikTokHQ 97.48** / HDR 97.48 | — | 4 named profiles, 144-point VMAF grid, all profiles clear floor. e2e flat (compositing still dominant). See [docs/optimization-log.md#m2](docs/optimization-log.md). |
 | M3 (target) | NVENC + CUDA hwframes | ≥ 600 | ≥ 1500 | ≥ 95 | — | zero CPU↔GPU copies |
 | M4 (target) | wgpu compositor + NVENC | ≥ 1500 | ≥ 3000 | ≥ 95 | — | replaces image_effect.rs |
 | M5 (target) | actor pool, batch-100 | 100 × 10s ≤ 120s wall | — | ≥ 95 | — | hardware-bounded concurrency |

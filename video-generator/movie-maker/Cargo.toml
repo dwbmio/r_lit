@@ -38,3 +38,7 @@ harness = false
 name = "m1_quickwin"
 harness = false
 
+[[bench]]
+name = "m2_profile_speed"
+harness = false
+

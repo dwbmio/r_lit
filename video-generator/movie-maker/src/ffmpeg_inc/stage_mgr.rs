@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
+    encoder_profile::EncoderProfile,
     error::MovieError,
     stage::{model::meta_scene::MetaSceneList, scene::Scene},
     MoveMakerResult, RuntimeCtx,
@@ -50,7 +51,8 @@ impl StageMgr {
         Ok(())
     }
 
-    /// Render the scene named `scene_name` to `output`. Replaces the previous
+    /// Render the scene named `scene_name` to `output` using the
+    /// [`EncoderProfile::Balanced`] default. Replaces the previous
     /// implementation that always looked up `"mvp"`.
     pub fn start_gen(
         &mut self,
@@ -58,15 +60,25 @@ impl StageMgr {
         output: &PathBuf,
         scene_name: &str,
     ) -> MoveMakerResult<()> {
+        self.start_gen_with_profile(rtx, output, scene_name, EncoderProfile::default())
+    }
+
+    /// As [`start_gen`] but lets the caller pin the encoder profile.
+    pub fn start_gen_with_profile(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+        scene_name: &str,
+        profile: EncoderProfile,
+    ) -> MoveMakerResult<()> {
         if !self.scenes.contains_key(scene_name) {
             return Err(MovieError::CustomError(format!(
                 "start_gen: scene '{scene_name}' not registered (have: {:?})",
                 self.scenes.keys().collect::<Vec<_>>()
             )));
         }
-        // Safe to unwrap: contains_key just verified it.
         let scene = self.scenes.get_mut(scene_name).expect("scene exists");
-        crate::ffmpeg_inc::create_scene_stream(rtx, output, scene)?;
+        crate::ffmpeg_inc::create_scene_stream_with_profile(rtx, output, scene, profile)?;
         Ok(())
     }
 
@@ -78,12 +90,22 @@ impl StageMgr {
         rtx: &mut RuntimeCtx,
         output: &PathBuf,
     ) -> MoveMakerResult<()> {
+        self.start_gen_first_with_profile(rtx, output, EncoderProfile::default())
+    }
+
+    /// Profile-aware companion to [`start_gen_first`].
+    pub fn start_gen_first_with_profile(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+        profile: EncoderProfile,
+    ) -> MoveMakerResult<()> {
         let name = self
             .scenes
             .keys()
             .next()
             .cloned()
             .ok_or_else(|| MovieError::CustomError("start_gen_first: no scene preloaded".into()))?;
-        self.start_gen(rtx, output, &name)
+        self.start_gen_with_profile(rtx, output, &name, profile)
     }
 }
