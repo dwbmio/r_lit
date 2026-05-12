@@ -349,7 +349,7 @@ checksum = "0b023947811758c97c59bf9d1c188fd619ad4718dcaa767947df1cadb14f39f4"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -482,6 +482,15 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "cudarc"
+version = "0.19.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83be2fd94791d2580692ced87ea19e9728102ce75582543b82765dbe3e884557"
+dependencies = [
+ "libloading 0.9.0",
 ]
 
 [[package]]
@@ -944,6 +953,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1017,8 +1036,10 @@ name = "movie-maker"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "cudarc",
  "env_logger",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
  "image",
  "imageproc",
  "log",

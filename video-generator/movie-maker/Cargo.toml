@@ -15,6 +15,16 @@ image = "0.25.5"
 imageproc = "0.25.0"
 tokio = { version = "1.41.1", features = ["fs","io-util","rt"] }
 tween = "2.0.3"
+# M3: CUDA pipeline. cudarc dynamic-loading feature avoids build-time CUDA
+# requirement; users without an NVIDIA GPU can build the lib (it falls back
+# to the M2 sws_scale path at runtime).
+cudarc = { version = "0.19", default-features = false, features = ["dynamic-loading", "driver", "nvrtc", "cuda-12000"] }
+# Direct ffmpeg-sys-next access for AVHWFramesContext / AV_PIX_FMT_CUDA — these
+# are not wrapped by ffmpeg-next's safe API. Same crate version as the one
+# ffmpeg-next uses transitively (otherwise links="ffmpeg" double-link conflict).
+# Note: we cannot use rsmpeg in the same workspace as ffmpeg-next because both
+# advertise links="ffmpeg" — Cargo refuses dual native-library linkage.
+ffmpeg-sys-next = "8.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
