@@ -1,3 +1,4 @@
+pub mod cuda_pipeline;
 pub mod encoder_profile;
 pub mod error;
 pub mod ffmpeg_inc;

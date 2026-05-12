@@ -1,4 +1,5 @@
 pub mod encoder_pick;
+pub mod hwctx;
 pub mod stage_mgr;
 pub mod stream;
 pub mod texture;
