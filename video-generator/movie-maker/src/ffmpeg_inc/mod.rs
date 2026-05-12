@@ -63,6 +63,163 @@ pub fn create_scene_stream_with_profile(
     create_scene_stream_inner(ctx, output, scene_inc, choice)
 }
 
+/// M3 entry point: full GPU pipeline. RGBA composed by [`Scene::on_render`]
+/// is uploaded to GPU once, color-converted via the cudarc kernel into
+/// an NV12 frame from ffmpeg's CUDA hwframes pool, and encoded by
+/// h264_nvenc directly from device memory. Skips the CPU `sws_scale`
+/// path entirely (M2 measurement showed it was 46% of phase time).
+pub fn create_scene_stream_cuda(
+    ctx: &mut RuntimeCtx,
+    output: &PathBuf,
+    scene_inc: &mut Scene,
+) -> MoveMakerResult<()> {
+    cuda_path::create_scene_stream(ctx, output, scene_inc)
+}
+
+mod cuda_path {
+    use super::*;
+    use crate::cuda_pipeline::CudaConverter;
+    use crate::ffmpeg_inc::hwctx::CudaHwContext;
+    use ffmpeg_sys_next as ffsys;
+    use std::ffi::CString;
+    use std::ptr::null_mut;
+
+    pub(super) fn create_scene_stream(
+        ctx: &mut RuntimeCtx,
+        output: &PathBuf,
+        scene_inc: &mut Scene,
+    ) -> MoveMakerResult<()> {
+        let width = ctx.view_port.width;
+        let height = ctx.view_port.height;
+        let fps = ctx.stream.fps as i32;
+        let duration = ctx.stream.duration.as_secs();
+        let total_frames = (fps as u64) * duration;
+
+        // 1) GPU resources.
+        let mut converter = CudaConverter::new(width, height)?;
+        let hwctx = CudaHwContext::new(width, height, 4)?;
+
+        // 2) Open container.
+        let mut octx = ffmpeg::format::output(output)?;
+        let global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg::format::Flags::GLOBAL_HEADER);
+        let codec = ffmpeg::codec::encoder::find_by_name("h264_nvenc")
+            .ok_or_else(|| crate::error::MovieError::CustomError(
+                "h264_nvenc not available — cannot use CUDA pipeline".into(),
+            ))?;
+        log::info!("movie-maker: CUDA pipeline → h264_nvenc");
+        let mut ost = octx.add_stream(codec)?;
+
+        // 3) Encoder context with raw-FFI hw_frames_ctx injection.
+        let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()?;
+        encoder_ctx.set_width(width);
+        encoder_ctx.set_height(height);
+        encoder_ctx.set_format(ffmpeg::format::Pixel::CUDA);
+        encoder_ctx.set_frame_rate(Some((fps, 1)));
+        encoder_ctx.set_time_base(ffmpeg::Rational(1, fps));
+        if global_header {
+            encoder_ctx.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
+        }
+        // Inject hw_frames_ctx via raw FFI — ffmpeg-next's safe wrapper
+        // doesn't expose this field but the underlying AVCodecContext does.
+        unsafe {
+            let cc_ptr = encoder_ctx.as_mut_ptr() as *mut ffsys::AVCodecContext;
+            (*cc_ptr).hw_frames_ctx = hwctx.frames_ref();
+        }
+
+        // M2 TikTokHQ-ish defaults; M3 keeps the encoder identical so the
+        // perf delta is purely the upload+convert path change.
+        let mut opts = ffmpeg::Dictionary::new();
+        for (k, v) in &[
+            ("preset", "p4"),
+            ("tune", "hq"),
+            ("rc", "vbr"),
+            ("cq", "23"),
+            ("b:v", "8M"),
+            ("maxrate", "12M"),
+            ("bufsize", "16M"),
+            ("profile", "high"),
+            ("bf", "3"),
+        ] {
+            opts.set(k, v);
+        }
+        let mut cc = encoder_ctx.open_with(opts)?;
+        ost.set_parameters(&cc);
+        ost.set_time_base(ffmpeg::Rational(1, fps));
+        octx.write_header()?;
+        let stream_time_base = octx
+            .stream(0)
+            .ok_or_else(|| crate::error::MovieError::CustomError(
+                "output stream 0 missing".into(),
+            ))?
+            .time_base();
+
+        // 4) Scene init + first probe frame.
+        scene_inc.on_init(ctx);
+
+        for frame_number in 0..total_frames {
+            let img = scene_inc.on_render(ctx, frame_number as f32 / fps as f32)?;
+            let rgba = img.to_rgba8();
+            converter.convert(rgba.as_raw())?;
+
+            // Allocate a pool frame, copy our converted planes into it.
+            unsafe {
+                let frame_ptr = hwctx.allocate_frame()?;
+                let dst_y = (*frame_ptr).data[0] as u64;
+                let dst_uv = (*frame_ptr).data[1] as u64;
+                let dst_y_pitch = (*frame_ptr).linesize[0] as usize;
+                let dst_uv_pitch = (*frame_ptr).linesize[1] as usize;
+                converter.copy_to_device_2d(dst_y, dst_y_pitch, dst_uv, dst_uv_pitch)?;
+                converter.synchronize()?; // wait for kernel + 2 cuMemcpy2DAsync
+
+                (*frame_ptr).pts = frame_number as i64;
+
+                // Send via raw FFI (safe wrappers don't take *mut AVFrame).
+                let cc_ptr = cc.as_mut_ptr() as *mut ffsys::AVCodecContext;
+                let send_rc = ffsys::avcodec_send_frame(cc_ptr, frame_ptr);
+                if send_rc < 0 {
+                    let mut f = frame_ptr;
+                    ffsys::av_frame_free(&mut f);
+                    return Err(crate::error::MovieError::CustomError(format!(
+                        "avcodec_send_frame failed: rc={send_rc}"
+                    )));
+                }
+                let mut f = frame_ptr;
+                ffsys::av_frame_free(&mut f);
+            }
+
+            // Drain packets via the safe wrapper.
+            let mut pkt = ffmpeg::Packet::empty();
+            while cc.receive_packet(&mut pkt).is_ok() {
+                pkt.set_stream(0);
+                pkt.rescale_ts(ffmpeg::Rational(1, fps), stream_time_base);
+                pkt.write_interleaved(&mut octx)?;
+            }
+        }
+
+        // Flush.
+        cc.send_eof()?;
+        let mut pkt = ffmpeg::Packet::empty();
+        while cc.receive_packet(&mut pkt).is_ok() {
+            pkt.set_stream(0);
+            pkt.rescale_ts(ffmpeg::Rational(1, fps), stream_time_base);
+            pkt.write_interleaved(&mut octx)?;
+        }
+        octx.write_trailer()?;
+        log::info!(
+            "movie-maker: wrote {} ({} frames @ {}x{} via CUDA hwframes + h264_nvenc)",
+            output.display(), total_frames, width, height
+        );
+        // Suppress unused-import warning if we ever drop the CString/null_mut usage.
+        let _ = (CString::new(""), null_mut() as *mut std::ffi::c_void);
+        Ok(())
+    }
+}
+
 /// Shared implementation. Lives behind two API surfaces because M2 added
 /// profile-driven configuration without breaking the M1 contract.
 fn create_scene_stream_inner(

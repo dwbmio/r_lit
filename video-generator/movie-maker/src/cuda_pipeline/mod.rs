@@ -152,6 +152,87 @@ impl CudaConverter {
     pub fn width(&self) -> u32 { self.width }
     pub fn height(&self) -> u32 { self.height }
 
+    /// Copy our converted Y/UV planes into ffmpeg's pooled CUDA frame
+    /// using cuMemcpy2D (handles destination pitch / linesize).
+    ///
+    /// SAFETY: `dst_y_ptr` and `dst_uv_ptr` must be valid CUDA device
+    /// pointers in any context on the same device (UVA makes this OK).
+    /// Caller must ensure the destination has at least
+    /// `dst_y_pitch * height` bytes for Y and `dst_uv_pitch * height/2`
+    /// bytes for UV.
+    pub unsafe fn copy_to_device_2d(
+        &self,
+        dst_y_ptr: u64,
+        dst_y_pitch: usize,
+        dst_uv_ptr: u64,
+        dst_uv_pitch: usize,
+    ) -> Result<(), MovieError> {
+        use cudarc::driver::sys::{cuMemcpy2DAsync_v2, CUDA_MEMCPY2D_st, CUmemorytype};
+        use cudarc::driver::DevicePtr;
+
+        let stream_handle = self.stream.cu_stream();
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let null_host: *const std::ffi::c_void = std::ptr::null();
+        let null_host_mut: *mut std::ffi::c_void = std::ptr::null_mut();
+        let null_array: cudarc::driver::sys::CUarray = std::ptr::null_mut();
+
+        // --- Y plane ---
+        let (y_src_ptr, _record_y) = self.y_dev.device_ptr(&self.stream);
+        let yc = CUDA_MEMCPY2D_st {
+            srcXInBytes: 0,
+            srcY: 0,
+            srcMemoryType: CUmemorytype::CU_MEMORYTYPE_DEVICE,
+            srcHost: null_host,
+            srcDevice: y_src_ptr,
+            srcArray: null_array,
+            srcPitch: w, // tight
+            dstXInBytes: 0,
+            dstY: 0,
+            dstMemoryType: CUmemorytype::CU_MEMORYTYPE_DEVICE,
+            dstHost: null_host_mut,
+            dstDevice: dst_y_ptr,
+            dstArray: null_array,
+            dstPitch: dst_y_pitch,
+            WidthInBytes: w,
+            Height: h,
+        };
+        let rc = cuMemcpy2DAsync_v2(&yc as *const _, stream_handle);
+        if rc != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            return Err(MovieError::CustomError(format!(
+                "cuMemcpy2DAsync_v2 (Y plane) failed: {:?}", rc
+            )));
+        }
+
+        // --- UV plane ---
+        let (uv_src_ptr, _record_uv) = self.uv_dev.device_ptr(&self.stream);
+        let uvc = CUDA_MEMCPY2D_st {
+            srcXInBytes: 0,
+            srcY: 0,
+            srcMemoryType: CUmemorytype::CU_MEMORYTYPE_DEVICE,
+            srcHost: null_host,
+            srcDevice: uv_src_ptr,
+            srcArray: null_array,
+            srcPitch: w,
+            dstXInBytes: 0,
+            dstY: 0,
+            dstMemoryType: CUmemorytype::CU_MEMORYTYPE_DEVICE,
+            dstHost: null_host_mut,
+            dstDevice: dst_uv_ptr,
+            dstArray: null_array,
+            dstPitch: dst_uv_pitch,
+            WidthInBytes: w,
+            Height: h / 2,
+        };
+        let rc = cuMemcpy2DAsync_v2(&uvc as *const _, stream_handle);
+        if rc != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            return Err(MovieError::CustomError(format!(
+                "cuMemcpy2DAsync_v2 (UV plane) failed: {:?}", rc
+            )));
+        }
+        Ok(())
+    }
+
     /// Internal accessor for M3-3 (hwframe ctx wraps these device pointers).
     #[allow(dead_code)]
     pub(crate) fn y_slice(&self) -> &CudaSlice<u8> { &self.y_dev }

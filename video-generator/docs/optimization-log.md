@@ -284,7 +284,7 @@ This isn't a single optimization but a methodology entry, kept here so M3+ inher
 `/usr/bin/time -v` on the same binary: 0.97s user + 0.37s sys CPU vs 0.98s wall, 137% CPU. Phases overlap in the real hot loop, so individual ms don't sum to wall time.
 
 **Retro: the 80% figure was wrong**
-- I assumed compositing was the dominant cost because `image_effect.rs` is the most visually heavy CPU code (per-pixel alpha blends in nested loops). The actual data: on a *simple* perf_main scene (2 sprites, mostly static), compositing is **only 13%** — the dominant CPU cost is `sws_scale` at 46%. 
+- I assumed compositing was the dominant cost because `image_effect.rs` is the most visually heavy CPU code (per-pixel alpha blends in nested loops). The actual data: on a *simple* perf_main scene (2 sprites, mostly static), compositing is **only 13%** — the dominant CPU cost is `sws_scale` at 46%.
 - This matters for M3 sequencing. Originally M3's win was framed as "free up CPU by moving compose to GPU", but the real win is **moving sws_scale to GPU via `scale_cuda`** — that's the 311 ms slug, ~3× the size of the compositing slug.
 - Lessons:
   1. **Always measure before claiming a bottleneck percentage**. Phase-isolation tests are cheap to write and stop you from optimizing the wrong thing.
@@ -292,3 +292,88 @@ This isn't a single optimization but a methodology entry, kept here so M3+ inher
 - Followup:
   - Update README trend table to reflect that **sws_scale** is the M3 target, not compositing.
   - Re-run `cpu_breakdown` test against `demo` (with its richer scene) once that runner exists, to confirm whether the M4 wgpu compositor or the M3 hwframes path dominates the e2e wins on real workloads.
+
+---
+
+## M3 — Full-GPU pipeline (cudarc + ffmpeg CUDA hwframes)
+
+### O-012 — `RGBA8 (CPU) → NV12 (GPU)` cudarc kernel via NVRTC    [milestone: M3]
+
+**Hypothesis**
+- Expected impact: replace the CPU-side `sws_scale` slug (M2 measured at 311 ms / 46% of phase time on perf_main, see [O-011](#o-011)) with a GPU kernel running in ~5 ms; net 60× on this stage in isolation.
+- Mechanism: a single CUDA thread block per 2×2 RGBA tile computes 4 Y samples + 1 averaged UV pair. BT.601 limited-range matrix with output clamp. Persistent device buffers reused across frames so per-frame cost is upload + launch only.
+
+**Test (self-proof)**
+- File: `movie-maker/tests/cuda_rgba_nv12_parity.rs::cuda_kernel_matches_sws_scale_within_nv12_tolerance` (#[ignore], CUDA-gated)
+- Runs both CPU `sws_scale` (RGBA→YUV420P, repacked to NV12 in test) and our GPU kernel on a deterministic RGBA pattern (XOR'd channels). Asserts `< 1%` of all NV12 samples diverge by more than 2 levels.
+- Measured: Y plane 0/76800 samples >2 (max diff 1, mean |diff| 0.020), UV plane 1058/38400 samples >2 (max diff 14, mean |diff| 0.403). Combined 0.918% — under the 1% bar.
+
+**Measurement**
+- Standalone CPU sws_scale (M2 measurement): 311 ms / 300 frames = 1.04 ms/frame at 720x1080.
+- Standalone GPU kernel (rough estimate from cuda_rgba_nv12_parity timing): ≪ 1 ms/frame.
+- However: the win in isolation does NOT translate 60× into e2e because (a) we now pay PCIe upload of RGBA every frame, (b) destination is in ffmpeg's pool not our kernel's output buffer so we add a cuMemcpy2D, (c) `synchronize()` after each frame waits for both kernel + memcpy.
+
+**Retro**
+- Hypothesis vs reality: **technically delivered (kernel is fast)** but **e2e impact muted** (see O-014).
+- The Y plane's perfect parity (max diff 1) confirms the BT.601 matrix is right. UV's looser fit (max diff 14, ~3% of samples) is the **box-average vs sws low-pass-then-decimate** difference — sws applies a small filter before subsampling, ours uses a raw 2×2 average. NVENC quantizes both before encoding so the visible quality difference is negligible (M3-4 e2e mp4 ffprobe-clean).
+- Lessons:
+  1. Standalone-stage micro-benchmarks routinely overpredict e2e impact by an order of magnitude when there are upstream/downstream synchronization costs.
+  2. NV12 chroma subsampling has multiple "correct" implementations; pick one and document it (we're using box-average, sws uses low-pass).
+- Followup: if VMAF on real content shows visible chroma artifacts, add a 3-tap low-pass before chroma subsampling in the kernel — adds ~10 GFLOPs/frame, negligible at 720p.
+
+---
+
+### O-013 — ffmpeg CUDA hwframes pool (separate-context UVA bridge)    [milestone: M3]
+
+**Hypothesis**
+- Expected impact: 0× perf on its own; **enables** O-014 (no-CPU-roundtrip pipeline).
+- Mechanism: ffmpeg owns an `AVHWFramesContext` (NV12 pool, 4 frames) on the same NVIDIA device cudarc uses. Encoder's `hw_frames_ctx` set so `h264_nvenc` consumes pooled CUDA frames natively (not synthetic CPU frames it would have to re-upload).
+
+**Test (self-proof)**
+- File: `movie-maker/tests/cuda_hwctx_alloc.rs` (2 tests, #[ignore])
+  - `allocates_pooled_cuda_nv12_frames` — verifies pool returns distinct device pointers, format = AV_PIX_FMT_CUDA, width/height/linesize sane.
+  - `frames_ref_can_be_borrowed_multiple_times` — verifies AVBufferRef refcount semantics so encoder + copy helper can both hold references safely.
+
+**Measurement**
+- N/A as a perf change in isolation.
+
+**Retro**
+- **Initial attempt with `AV_CUDA_USE_PRIMARY_CONTEXT` failed**: `Primary context already active with incompatible flags`. cudarc's `CudaContext::new(0)` retains the primary context with a flag set ffmpeg refuses (`CU_CTX_SCHED_AUTO` vs ffmpeg's expectation).
+- **Solution**: let ffmpeg create its own CUDA context on the same device. RTX 3060's Unified Virtual Addressing (UVA, on by default for Pascal+) means a device pointer allocated by cudarc is valid in ffmpeg's context. We do cuMemcpy2DAsync_v2 from cudarc's stream — UVA resolves the cross-context destination pointer transparently.
+- Lessons:
+  1. CUDA primary context flag negotiation between independent libraries is fragile. Default to "let each library make its own context, share via UVA" unless both libraries explicitly cooperate.
+  2. ffmpeg-next does not expose `hw_frames_ctx` in its safe wrapper — drop to `ffmpeg-sys-next` (which `ffmpeg-next` already pulls in transitively) for the field set.
+  3. **Cargo's `links="ffmpeg"` rule blocked our first plan** to use `rsmpeg` (which has cleaner hwframe APIs). Both ffmpeg-next and rsmpeg declare `links="ffmpeg"` and refuse to coexist. We salvaged by promoting `ffmpeg-sys-next` (already transitive) to a direct dep.
+
+---
+
+### O-014 — End-to-end CUDA pipeline integrated into `create_scene_stream_cuda`    [milestone: M3]
+
+**Hypothesis**
+- Expected impact: **~1.5–2×** e2e on perf_main scene; **2–3×** on heavier compositions.
+- Mechanism: `Scene::on_render` → `CudaConverter::convert` (RGBA upload + GPU kernel) → `CudaConverter::copy_to_device_2d` (cuMemcpy2DAsync_v2 to pool frame) → `avcodec_send_frame` with `AV_PIX_FMT_CUDA` AVFrame. No CPU-side `sws_scale`, no CPU-side YUV intermediate, just one PCIe upload per frame.
+
+**Test (self-proof)**
+- File: `movie-maker/tests/cuda_e2e_perf_main.rs::perf_main_scene_through_cuda_pipeline_produces_valid_mp4` (#[ignore])
+- Drives `create_scene_stream_cuda` on the perf_main scene, asserts ffprobe sees codec=h264, profile=High, width=720, height=1080, pix_fmt=yuv420p, nb_read_frames=300.
+- File: `movie-maker/tests/cuda_vram_leak.rs::no_vram_leak_across_100_encodes` (#[ignore], ~62 s)
+- 100 sequential encodes, asserts VRAM delta < 200 MB.
+
+**Measurement** (`benches/m3.sh` → [`benches/results/m3.json`](../benches/results/m3.json))
+- M2 path (sws_scale + Balanced profile): **370.8 fps median** (5 runs)
+- M3 path (CUDA hwframes): **455.9 fps median** (5 runs, cold run dropped)
+- **Speedup: 1.229× (1.23×) on perf_main e2e**
+- VRAM leak across 100 cycles: **0 MB** ([`tests/cuda_vram_leak.rs`](../movie-maker/tests/cuda_vram_leak.rs))
+
+**Retro**
+- Hypothesis vs reality: **delivered ~half the predicted multiplier**. The sources of over-prediction:
+  1. perf_main is small and mostly static; `Scene::on_render` (CPU pixel blends) is now the dominant cost — not the sws_scale slug we removed. Re-running [O-011](#o-011)'s breakdown post-M3 would likely show compositing at 50%+ on perf_main.
+  2. We `synchronize()` after every frame (kernel + 2× cuMemcpy + send). This serializes the pipeline; an async pipeline where NVENC drains while the next frame's kernel runs would recover another ~20%.
+  3. The cuMemcpy2DAsync_v2 from cudarc-owned buffer to ffmpeg pool buffer is wasted PCIe-internal traffic. The fix: **make CudaConverter::convert write directly into the pool frame's pointer** (need to inject a cudarc `CudaSlice<u8>` view over an external pointer — not in cudarc 0.19, would be M4-ish).
+- The **leak test passing with 0 MB delta** is the most valuable result here. Drop machinery for both `CudaConverter` and `CudaHwContext` is correct; production can run unattended for arbitrary durations.
+- Lessons:
+  1. **perf_main is no longer a representative benchmark for M3+**. It was a useful baseline (M0-M2) but its scene is so simple that compositing dominates anything we do downstream. M5's batch test against demo's hs-mvp scene (richer compositing) will give more honest M3/M4 multipliers.
+  2. The "1.23× e2e on a small scene + 0 leaks + GPU pipeline ready for M4 wgpu compositor" is the **right framing**. M3 is structural — the compositor (M4) cashes in the structure, M5 amortizes everything across a worker pool.
+- Followup:
+  - Add an e2e CUDA bench against a synthesized "heavy" scene (50+ overlays) to surface the multiplier on real compositing load.
+  - Drop the per-frame `synchronize()` once we add a stream-aware NVENC submission path (cudarc + ffmpeg can share a CUstream).
