@@ -41,9 +41,9 @@ fn main() -> Result<(), MovieError> {
             // stage from scene-meta to generate video
             let mut stage = StageMgr::new( scene_meta);
             report.gen_nodes(&mut rtx, &mut stage.scenes_meta.meta_scene_list[0]);
-            stage.meta_scene_preload(&mut rtx, 0).expect("preload failed!");
-            stage.scenes_meta.meta_scene_list[0].dump_to_file();    //debug 
-            stage.start_gen(&mut rtx,&out_mp4)?;
+            stage.meta_scene_preload(&mut rtx, 0)?;
+            stage.scenes_meta.meta_scene_list[0].dump_to_file();    //debug
+            stage.start_gen_first(&mut rtx, &out_mp4)?;
 
             let end = now.elapsed().as_millis();
             println!("[movie-maker]draw call times: {}",rtx.draw_call_times);

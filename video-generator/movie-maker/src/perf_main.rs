@@ -6,7 +6,9 @@ use movie_maker::ffmpeg_inc::stage_mgr::StageMgr;
 use movie_maker::RuntimeCtx;
 
 fn main() -> Result<(), MovieError> {
-    ffmpeg_inc::init_env().unwrap();
+    // Default to INFO so encoder selection is visible without RUST_LOG fiddling.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    ffmpeg_inc::init_env()?;
     let project_root = env!("CARGO_MANIFEST_DIR");
     let path_buf = Path::new(project_root)
         .join("tests/perf_main/icon.png")
@@ -34,8 +36,8 @@ fn main() -> Result<(), MovieError> {
                 .expect("load meta failed!");
 
             let mut stage = StageMgr::new(scene_meta);
-            stage.meta_scene_preload(&mut rtx, 0).expect("preload failed!");
-            stage.start_gen(&mut rtx, &out_mp4)?;
+            stage.meta_scene_preload(&mut rtx, 0)?;
+            stage.start_gen_first(&mut rtx, &out_mp4)?;
             println!("[runtime ctx] draw call times: {}", rtx.draw_call_times);
             let end = now.elapsed().as_millis();
             println!("程序运行了 {:?} millis", end); // 程序终止时间

@@ -9,6 +9,7 @@ thiserror = "2.0.3"
 serde = {version = "1.0.215",features = ["derive"]}
 serde_json = "1.0.133"
 log = "0.4.22"
+env_logger = "0.11"
 ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg.git" }
 image = "0.25.5"
 imageproc = "0.25.0"
@@ -31,5 +32,9 @@ path = "src/perf_main.rs"  # 二进制文件的源代码路径
 
 [[bench]]
 name = "encode_baseline"
+harness = false
+
+[[bench]]
+name = "m1_quickwin"
 harness = false
 

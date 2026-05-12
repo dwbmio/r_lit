@@ -1,17 +1,22 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::{action::ActionList, model::meta_scene::MetaScene, node::NodeGraph};
 use crate::{ffmpeg_inc::image_effect::blend_images, MoveMakerResult, RuntimeCtx};
 use image::DynamicImage;
 
 // 一个同场景的片段算一个scene
+//
+// `children` is a BTreeMap (was HashMap pre-M1) so iteration order is
+// deterministic — node IDs are sorted ascending and rendered in that order.
+// This makes z-order stable across runs and lets us SHA256-compare frames
+// for regression tests.
 #[allow(unused)]
 #[derive(Default, Debug)]
 pub struct Scene {
     pub name: String,
     pub tp_id: String,
     pub meta_scene: MetaScene,                    //原始数据
-    pub children: HashMap<u64, NodeGraph>,        //节点树
+    pub children: BTreeMap<u64, NodeGraph>,       //节点树（BTreeMap → 稳定 z-order）
     pub action_list: HashMap<String, ActionList>, //timeline
 
     _clear_image: DynamicImage,         //背景的引用
@@ -26,7 +31,7 @@ impl Scene {
         let s = Scene {
             name: name.to_owned(),
             meta_scene: meta_scene.to_owned(),
-            children: HashMap::new(), // 为每个元素创建 NodeGraph‘
+            children: BTreeMap::new(), // 为每个元素创建 NodeGraph
             _dirty: true,             // 开始脏渲染
             _first_frame: true,       // 首帧
             ..Default::default()
