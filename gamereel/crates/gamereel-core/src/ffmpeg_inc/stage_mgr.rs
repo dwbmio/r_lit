@@ -108,4 +108,28 @@ impl StageMgr {
             .ok_or_else(|| GamereelError::CustomError("start_gen_first: no scene preloaded".into()))?;
         self.start_gen_with_profile(rtx, output, &name, profile)
     }
+
+    /// M3 entry: render via the full CUDA pipeline. Skips the CPU
+    /// `sws_scale` slug entirely. Requires a working NVIDIA driver +
+    /// libnvrtc; fails clearly if either is missing. Profile parameter
+    /// reserved for symmetry — the CUDA path uses Balanced today.
+    pub fn start_gen_first_cuda(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+    ) -> GamereelResult<()> {
+        let name = self
+            .scenes
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                GamereelError::CustomError("start_gen_first_cuda: no scene preloaded".into())
+            })?;
+        let scene = self
+            .scenes
+            .get_mut(&name)
+            .expect("scene exists by contains_key");
+        crate::ffmpeg_inc::create_scene_stream_cuda(rtx, output, scene)
+    }
 }

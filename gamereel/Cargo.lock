@@ -841,9 +841,14 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 name = "hs-mvp"
 version = "0.1.0"
 dependencies = [
+ "env_logger",
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
  "gamereel-core",
  "image",
  "imageproc",
+ "log",
+ "serde_json",
  "tokio",
 ]
 

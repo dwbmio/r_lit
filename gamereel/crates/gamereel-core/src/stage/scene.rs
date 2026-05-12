@@ -93,18 +93,18 @@ impl Scene {
     }
 
     pub fn on_init(&mut self, ctx: &RuntimeCtx) {
-        let clear_image = ctx
+        // One-shot deep copy at init: _clear_image is the persistent
+        // framebuffer we composite onto, so it has to be owned. The
+        // per-frame compose path in on_render takes the cheap Arc deref.
+        let clear_image = (**ctx
             .get_texture(&self.tp_id)
             .dynamic_image
-            .clone()
-            .expect("Ensure");
-        // 初始化 child
+            .as_ref()
+            .expect("Ensure"))
+            .clone();
         self.init_children();
-        // 根据 child 绑定 action
         self.action_bind_node();
-        // 需要先修复 配置绑定 在初始化 action
         self.init_action_list();
-        // TODO 根据 是否在action 初始化底板
         self._clear_image = clear_image;
     }
 
@@ -147,27 +147,31 @@ impl Scene {
             self._dynamic_beach_image = self._clear_image.clone();
             for (_, v) in &self.children {
                 if v.is_static {
-                    let node_tp = ctx
+                    // D2: Arc::clone is refcount-only; drops the borrow on ctx
+                    // so ctx.draw_call_times can be mutated next.
+                    let tex_arc = ctx
                         .get_texture(v.tp_id.clone().unwrap_or("".to_owned()).as_str())
                         .dynamic_image
-                        .clone()
-                        .expect("Ensure");
+                        .as_ref()
+                        .expect("Ensure")
+                        .clone();
                     ctx.draw_call_times += 1;
 
-                    Self::blend_image(&mut self._dynamic_beach_image, &node_tp, v);
+                    Self::blend_image(&mut self._dynamic_beach_image, &tex_arc, v);
                 }
             }
             // 在静态缓存图的基础上 初始化
             self._catch_image = self._dynamic_beach_image.clone();
             for (_, v) in &self.children {
                 if v.active && !v.is_static {
-                    let node_tp = ctx
+                    let tex_arc = ctx
                         .get_texture(v.tp_id.clone().unwrap_or("".to_owned()).as_str())
                         .dynamic_image
-                        .clone()
-                        .expect("Ensure");
+                        .as_ref()
+                        .expect("Ensure")
+                        .clone();
                     ctx.draw_call_times += 1;
-                    Self::blend_image(&mut self._catch_image, &node_tp, v);
+                    Self::blend_image(&mut self._catch_image, &tex_arc, v);
                 }
             }
 
@@ -177,15 +181,16 @@ impl Scene {
             for (_, v) in &self.children {
                 if v.active && !v.is_static {
                     // don't update static
-                    let node_tp: DynamicImage = ctx
+                    let tex_arc = ctx
                         .get_texture(v.tp_id.clone().unwrap_or("".to_owned()).as_str())
                         .dynamic_image
-                        .clone()
-                        .expect("Ensure");
+                        .as_ref()
+                        .expect("Ensure")
+                        .clone();
                     ctx.draw_call_times += 1;
 
-                    Self::blend_image(&mut active_frame, &node_tp, v);
-                    
+                    // D2: Arc::clone is refcount-only — no per-frame buffer copy.
+                    Self::blend_image(&mut active_frame, &tex_arc, v);
                 }
             }
             self._catch_image = active_frame.to_owned();

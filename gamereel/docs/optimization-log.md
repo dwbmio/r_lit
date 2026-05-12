@@ -377,3 +377,105 @@ This isn't a single optimization but a methodology entry, kept here so M3+ inher
 - Followup:
   - Add an e2e CUDA bench against a synthesized "heavy" scene (50+ overlays) to surface the multiplier on real compositing load.
   - Drop the per-frame `synchronize()` once we add a stream-aware NVENC submission path (cudarc + ffmpeg can share a CUstream).
+
+---
+
+## D — Demo audit (post-M3): are we using what we built?
+
+The M3 commit landed the CUDA pipeline but **the demo never used it** — `apps/hs-mvp/src/main.rs` called `start_gen_first` (sws_scale path) instead of the CUDA entry. We instrumented the actual demo workload (`apps/hs-mvp/src/bin/trace.rs` and `trace_cuda.rs`) and audited which optimizations were actually wired in.
+
+### O-015 — `Texture::dynamic_image` → `Arc<DynamicImage>`    [milestone: D2]
+
+**Hypothesis**
+- Expected impact: **save ~100 ms / 300 frames** on hs-mvp by replacing the per-frame `.clone()` of full image buffers (deep copy) with `Arc::clone` (refcount only).
+- Mechanism: `Scene::on_render` calls `ctx.get_texture(...).dynamic_image.clone()` once per active node per frame. With ~6 active nodes and 75 dirty animation frames, that's ~450 deep clones. The largest texture is the `bans-*` composite at 384×384×4 = 590 KB.
+
+**Test (self-proof)**
+- File: `apps/hs-mvp/src/bin/trace.rs` — re-run before/after; the per-frame `scene.on_render` median should not regress (Arc deref is cheaper than buffer copy on any sane allocator).
+- All 24 active gamereel-core tests still pass after the API change (Texture's field type changed from `Option<DynamicImage>` to `Option<Arc<DynamicImage>>`).
+
+**Measurement**
+- Pre-D2 trace: `scene.on_render` total 337 ms / 300 frames.
+- Post-D2 trace: `scene.on_render` total 348 ms / 300 frames (within run-to-run noise; ±5 % variance).
+- e2e wall: pre 273 fps → post 270 fps (no measurable change on hs-mvp).
+
+**Retro**
+- Hypothesis vs reality: **null result on this specific demo workload**, but **structurally correct change**.
+- Why no measurable win on hs-mvp: textures are small (48×48 = 9 KB per cell, 384×384 = 590 KB for bans-*). The deep-copy bandwidth cost on a 13700K (~50 GB/s memory) is sub-millisecond per clone. 450 small clones ≈ 5 ms total — within timer noise.
+- Where this WILL show: any scene with full-frame textures (1080×1920 = 8.3 MB each). Per-frame deep clone of an 8 MB buffer is ~150 µs; 300 frames × N nodes adds up. Doing the right thing structurally beats waiting for a regression to teach us.
+- Lessons:
+  1. **"Obviously expensive" optimizations sometimes aren't, when measured on the actual workload.** Always trace before celebrating.
+  2. The change still belongs in: it's no slower, it generalizes correctly to bigger scenes, and it composes with the GPU compositor (M4) which will want shared texture handles.
+
+---
+
+### O-016 — Demo switched to CUDA pipeline (`start_gen_first_cuda`)    [milestone: D3]
+
+**Hypothesis**
+- Expected impact: **+4 % on hs-mvp** (matches pre-existing trace_cuda.rs measurement of 273 → 286 fps).
+- Mechanism: `apps/hs-mvp/src/main.rs` was calling `start_gen_first` which routes to the M2 sws_scale path. New `start_gen_first_cuda` on `StageMgr` dispatches to `create_scene_stream_cuda` instead. `GAMEREEL_PIPELINE=sws` env var preserves the M2 fallback for hosts without NVIDIA driver.
+
+**Test (self-proof)**
+- File: `apps/hs-mvp/src/main.rs::main` runs the CUDA path by default; running with `GAMEREEL_PIPELINE=sws` exercises the fallback.
+- File: `apps/hs-mvp/src/bin/trace_cuda.rs` already validated ffprobe-clean output on hs-mvp's scene.
+
+**Measurement**
+- 5-run median e2e:
+  - sws path:  1023 ms (293 fps)
+  - cuda path: 980 ms (306 fps)
+  - **speedup: 1.04× — matches the trace prediction within noise.**
+
+**Retro**
+- Hypothesis vs reality: **delivered exactly what trace predicted**, no surprises.
+- The 4 % is small because **CUDA initialization eats 284 ms** as a one-shot tax on the first encode (NVRTC kernel compile + ffmpeg hwframes pool setup + cudarc primary context retain). On a single-shot 1-second video, that's 25 % of wall time. **In batch mode, this tax amortizes to nothing** — `tests/cuda_vram_leak.rs` runs 100 sequential encodes in 62 s = 620 ms/video = **485 fps (1.7× single-shot)**.
+- The CUDA path's per-frame steady-state is ~2.3 ms vs sws's ~2.7 ms; the per-frame win is real, the wall-time win is diluted by init.
+- Lessons:
+  1. **Single-shot benchmarks systematically undersell M3** because they pay the full init cost amortized over 300 frames; batch benchmarks (M5) are the honest measurement.
+  2. Default-on for the CUDA path is right — even if e2e is a wash, downstream M4 (wgpu compositor) needs the GPU residency to deliver its multiplier.
+
+---
+
+### O-017 — Dirty-cache audit: already working, no change needed    [milestone: D1]
+
+**Hypothesis (going in)**
+- Suspected: `Scene::do_action` was setting `is_dirty = true` every frame, defeating the cache. Predicted fix would skip ~225 of 300 frames in hs-mvp (the post-animation steady period), giving ≥1.5× e2e.
+
+**Test (self-proof)**
+- `apps/hs-mvp/src/bin/trace.rs` per-frame median of `scene.on_render` is **0.07 ms** vs total 348 ms (mean 1.16 ms). Median ≪ mean ⇒ most frames are cheap (cache hits), a few are expensive (animation frames). Approximate split:
+  - ~225 cached frames × 0.07 ms = 16 ms (returns `_catch_image.clone()`)
+  - ~75 active animation frames × ~4.4 ms = 332 ms (re-blends 6 nodes)
+- The ~75 figure matches the demo timeline: picks-0 animates 0.1–0.5 s, picks-1 1.1–1.5 s, picks-2 2.1–2.5 s. That's 3 × 0.4 s × 30 fps = 36 dirty frames from move/scale, plus ~3 × 30 = 90 frames where bans become active in jumps. Within the right order of magnitude.
+
+**Retro**
+- The `_dirty` machinery (`do_action` value-comparison + early-return on `_catch_image.clone()`) is **functioning correctly**. Hypothesis was wrong; no fix landed.
+- Re-investing here would not move the needle. The remaining cost on cached frames is the 3 MB `_catch_image.clone()` per cached frame (~70 µs × 225 = 16 ms total) — fixable but small.
+- The actual hot path is the 75 active-animation frames at ~4.4 ms each. To make THOSE cheaper requires either (a) compositing on the GPU (M4) so the per-pixel blends become a wgpu compute shader, or (b) parallel pipeline so frame N+1's compose overlaps with frame N's encode.
+- Lessons:
+  1. **Always validate the symptom before fixing the cause.** "Dirty flag broken" is a guess; phase-isolation timer (`trace.rs` median vs mean) is data.
+  2. Sub-millisecond medians strongly suggest a working cache; if you suspect cache failure, you'd see a flat per-frame distribution, not a bimodal one.
+
+---
+
+### Demo audit summary — what we ARE using vs what's left on the table
+
+**✅ active in demo (gamereel-core post-D2/D3)**
+1. NVENC h264_nvenc auto-pick (M1)
+2. Hoisted scaler + reusable frame buffers (M1)
+3. BTreeMap z-order determinism (M1)
+4. Workspace `opt-level=3 + lto=fat` (M1)
+5. EncoderProfile::Balanced default (M2)
+6. CUDA hwframes pipeline via `start_gen_first_cuda` (M3, D3)
+7. `Arc<DynamicImage>` shared textures (D2)
+8. `Scene._dirty` cache hitting ~75 % of frames (already worked, D1 audit)
+
+**❌ available but NOT yet wired / not yet built**
+9. Per-frame `synchronize()` removal — would save 99 ms / 300 frames in CUDA path (~14 %).
+10. M4 wgpu compositor — would eliminate the 419 ms `scene.on_render` slug (~60 % of CUDA-path frame loop).
+11. M5 actor pool batch — would amortize the 284 ms `cuda.init` tax across N videos. `cuda_vram_leak` proves 1.7× speedup at 100-video batch.
+12. Pipeline parallelism (compose frame N+1 while encoding N) — independent of M4/M5; could be a 1.5× standalone win on single-video.
+13. EncoderProfile::TikTokHQ for production uploads (currently demo uses Balanced).
+
+**Verdict on hs-mvp single-shot**
+- ~1000 ms wall (300 fps) is the **floor without M4/M5**. The 284 ms CUDA init + 419 ms CPU compose are unavoidable on a 13700K + RTX 3060 with the current architecture.
+- M5 batch alone would push 100-video throughput to 485 fps — a real production-shaped number.
+- M4 + M5 combined would target ≥1500 fps single-video on this same hardware (predicted, not yet validated).

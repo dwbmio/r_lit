@@ -79,13 +79,13 @@ impl Report {
             .load_loc_image(block_img_path.display().to_string().as_str(), "999")
             .unwrap();
         for (k, v) in &self.bands {
-            let bans_img = gen_bans_image(
-                &rtx.get_texture(&tp_id)
-                    .dynamic_image
-                    .clone()
-                    .expect("required!"),
-                *v,
-            );
+            let tex_arc = rtx
+                .get_texture(&tp_id)
+                .dynamic_image
+                .as_ref()
+                .expect("required!")
+                .clone(); // Arc clone, refcount only
+            let bans_img = gen_bans_image(&tex_arc, *v);
             if let Some(img) = bans_img {
                 rtx.set_textures_cache(&img, format!("bans-{}", k).as_str())
                     .expect("set texture failed!1");
@@ -93,13 +93,13 @@ impl Report {
         }
         for (k, v) in &self.picks {
             for i in 0..3 {
-                let picks_img = gen_block_image(
-                    &rtx.get_texture(&tp_id)
-                        .dynamic_image
-                        .clone()
-                        .expect("required!"),
-                    v[i],
-                );
+                let tex_arc = rtx
+                    .get_texture(&tp_id)
+                    .dynamic_image
+                    .as_ref()
+                    .expect("required!")
+                    .clone();
+                let picks_img = gen_block_image(&tex_arc, v[i]);
                 if let Some(img) = picks_img {
                     rtx.set_textures_cache(&img, format!("picks-{}-{}", k, i).as_str())
                         .expect("set texture failed!1");
