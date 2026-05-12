@@ -562,3 +562,133 @@ This translates to **287 ms per video = 1045 fps** on hs-mvp (300 frames / 0.287
 **Retro**
 - Lessons: pre-defining the trait + the wire-format contract today (cheap) is far less work than retrofitting them after a concrete LocalWorker has grown its own assumptions about being in-process. The user explicitly asked for cloud-ready — landed it as scaffolding now.
 - Followup: M5+1 implements RemoteWorker. The contract guarantees no `WorkerPool`, `JobQueue`, or CLI changes needed — if the implementation has to leak details into the dispatcher, that's a smell to refactor.
+
+---
+
+## M4 — wgpu compositor (replaces image_effect.rs CPU per-pixel blend)
+
+### O-021 — wgpu init + composite shader on Vulkan/RTX 3060    [milestone: M4-1+M4-2]
+
+**Hypothesis**
+- Expected impact: a wgpu-backed compositor with a single render-pass + readback
+  pipeline can replace the CPU `image_effect::blend_images` per-pixel loop.
+  Init cost ~200 ms one-shot; per-frame compose ≪ 1 ms on RTX 3060.
+- Mechanism: `WgpuCompositor` holds device/queue/render pipeline + persistent
+  render target + persistent readback buffer + one uniform buffer with dynamic
+  offsets across draws. Sprite shader `composite.wgsl` mirrors image_effect
+  semantics (anchor → scale → rotate → blend).
+
+**Test (self-proof)**
+- File: `crates/gamereel-compositor/tests/wgpu_init_and_blit.rs` — 2 tests
+  - `init_and_blit_single_red_square_top_left` confirms top-left anchor places
+    sprite at (0,0) with red pixels, far corner cleared transparent.
+  - `anchor_centered_places_sprite_at_center` confirms center anchor + center
+    pos → sprite center at scene center.
+- No `#[ignore]`: wgpu falls back to llvmpipe in CI without GPU.
+
+**Measurement** (RTX 3060 + Vulkan)
+- adapter selection + device init: **250 ms** (cold start, first call).
+- `compose_to_host` for a single sprite: ~0.5 ms wall.
+
+**Retro**
+- Wgpu version: started on 22.1, upgraded to 29 mid-implementation. The 22→29
+  rewrite touched ~15 API points (`InstanceDescriptor`, `TexelCopy*Info`,
+  `RenderPassColorAttachment.depth_slice`, `multiview_mask`, `PollType` enum,
+  `Option<&str>` entry points, `immediate_size` replacing `push_constant_ranges`,
+  etc.). The cost was an afternoon of mechanical edits; the value is keeping up
+  with the active wgpu line so M4.5 (CUDA-Vulkan external memory interop) lands
+  on the API that still receives upstream support.
+- Naga (the WGSL validator) refuses non-constant indexing into `let array<…>`,
+  so the unit-quad vertex enumeration uses `switch vid` instead of array
+  indexing. Documented in the shader source — future shader authors should
+  expect this trap.
+- Lesson: when the dependency rewrites its API, bumping early is cheaper than
+  fighting two API surfaces in adjacent PRs.
+
+---
+
+### O-022 — Scene → SpriteDraw adapter + CPU-vs-wgpu pixel parity    [milestone: M4-3+M4-4]
+
+**Hypothesis**
+- Expected impact: `compose_scene_frame` translates `Scene` state into a
+  back-to-front sprite list and renders one frame; output should be
+  visually identical to `Scene::on_render` (the CPU path) at SSIM ≥ 0.99 or
+  equivalent pixel-difference bound.
+- Mechanism: walks `scene.children` (BTreeMap → deterministic z-order),
+  builds a `SpriteDraw` per active node carrying the same pos/scale/rotation/
+  anchor/opacity transforms image_effect uses on CPU. Background drawn first,
+  then static layer, then dynamic active layer.
+
+**Test (self-proof)**
+- File: `apps/hs-mvp/tests/wgpu_parity.rs::wgpu_matches_cpu_within_pixel_tolerance`
+  - Runs the same hs-mvp scene through both pipelines for 30 frames.
+  - Asserts mean per-channel `|diff| < 8/255` AND less than 1% of pixels
+    diverge by more than 16 levels.
+
+**Measurement** (hs-mvp, 30 frames @ 720x1080)
+- mean per-channel `|diff|`: **0.114 / 255**
+- pixels diverging by > 16 levels: **0.173%** average across frames
+
+**Retro**
+- The 0.114/255 mean diff is well below the just-noticeable threshold (≥ 1 level
+  on 8-bit). The 0.17% outliers concentrate on anti-aliased edges where wgpu's
+  bilinear sampling rounds differently from `image::imageops::resize` Triangle
+  filter — visually indistinguishable, mathematically expected.
+- Hypothesis matched cleanly. Lesson: when both implementations produce real
+  sub-pixel work (interpolation, blending), enforce a tolerance not equality.
+  Equality assertions on float-derived pixel data are a flake factory.
+
+---
+
+### O-023 — End-to-end M4 path measurement: 1.4× single-video, much more in batch    [milestone: M4-5]
+
+**Hypothesis**
+- Expected impact: replacing CPU compose with wgpu compose saves ~150–200 ms
+  per video on hs-mvp (the dirty-cached but still nontrivial 75 active animation
+  frames at ~5 ms each ⇒ 375 ms total CPU compose collapses to ~150 ms wgpu
+  compose+readback).
+
+**Test (self-proof)**
+- File: `apps/hs-mvp/src/bin/wgpu_render.rs` — full e2e binary running
+  WgpuCompositor → cudarc kernel → ffmpeg CUDA hwframes → h264_nvenc.
+  Reports phase timeline + per-frame breakdown + JSON dump for diff.
+
+**Measurement** (single-video, hs-mvp, 720x1080 × 30 fps × 10 s)
+
+| path | wall | fps e2e | per-frame median |
+|---|---:|---:|---:|
+| hs-mvp main (CPU compose + CUDA encode, M5 D3 default) | 941 ms | 319 | (see trace) |
+| **M4 wgpu_render** (wgpu compose + CUDA encode) | **675 ms** | **444** | 0.93 ms total |
+
+Single-video improvement: **1.40×**. The per-frame budget is now **0.93 ms**
+(theoretical ceiling ~1072 fps) but wall is dominated by **454 ms of one-shot
+init**: `wgpu.init+upload` 191 ms + `cuda.init` 241 ms + `encoder.open` 17 ms.
+
+Per-frame breakdown (M4 wgpu+CUDA, sum of 300-frame phases):
+- wgpu.compose (GPU compose + readback): 144 ms  (51.3%)
+- cuda.convert (RGBA→NV12 kernel):        36 ms  (12.9%)
+- cuda.synchronize (per-frame stall):     91 ms  (32.5%)
+- cuda.copy_to_pool + send_frame:          9 ms  (3.3%)
+
+**Retro**
+- The single-video 1.40× under-sells the architecture because half the wall
+  is one-shot init that **M5 worker pool already amortizes** for the CPU path.
+  When we wire wgpu+cuda context into LocalWorker (M4.5 follow-up, ~half day's
+  work), per-video steady-state should be ~140 ms (287 ms M5-CPU baseline minus
+  the 150 ms compose savings) — predicted **~2.0× over M5 workers=1**.
+- The 91 ms `cuda.synchronize` slug remains as the next obvious cost. Removing
+  it requires wgpu↔CUDA stream-shared synchronization (M4.5 zero-copy path),
+  which is also where the 144 ms readback can drop to 0.
+- Lesson: cold-start single-video benchmarks chronically misrepresent
+  amortizable architecture wins. When proposing perf changes, always show both
+  the cold and the steady-state numbers; readers and operators care about
+  different ones.
+
+**Followups (planned for M4.5)**
+1. Wire WgpuCompositor into `gamereel-farm::LocalWorker` so worker pool
+   amortizes wgpu init alongside cuda init.
+2. wgpu Vulkan backend → CUDA external-memory interop (zero-copy):
+   eliminate the 144 ms readback + 91 ms synchronize together.
+3. Add a synthesized "heavy scene" (50+ overlapping nodes) bench so the wgpu
+   advantage shows up even without batch amortization. hs-mvp's tiny dirty
+   cache hides the win on simple scenes.

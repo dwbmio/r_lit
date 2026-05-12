@@ -51,6 +51,7 @@ Same hardware throughout. Each row reproduces from `benches/results/m{N}.json`.
 | **M3** | Full GPU pipeline (cudarc kernel + ffmpeg CUDA hwframes) | 456 (1.23×) | M3 |
 | **M5 (workers=1)** | Persistent CUDA + ffmpeg context across jobs | **1004 fps**, p99 290 ms | M5 |
 | **M5 (workers=2)** | WorkerPool round-robin dispatch | **1113 fps**, p99 547 ms | M5 |
+| **M4 (single, cold init)** | wgpu compositor + CUDA + h264_nvenc | **444 fps** (single video, includes 454 ms wgpu+cuda init); per-frame ceiling **1072 fps** | M4 |
 
 **Total trajectory: 152 → 1113 fps = 7.3× over baseline**, with quality maintained (VMAF 97.5+).
 

@@ -21,7 +21,9 @@
 //!     individual sampled-textures fine; revisit if N grows past ~32.
 
 pub mod compositor;
+pub mod scene_adapter;
 pub mod sprite;
 
 pub use compositor::{CompositorError, WgpuCompositor};
+pub use scene_adapter::{compose_scene_frame, upload_scene_textures};
 pub use sprite::SpriteDraw;

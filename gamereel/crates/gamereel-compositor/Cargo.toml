@@ -8,13 +8,12 @@ description = "wgpu-based scene compositor — replaces the CPU image_effect.rs 
 gamereel-core = { path = "../gamereel-core" }
 # wgpu 22.x is the current stable line as of mid-2025; pinning to a
 # major version that still receives backports.
-# wgpu 22.x — chosen over 29 because the 23→29 series rewrote a large
-# chunk of the API (TexelCopyTextureInfo, multiview_mask, etc.) and our
-# M4 doesn't need any of the new features. Pin tightly so a `cargo
-# update` doesn't silently break the compositor; bump deliberately when
-# a wgpu feature actually moves the needle (zero-copy interop in M4.5
-# is the most likely trigger).
-wgpu        = { version = "=22.1.0", default-features = false, features = ["wgsl"] }
+# wgpu 29.x — current. The 22→29 API churn (TexelCopyTextureInfo,
+# multiview_mask, request_adapter→Result, etc.) was a one-time tax.
+# Worth paying because (a) M4.5 zero-copy CUDA interop needs the newer
+# wgpu_hal::vulkan paths, (b) staying current keeps dependents from
+# version-skewing us, (c) no perceptible regression on M4 numbers.
+wgpu        = { version = "29", default-features = false, features = ["wgsl", "vulkan"] }
 pollster    = "0.4"  # for blocking on wgpu's async init from sync code
 bytemuck    = { version = "1.16", features = ["derive"] }
 log         = { workspace = true }

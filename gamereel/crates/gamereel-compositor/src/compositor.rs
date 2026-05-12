@@ -78,16 +78,21 @@ pub struct WgpuCompositor {
 
 impl WgpuCompositor {
     pub fn new(width: u32, height: u32) -> Result<Self, CompositorError> {
+        // wgpu 29: Instance::new takes the descriptor by value (not &).
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL | wgpu::Backends::DX12,
-            ..Default::default()
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
         });
+        // wgpu 29: request_adapter returns Result<Adapter, RequestAdapterError>.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
-        .ok_or(CompositorError::NoAdapter)?;
+        .map_err(|_| CompositorError::NoAdapter)?;
         let info = adapter.get_info();
         log::info!(
             "WgpuCompositor adapter: {} (backend {:?}, type {:?})",
@@ -97,19 +102,25 @@ impl WgpuCompositor {
         );
 
         let limits = wgpu::Limits::default();
-        let uniform_offset_alignment = adapter
-            .limits()
-            .min_uniform_buffer_offset_alignment as u64;
+        // wgpu 29: DeviceDescriptor takes experimental_features + trace; second
+        // arg dropped (was tracing path).
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("gamereel-compositor"),
                 required_features: wgpu::Features::empty(),
                 required_limits: limits,
                 memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                trace: wgpu::Trace::Off,
             },
-            None,
         ))
         .map_err(|e| CompositorError::DeviceRequest(e.to_string()))?;
+        // Use the *device's* alignment requirement (post-negotiation),
+        // not the adapter's permissive number — they can differ when
+        // we request stricter Limits than the adapter advertises.
+        let uniform_offset_alignment = device
+            .limits()
+            .min_uniform_buffer_offset_alignment as u64;
 
         // ---- Persistent render target ----
         let target_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -178,8 +189,9 @@ impl WgpuCompositor {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compose-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            // wgpu 29: push_constant_ranges renamed to immediate_size (in bytes).
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -187,13 +199,13 @@ impl WgpuCompositor {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -204,7 +216,7 @@ impl WgpuCompositor {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None, // wgpu 29: pipeline-level multiview mask
             cache: None,
         });
 
@@ -272,14 +284,14 @@ impl WgpuCompositor {
             view_formats: &[],
         });
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             rgba.as_raw(),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -369,6 +381,7 @@ impl WgpuCompositor {
                 label: Some("compose-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.target_view,
+                    depth_slice: None, // wgpu 29: required field
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -378,6 +391,7 @@ impl WgpuCompositor {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None, // wgpu 29: required, None = no multiview
             });
             pass.set_pipeline(&self.pipeline);
             for (i, bg) in bind_groups.iter().enumerate() {
@@ -388,15 +402,15 @@ impl WgpuCompositor {
         }
 
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.target_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.bytes_per_row_padded),
                     rows_per_image: Some(self.height),
@@ -418,7 +432,10 @@ impl WgpuCompositor {
         buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        // wgpu 29: PollType is now generic + structured; use the convenience
+        // helper. poll() returns Result<PollStatus, PollError> which we
+        // discard here (downstream errors will surface from the channel).
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let map_res = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| CompositorError::Readback(format!("recv timeout: {e}")))?;
