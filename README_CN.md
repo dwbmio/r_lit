@@ -15,6 +15,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 |------|------|
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [img_resize](img_resize/) | 图片缩放与压缩 |
+| [ui-trim](ui-trim/) | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | [textexture](textexture/) | 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹） |
 | [mj_atlas](mj_atlas/) | 精灵图集 / 打包工具，支持增量构建 |
 | [looplog](looplog/) | 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；见 [微信 AI 调试指南](looplog/WECHAT_AI_DEBUG_CN.md)） |

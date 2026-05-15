@@ -29,6 +29,10 @@
       "description": "图片批量缩放/压缩工具 — 多线程批量处理 JPEG/PNG/WebP，支持目标尺寸/质量/格式。",
       "category": "cli"
     },
+    "ui-trim": {
+      "description": "UI Asset Trim — 清理 AI 生成 UI 素材中的伪透明背景、棋盘格和红色裁切线，并输出带 padding 的 tight PNG。",
+      "category": "cli"
+    },
     "textexture": {
       "description": "艺术字图片生成（阴影/描边/渐变/发光/霓虹）— 一行 CLI 把任意文字渲染成可商用的 PNG 文字贴图。",
       "category": "cli"

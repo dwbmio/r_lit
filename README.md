@@ -15,6 +15,7 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 |-----------|-------------|
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |
 | [img_resize](img_resize/) | Image resizing and compression |
+| [ui-trim](ui-trim/) | Clean AI-generated UI asset PNGs into tight transparent PNGs |
 | [textexture](textexture/) | Art-text image generation (shadow / stroke / gradient / glow / neon) |
 | [mj_atlas](mj_atlas/) | Sprite atlas / packing tool with incremental builds |
 | [looplog](looplog/) | Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; see [WeChat AI debug guide](looplog/WECHAT_AI_DEBUG_CN.md)) |

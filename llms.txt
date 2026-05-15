@@ -10,6 +10,7 @@
 
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
 - img_resize/ — Image resizing and compression
+- ui-trim/ — Clean AI-generated UI asset PNGs into tight transparent PNGs
 - textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)
 - mj_atlas/ — Sprite atlas / packing tool with incremental builds
 - looplog/ — Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; guide: looplog/WECHAT_AI_DEBUG_CN.md)

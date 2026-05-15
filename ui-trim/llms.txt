@@ -1,0 +1,53 @@
+# ui-trim
+
+- purpose: Clean AI-generated UI asset PNGs into tight transparent PNGs
+- repository_scope: r_lit independent short-running Rust CLI tool
+- binary: ui-trim
+- input: PNG image
+- output: PNG RGBA image
+- primary_use_case: Remove pseudo-transparent matte backgrounds, checkerboards, large transparent borders, and edge-connected red crop guide lines from UI elements
+- implementation: Pure Rust CPU first; no OpenCV dependency in the default build
+- implementation_label: pure_rust_cpu
+- acceleration_label: specialized_u8_mask_kernel; png codec dependencies may use CPU intrinsics internally
+- decode_encode: image crate, PNG feature, RGBA8 buffer
+- algorithm:
+  - sample matte color clusters from image edges
+  - flood-fill only edge-connected matte pixels
+  - apply 1px close/open morphology to the background mask
+  - clear background alpha and optionally feather nearby foreground alpha
+  - compute alpha bbox, expand by padding, crop, encode PNG
+- cli_example: ui-trim --input raw.png --output clean.png --padding 6 --feather 2 --remove-red-guides --json
+- json_output: ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings
+- json_options_fields: padding_px, alpha_threshold, feather_px, max_bg_distance, remove_red_guides, implementation, acceleration
+- json_timings_ms_fields: decode, sample_matte, flood_fill, morphology, alpha_cleanup, bbox_crop, encode, total
+- default_padding: 6
+- default_alpha_threshold: 4
+- default_feather: 2
+- default_max_bg_distance: 48
+- parameter_semantics:
+  - padding: Preserves visual breathing room around alpha bbox; icons/buttons 4-6, glow/bubbles 8-16
+  - alpha_threshold: Alpha <= threshold is background; keep low to avoid deleting faint glow
+  - feather: 0-3 px alpha softening near removed background; too high may shrink thin highlights
+  - max_bg_distance: RGB distance from edge matte clusters; raise for uneven warm matte, lower if pale UI edges are over-removed
+  - remove_red_guides: Removes only edge-connected red guide pixels
+- quality_signals:
+  - alpha_ratio near 1: background may not be removed
+  - alpha_ratio extremely low: subject may be over-trimmed
+  - removed_pixels: size of edge-connected background mask
+  - warnings: machine-readable diagnostics
+- performance_position: Benchmark before adding acceleration; current path is CPU scalar mask kernels plus image/png codec dependencies
+- benchmark_snapshot_local_release:
+  - 512x512: avg_algorithm_ms 18.5, throughput_mp_s 20.0
+  - 1024x1024: avg_algorithm_ms 56.7, throughput_mp_s 20.7
+  - 2048x2048: avg_algorithm_ms 197.7, throughput_mp_s 21.5
+- current_bottleneck: mask processing, especially morphology and alpha_cleanup
+- acceleration_policy:
+  - no default OpenCV dependency
+  - add SIMD only behind feature after benchmark proves morphology/feather bottleneck
+  - candidate SIMD crates: fast_morphology for mask kernels, fast_image_resize for future resize
+  - GPU is not an MVP path unless pipeline is already GPU-resident or batch sizes are very large
+- dependencies: clap, image, serde, serde_json, thiserror
+- build: cargo build --release
+- test: cargo test
+- smoke_example: cargo run --example smoke
+- benchmark_example: cargo run --release --example benchmark
