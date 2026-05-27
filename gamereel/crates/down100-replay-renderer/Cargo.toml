@@ -1,0 +1,25 @@
+[package]
+name = "down100-replay-renderer"
+version = "0.1.0"
+edition = "2021"
+description = "Consumes titan-forge Phase 7.8 Replay fanout queue (rustyme:titan:write Redis), 翻译 down100 局录像成 gamereel MetaScene, 调 StageMgr 渲染 mp4. 替代 tools/down100-replay-render/compose_scene.py + perf_main 的 Python 组合, 走 Rust 一次性闭环."
+
+[features]
+default = []
+
+[dependencies]
+gamereel-core    = { path = "../gamereel-core" }
+proto-down100    = { path = "../proto-down100" }
+redis            = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+tokio            = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+clap             = { version = "4", features = ["derive"] }
+log              = { workspace = true }
+env_logger       = { workspace = true }
+anyhow           = "1"
+tempfile         = { workspace = true }
+
+[[bin]]
+name = "down100-replay-renderer"
+path = "src/main.rs"

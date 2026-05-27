@@ -1,0 +1,28 @@
+[package]
+name = "proto-down100"
+version = "0.1.0"
+edition = "2021"
+description = "Protocol parser + scene translator for 'Down 100' (titan-forge down100 玩法). 消费 titan-forge Phase 7.8 Replay fanout 协议 (zstd 压缩的 ReplayHeader + ReplayEvent 流), 翻译成 gamereel-core 的 MetaSceneList. Vendor 了 titan-forge v1.5.0 的 proto schema (down100.proto v1.1.2)."
+
+[features]
+default = []
+
+[dependencies]
+gamereel-core   = { path = "../gamereel-core" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+prost           = "0.13"
+bytes           = "1"
+zstd            = "0.13"
+base64          = "0.22"
+image           = { workspace = true }
+imageproc       = { workspace = true }
+ab_glyph        = "0.2"
+log             = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.13"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
