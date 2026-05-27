@@ -1,0 +1,20 @@
+target/
+*.mp4
+.DS_Store
+cc.png
+_*.meta
+_*.png
+
+# Bench outputs (per-milestone JSONs are committed manually; raw runs are not)
+benches/baseline-out/
+*.yuv
+
+# Quality-eval sources are reproducible by tools/quality-eval/build_sources.sh
+# (high_motion lossless is ~250MB — never commit)
+tools/quality-eval/sources/*.mp4
+tools/quality-eval/grid-out/
+
+# Repo-root .gitignore globally ignores *.md and only whitelists files at the
+# repo root's own docs/. Re-whitelist video-generator/docs/ here.
+!docs/**/*.md
+

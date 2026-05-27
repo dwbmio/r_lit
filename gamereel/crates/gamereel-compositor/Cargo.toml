@@ -1,0 +1,26 @@
+[package]
+name = "gamereel-compositor"
+version = "0.1.0"
+edition = "2021"
+description = "wgpu-based scene compositor — replaces the CPU image_effect.rs path with a Vulkan/Metal/DX12 GPU pipeline. Today returns RGBA bytes via readback (M4); zero-copy CUDA interop deferred to M4.5."
+
+[dependencies]
+gamereel-core = { path = "../gamereel-core" }
+# wgpu 22.x is the current stable line as of mid-2025; pinning to a
+# major version that still receives backports.
+# wgpu 29.x — current. The 22→29 API churn (TexelCopyTextureInfo,
+# multiview_mask, request_adapter→Result, etc.) was a one-time tax.
+# Worth paying because (a) M4.5 zero-copy CUDA interop needs the newer
+# wgpu_hal::vulkan paths, (b) staying current keeps dependents from
+# version-skewing us, (c) no perceptible regression on M4 numbers.
+wgpu        = { version = "29", default-features = false, features = ["wgsl", "vulkan"] }
+pollster    = "0.4"  # for blocking on wgpu's async init from sync code
+bytemuck    = { version = "1.16", features = ["derive"] }
+log         = { workspace = true }
+image       = { workspace = true }
+thiserror   = { workspace = true }
+
+[dev-dependencies]
+env_logger        = { workspace = true }
+tempfile          = { workspace = true }
+pretty_assertions = { workspace = true }

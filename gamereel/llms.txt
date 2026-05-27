@@ -1,0 +1,134 @@
+# gamereel
+
+- purpose: Generate short-form videos (TikTok / IG Reels) from binary game protocol replays
+- language: Rust
+- status: production-ready for batch / near-real-time use cases on consumer NVIDIA GPU (validated on RTX 3060)
+- workspace_layout: crates/{gamereel-core, gamereel-compositor, gamereel-farm, gamereel-output, proto-puzzle, proto-bubble}
+
+## Headline measurements (RTX 3060 + i7-13700K, hs-mvp scene 720x1080×30fps×10s)
+
+- single worker: 1004 fps, p50 284 ms, p99 290 ms (latency-best)
+- 2 workers:    1113 fps, p50 518 ms, p99 547 ms (throughput-best)
+- 100 videos batch wall: 26.9 s with workers=2
+- VRAM leak across 100 sequential renders: 0 MB
+- VMAF (TikTokHQ profile): 97.48 across high-motion / text-scroll / talking-head reference sources
+- workers > 2 do NOT help: same throughput, monotonic p99 explosion (NVENC engine saturated)
+- total trajectory M0 baseline → M5 (workers=2): 152 → 1113 fps = 7.3× over baseline
+
+## Strengths (measured)
+
+- sub-300 ms per-video p99 latency at workers=1 — meets near-real-time SLA
+- 220 videos/minute throughput at workers=2
+- consumer-GPU pricing: ~$300 RTX 3060 produces 1113 fps
+- VMAF ≥ 95 across all profiles (Fast, Balanced, TikTokHQ); 144-point VMAF grid search calibration
+- byte-deterministic output (BTreeMap z-order, SHA256 cross-run regression test)
+- 0 MB VRAM growth across long batch runs (cuda_vram_leak.rs, 100 cycles)
+- pluggable game protocols via inventory::submit! self-registration
+- cloud-ready Worker trait abstraction (RemoteWorker stub already shipped, gRPC dispatch is drop-in)
+- 30 active tests + 10 CUDA-gated; no unwrap()/panic! in production paths
+
+## Known limitations (also measured)
+
+- NVENC engine count is the single-GPU ceiling: workers > 2 useless on single-NVENC chips (RTX 3060/3070/4060/4070); software cannot move this
+- CPU compositing (image_effect.rs) is ~40% of frame budget — M4 wgpu compositor is the planned fix (predicted +50–80% e2e)
+- per-frame synchronize() in CUDA path costs ~14% (no async pipeline yet between cudarc and NVENC)
+- 284 ms one-shot CUDA init per worker process (NVRTC compile + ffmpeg hwframes pool); amortized within M5 worker pool but visible on cold-start single-shot
+- single-GPU only (Worker trait abstraction in place; multi-GPU LocalWorkerPool is mechanical work)
+- IgReelsHDR profile is a stub today (falls back to TikTokHQ H.264 SDR); real HDR (HEVC Main10) is M4+ scope
+- no AV1 encoder on RTX 3060 (NVENC Gen 7 chip-level limitation)
+- proto-puzzle / proto-bubble are skeletons that register placeholder ParsedReplay; real binary decoders are per-game work, deliberately separated
+
+## Workspace members
+
+### crates/gamereel-core (v0.1.0)
+- video generation engine + ProtocolParser plugin trait
+- modules: encoder_profile (4 profiles: Fast, Balanced, TikTokHQ, IgReelsHDR), encoder_pick (NVENC > QSV > VAAPI > VT > x264), ffmpeg_inc/{mod, hwctx, stage_mgr, texture, image_effect, stream}, cuda_pipeline/{mod, kernels} (RGBA→NV12 NVRTC kernel), stage/{scene, node, action, model}, protocol, viewport, runtime_ctx
+- entry pipelines: create_scene_stream (sws_scale CPU path), create_scene_stream_with_profile (M2 with EncoderProfile), create_scene_stream_cuda (M3 full GPU path)
+- entry types: GamereelError, GamereelResult
+- key API: StageMgr::start_gen_first_cuda(rtx, output) for batch-friendly CUDA path
+- binary: perf_main (performance measurement)
+- 14+ integration tests
+
+### crates/gamereel-compositor (v0.1.0)
+- wgpu-based scene compositor, replaces CPU image_effect.rs path
+- modules: compositor (WgpuCompositor + CompositorError), scene_adapter, sprite (SpriteDraw)
+- opt-in via GAMEREEL_WORKER_COMPOSITOR=wgpu; default stays CPU for sparse-update scenes
+- 3 integration tests (break-even sweep, heavy scene comparison, init+blit)
+
+### crates/gamereel-farm (v0.1.0)
+- worker pool runtime amortizing 284 ms CUDA init across many jobs
+- modules: job (RenderJob, RenderResult, JobPriority), worker (Worker trait, WorkerKind), worker/local (LocalWorker), worker/remote (RemoteWorker stub for cloud GPU), pool (WorkerPool), probe (nvidia-smi-based GpuInfo + recommended_worker_count)
+- key types: WorkerPool::spawn(count, w, h) → submit/collect_one/shutdown
+- design constraint: each LocalWorker pinned to its OS thread (CUDA context affinity)
+
+### crates/gamereel-output (v0.1.0)
+- output sinks for rendered MP4s
+- modules: local_disk (LocalDiskSink), object_storage (ObjectStorageSink, S3-compatible via env vars), composite (CompositeSink parallel fan-out)
+- OutputSink async trait; DeliveryReceipt with public URL
+- 2 integration tests
+
+### crates/proto-puzzle (v0.1.0)
+- protocol parser for puzzle-style games (block-matching, falling pieces)
+- modules: wire (JSON replay format), translate (replay → MetaSceneList timeline)
+- registers via inventory::submit! against ProtocolDescriptor
+- 1 integration test
+
+### crates/proto-bubble (v0.1.0)
+- protocol parser for bubble-shooter style games (skeleton/stub)
+- registers via inventory::submit! against ProtocolDescriptor
+
+## Scaling roadmap
+
+### Tier 1 — software, single GPU (M4 territory)
+- M4 wgpu compositor eliminates CPU image_effect.rs slug → predicted +50–80% e2e
+- stream-aware NVENC submit removes per-frame synchronize() → +10–15%
+- direct kernel writes to ffmpeg pool buffer → +1–2%
+- skip per-frame to_rgba8() → +5%
+
+### Tier 2 — hardware (NVENC engine count)
+- RTX 4070 Ti Super 16GB: 2× NVENC, ~2200 fps predicted, ~$800
+- RTX 4080 Super 16GB: 2× NVENC + better cores + AI-friendly, ~$1000
+- RTX 4090 24GB: 2× NVENC + 24GB unlocks 30B LLM Q4 dual-use, ~$1700
+- RTX 5090 32GB: 3× NVENC + Blackwell, ~$2000+
+- NVIDIA L4 24GB: **4× NVENC**, 72W single-slot, designed for transcoding farms, ~$2000 server channel — predicted ~4400 fps (4× current peak)
+- L40S 48GB: 3× NVENC + 48GB, datacenter dual-purpose AI+video, ~$8000
+
+### Tier 3 — multi-GPU
+- Worker trait already abstracts dispatch; MultiGpuWorkerPool is mechanical work
+- Linear scaling expected to ~4 GPUs; PCIe + host RAM bandwidth become next ceiling
+
+### Tier 4 — cloud GPU (RemoteWorker via gRPC)
+- gamereel-farm-server binary on cloud node (reuses LocalWorker)
+- RemoteWorker impl in crates/gamereel-farm/src/worker/remote.rs
+- output transport: stream MP4 OR cloud node uploads to caller-supplied object storage URL
+- bottleneck shifts to network bandwidth (60 KB / 10s clip is rounding error)
+
+### Tier 5 — premium formats (HDR + AV1)
+- HDR HEVC Main10 + BT.2020 requires Ada (RTX 40+) for clean HW encode
+- AV1 encode requires NVENC Gen 8+ (Ada or newer)
+- both unlock TikTok / IG premium upload tiers; visible quality lift through platform recompression
+
+## Build
+
+```bash
+cargo build --workspace --release
+cargo test  --workspace
+cargo run   -p gamereel-core --bin perf_main --release
+```
+
+## System requirements
+
+- FFmpeg dev libraries: libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev
+- clang, pkg-config
+- For CUDA pipeline (M3+): NVIDIA driver ≥ 535, libnvrtc12, libnvrtc-builtins12.0
+- For quality benches: vmaf (Netflix libvmaf 3.x), jq
+
+## Documentation
+
+- README.md / README_CN.md: human-readable overview with capability + limitations + scaling tables
+
+## Reproducibility commitments
+
+- 30 active tests + 10 CUDA-gated; full sweep `cargo test --workspace`
+- perf_main binary for on-demand performance measurement
+- commit messages record hypothesis BEFORE work starts; if measurement contradicts, the retro explains why

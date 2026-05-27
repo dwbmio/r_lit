@@ -1,0 +1,134 @@
+# gamereel
+
+- 用途: 把游戏协议二进制回放渲染成短视频（TikTok / IG Reels 形态）
+- 语言: Rust
+- 状态: 在消费级 NVIDIA GPU 上批量 / 准实时场景已可投入生产（RTX 3060 实测验证）
+- 工作区结构: crates/{gamereel-core, gamereel-compositor, gamereel-farm, gamereel-output, proto-puzzle, proto-bubble}
+
+## 核心实测数字（RTX 3060 + i7-13700K, hs-mvp 场景 720x1080×30fps×10s）
+
+- 单 worker:  1004 fps, p50 284 ms, p99 290 ms（延迟最优）
+- 2 workers: 1113 fps, p50 518 ms, p99 547 ms（吞吐最优）
+- 100 视频批量: workers=2 跑 26.9 s 墙钟
+- 100 次连跑 VRAM 增长: 0 MB
+- VMAF (TikTokHQ profile): 高动态/文字滚动/谈话头肩三类源平均 97.48
+- workers > 2 不增吞吐: 同样吞吐 + p99 单调爆炸（NVENC 引擎已饱和）
+- 总轨迹 M0 baseline → M5 (workers=2): 152 → 1113 fps = 7.3× over baseline
+
+## 优势（实测）
+
+- workers=1 单视频 p99 亚 300ms — 满足准实时 SLA
+- workers=2 吞吐 220 视频/分钟
+- 消费级 GPU 价位: 约 ¥2200 的 RTX 3060 跑出 1113 fps
+- VMAF ≥ 95 across all profiles (Fast, Balanced, TikTokHQ); 144 点 VMAF grid 校准
+- 输出字节确定性 (BTreeMap z-order, SHA256 跨运行回归测试)
+- 长批量运行无 VRAM 增长 (cuda_vram_leak.rs, 100 cycles)
+- 可插拔游戏协议：inventory::submit! 自注册
+- 云端就绪：Worker trait 抽象 + RemoteWorker stub 已落地，gRPC dispatch 是 drop-in
+- 30 active 测试 + 10 CUDA-gated；生产路径无 unwrap()/panic!()
+
+## 已知限制（同样实测）
+
+- NVENC 引擎数是单 GPU 天花板：单 NVENC 卡 (3060/3070/4060/4070) workers > 2 无效；软件突破不了
+- CPU 合成 (image_effect.rs) 占帧时间约 40% — M4 wgpu compositor 是计划解（预期 +50–80% e2e）
+- CUDA 路径每帧 synchronize() 约 14% 开销（cudarc 与 NVENC 之间还没 async pipeline）
+- 每个 worker 进程一次性 284 ms CUDA init (NVRTC 编译 + ffmpeg hwframes 池)；M5 worker pool 内已摊销，仅在每 job 起独立进程时显眼
+- 单 GPU 限定（Worker trait 抽象就位，多 GPU LocalWorkerPool 是机械工作）
+- IgReelsHDR profile 是桩（落到 TikTokHQ H.264 SDR）；真 HDR (HEVC Main10) 是 M4+ 范围
+- RTX 3060 没有 AV1 编码器（NVENC Gen 7 芯片级限制）
+- proto-puzzle / proto-bubble 是骨架，注册占位 ParsedReplay；真 binary decoder 是每游戏独立工作
+
+## 工作区成员
+
+### crates/gamereel-core (v0.1.0)
+- 视频生成引擎 + ProtocolParser 插件 trait
+- 模块: encoder_profile (4 profiles: Fast, Balanced, TikTokHQ, IgReelsHDR), encoder_pick (NVENC > QSV > VAAPI > VT > x264), ffmpeg_inc/{mod, hwctx, stage_mgr, texture, image_effect, stream}, cuda_pipeline/{mod, kernels} (RGBA→NV12 NVRTC kernel), stage/{scene, node, action, model}, protocol, viewport, runtime_ctx
+- 入口流水线: create_scene_stream (sws_scale CPU 路径), create_scene_stream_with_profile (M2 with EncoderProfile), create_scene_stream_cuda (M3 全 GPU 路径)
+- 入口类型: GamereelError, GamereelResult
+- 关键 API: StageMgr::start_gen_first_cuda(rtx, output) for batch-friendly CUDA path
+- 二进制: perf_main (性能测量)
+- 14+ 集成测试
+
+### crates/gamereel-compositor (v0.1.0)
+- wgpu GPU 合成器，替代 CPU image_effect.rs 路径
+- 模块: compositor (WgpuCompositor + CompositorError), scene_adapter, sprite (SpriteDraw)
+- 通过 GAMEREEL_WORKER_COMPOSITOR=wgpu opt-in；默认 CPU 适合稀疏更新场景
+- 3 个集成测试
+
+### crates/gamereel-farm (v0.1.0)
+- worker pool 运行时，跨 jobs 摊销 284 ms CUDA init
+- 模块: job (RenderJob, RenderResult, JobPriority), worker (Worker trait, WorkerKind), worker/local (LocalWorker), worker/remote (RemoteWorker stub for cloud GPU), pool (WorkerPool), probe (基于 nvidia-smi 的 GpuInfo + recommended_worker_count)
+- 关键类型: WorkerPool::spawn(count, w, h) → submit/collect_one/shutdown
+- 设计约束: 每个 LocalWorker 钉在自己的 OS 线程（CUDA context affinity）
+
+### crates/gamereel-output (v0.1.0)
+- 渲染 MP4 输出 sink
+- 模块: local_disk (LocalDiskSink), object_storage (ObjectStorageSink, S3 兼容 env 配置), composite (CompositeSink 并行扇出)
+- OutputSink async trait; DeliveryReceipt 含公开 URL
+- 2 个集成测试
+
+### crates/proto-puzzle (v0.1.0)
+- 方块/消除类游戏协议解析
+- 模块: wire (JSON 回放格式), translate (回放 → MetaSceneList 时间线)
+- 通过 inventory::submit! 注册到 ProtocolDescriptor
+- 1 个集成测试
+
+### crates/proto-bubble (v0.1.0)
+- 泡泡龙协议解析（骨架/桩）
+- 通过 inventory::submit! 注册到 ProtocolDescriptor
+
+## 扩展路线
+
+### Tier 1 — 软件优化，单 GPU (M4 范围)
+- M4 wgpu compositor 干掉 CPU image_effect.rs slug → 预期 e2e +50–80%
+- stream-aware NVENC 提交去掉每帧 synchronize() → +10–15%
+- kernel 直接写 ffmpeg pool buffer → +1–2%
+- 跳过每帧 to_rgba8() → +5%
+
+### Tier 2 — 硬件 (NVENC 引擎数)
+- RTX 4070 Ti Super 16GB: 2× NVENC, 预测 ~2200 fps, ~¥6500
+- RTX 4080 Super 16GB: 2× NVENC + 更强核心 + AI 友好, ~¥9500
+- RTX 4090 24GB: 2× NVENC + 24GB 解锁 30B LLM Q4 双修, ~¥14000
+- RTX 5090 32GB: 3× NVENC + Blackwell, ~¥18000+
+- NVIDIA L4 24GB: **4× NVENC**, 72W 单槽, 专为转码农场设计, ~¥18000 服务器渠道 — 预测 ~4400 fps（4× 当前峰值）
+- L40S 48GB: 3× NVENC + 48GB, 数据中心级 AI+视频双修, ~¥60000
+
+### Tier 3 — 多 GPU
+- Worker trait 已抽象 dispatch；MultiGpuWorkerPool 是机械改造
+- 4 GPU 内预期近线性扩展；再往上 PCIe + host RAM 带宽成新瓶颈
+
+### Tier 4 — 云端 GPU (RemoteWorker via gRPC)
+- cloud node 上跑 gamereel-farm-server 二进制（内部复用 LocalWorker）
+- crates/gamereel-farm/src/worker/remote.rs 实现 RemoteWorker
+- 输出传输：流式回传 MP4，OR cloud node 直接上传调用方指定的对象存储 URL
+- 瓶颈转到网络带宽（60 KB / 10s 片，可忽略）
+
+### Tier 5 — 高级格式 (HDR + AV1)
+- HDR HEVC Main10 + BT.2020 需要 Ada (RTX 40+) HW 编码
+- AV1 编码需要 NVENC Gen 8+ (Ada 或更新)
+- 这俩解锁 TikTok / IG 高级上传通道；二次压缩后画质有可见提升
+
+## 构建
+
+```bash
+cargo build --workspace --release
+cargo test  --workspace
+cargo run   -p gamereel-core --bin perf_main --release
+```
+
+## 系统要求
+
+- FFmpeg 开发库: libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev
+- clang, pkg-config
+- CUDA 全栈 (M3+): NVIDIA 驱动 ≥ 535, libnvrtc12, libnvrtc-builtins12.0
+- 质量 benches: vmaf (Netflix libvmaf 3.x), jq
+
+## 文档
+
+- README.md / README_CN.md: 人类可读概览，含能力 + 限制 + 扩展路线表
+
+## 可复现承诺
+
+- 30 active 测试 + 10 CUDA-gated；`cargo test --workspace` 全跑
+- perf_main 二进制按需测量性能
+- commit message 在工作开始前记假设；若实测打脸，retro 说明原因

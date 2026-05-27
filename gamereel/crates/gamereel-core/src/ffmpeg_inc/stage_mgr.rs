@@ -1,0 +1,135 @@
+use std::{collections::BTreeMap, path::PathBuf};
+
+use crate::{
+    encoder_profile::EncoderProfile,
+    error::GamereelError,
+    stage::{model::meta_scene::MetaSceneList, scene::Scene},
+    GamereelResult, RuntimeCtx,
+};
+
+/// Manages all loaded scenes for a render session.
+///
+/// Storage uses [`BTreeMap`] (not `HashMap`) so iteration order is
+/// deterministic across runs — important when later milestones start
+/// hashing/diffing rendered output for reproducibility checks.
+pub struct StageMgr {
+    pub scenes: BTreeMap<String, Scene>,
+    pub scenes_meta: MetaSceneList,
+
+    // 所有用到的纹理  是上下文纹理的id
+    pub textures: Vec<u32>,
+}
+
+impl StageMgr {
+    pub fn new(scenes_meta: MetaSceneList) -> Self {
+        Self {
+            scenes: BTreeMap::new(),
+            scenes_meta,
+            textures: vec![],
+        }
+    }
+
+    /// Preload textures for the scene at `idx` and register it under its own
+    /// `name` (previously was hardcoded as `"mvp"`, which silently lost any
+    /// scene with a different name and broke multi-scene support).
+    pub fn meta_scene_preload(&mut self, rtx: &mut RuntimeCtx, idx: u8) -> GamereelResult<()> {
+        let meta = self
+            .scenes_meta
+            .meta_scene_list
+            .get(idx as usize)
+            .ok_or_else(|| {
+                GamereelError::CustomError(format!(
+                    "meta_scene_preload: index {idx} out of range (have {} scenes)",
+                    self.scenes_meta.meta_scene_list.len()
+                ))
+            })?
+            .clone();
+
+        let mut s = Scene::new(&meta.name, &meta);
+        s.sync_load_dependencies_textures(rtx)?;
+        self.scenes.insert(meta.name, s);
+        Ok(())
+    }
+
+    /// Render the scene named `scene_name` to `output` using the
+    /// [`EncoderProfile::Balanced`] default. Replaces the previous
+    /// implementation that always looked up `"mvp"`.
+    pub fn start_gen(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+        scene_name: &str,
+    ) -> GamereelResult<()> {
+        self.start_gen_with_profile(rtx, output, scene_name, EncoderProfile::default())
+    }
+
+    /// As [`start_gen`] but lets the caller pin the encoder profile.
+    pub fn start_gen_with_profile(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+        scene_name: &str,
+        profile: EncoderProfile,
+    ) -> GamereelResult<()> {
+        if !self.scenes.contains_key(scene_name) {
+            return Err(GamereelError::CustomError(format!(
+                "start_gen: scene '{scene_name}' not registered (have: {:?})",
+                self.scenes.keys().collect::<Vec<_>>()
+            )));
+        }
+        let scene = self.scenes.get_mut(scene_name).expect("scene exists");
+        crate::ffmpeg_inc::create_scene_stream_with_profile(rtx, output, scene, profile)?;
+        Ok(())
+    }
+
+    /// Convenience: render the most recently preloaded scene without naming it.
+    /// Most callers preload exactly one scene then render it; this avoids the
+    /// scene-name boilerplate at the call site.
+    pub fn start_gen_first(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+    ) -> GamereelResult<()> {
+        self.start_gen_first_with_profile(rtx, output, EncoderProfile::default())
+    }
+
+    /// Profile-aware companion to [`start_gen_first`].
+    pub fn start_gen_first_with_profile(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+        profile: EncoderProfile,
+    ) -> GamereelResult<()> {
+        let name = self
+            .scenes
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| GamereelError::CustomError("start_gen_first: no scene preloaded".into()))?;
+        self.start_gen_with_profile(rtx, output, &name, profile)
+    }
+
+    /// M3 entry: render via the full CUDA pipeline. Skips the CPU
+    /// `sws_scale` slug entirely. Requires a working NVIDIA driver +
+    /// libnvrtc; fails clearly if either is missing. Profile parameter
+    /// reserved for symmetry — the CUDA path uses Balanced today.
+    pub fn start_gen_first_cuda(
+        &mut self,
+        rtx: &mut RuntimeCtx,
+        output: &PathBuf,
+    ) -> GamereelResult<()> {
+        let name = self
+            .scenes
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                GamereelError::CustomError("start_gen_first_cuda: no scene preloaded".into())
+            })?;
+        let scene = self
+            .scenes
+            .get_mut(&name)
+            .expect("scene exists by contains_key");
+        crate::ffmpeg_inc::create_scene_stream_cuda(rtx, output, scene)
+    }
+}

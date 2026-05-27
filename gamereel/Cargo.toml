@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gamereel-core",
+    "crates/gamereel-compositor",
+    "crates/gamereel-farm",
+    "crates/gamereel-output",
+    "crates/proto-puzzle",
+    "crates/proto-bubble",
+]
+
+# Profile note: this directory is CPU+GPU compute-bound (video encoding,
+# image compositing, CUDA pipeline). Repo convention is opt-level="z" for
+# short-running CLI tools (CLAUDE.md), but that costs 1.5–2x throughput
+# on this workload. release-small profile preserved for callers that
+# want the size-optimized variant.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = false  # keep symbols for perf/profiling
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = true   # symbols for flamegraphs
+
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = true
+strip = true
+
+# Single source of truth for shared deps. Each member crate consumes
+# them via `pkg = { workspace = true }` to keep version drift impossible.
+[workspace.dependencies]
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.11"
+ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg.git" }
+ffmpeg-sys-next = "8.1"
+image = "0.25"
+imageproc = "0.25"
+tokio = { version = "1.41", features = ["fs", "io-util", "rt"] }
+tween = "2.0"
+cudarc = { version = "0.19", default-features = false, features = ["dynamic-loading", "driver", "nvrtc", "cuda-12000"] }
+inventory = "0.3"
+clap = { version = "4", features = ["derive"] }
+
+# Workspace dev-deps reused by tests/benches across crates.
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+pretty_assertions = "1"
+sha2 = "0.10"
