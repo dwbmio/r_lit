@@ -3,7 +3,7 @@
 - purpose: Generate short-form videos (TikTok / IG Reels) from binary game protocol replays
 - language: Rust
 - status: production-ready for batch / near-real-time use cases on consumer NVIDIA GPU (validated on RTX 3060)
-- workspace_layout: crates/{gamereel-core, gamereel-farm, proto-puzzle, proto-bubble} + apps/{gamereel-cli, hs-mvp}
+- workspace_layout: crates/{gamereel-core, gamereel-compositor, gamereel-farm, gamereel-output, proto-puzzle, proto-bubble}
 
 ## Headline measurements (RTX 3060 + i7-13700K, hs-mvp scene 720x1080×30fps×10s)
 
@@ -42,30 +42,40 @@
 
 ### crates/gamereel-core (v0.1.0)
 - video generation engine + ProtocolParser plugin trait
-- modules: encoder_profile (4 profiles: Fast, Balanced, TikTokHQ, IgReelsHDR), encoder_pick (NVENC > QSV > VAAPI > VT > x264), ffmpeg_inc/{mod, hwctx, stage_mgr, texture, image_effect, stream}, cuda_pipeline/{mod, kernels} (RGBA→NV12 NVRTC kernel), stage/{scene, node, action, model}, protocol
+- modules: encoder_profile (4 profiles: Fast, Balanced, TikTokHQ, IgReelsHDR), encoder_pick (NVENC > QSV > VAAPI > VT > x264), ffmpeg_inc/{mod, hwctx, stage_mgr, texture, image_effect, stream}, cuda_pipeline/{mod, kernels} (RGBA→NV12 NVRTC kernel), stage/{scene, node, action, model}, protocol, viewport, runtime_ctx
 - entry pipelines: create_scene_stream (sws_scale CPU path), create_scene_stream_with_profile (M2 with EncoderProfile), create_scene_stream_cuda (M3 full GPU path)
 - entry types: GamereelError, GamereelResult
 - key API: StageMgr::start_gen_first_cuda(rtx, output) for batch-friendly CUDA path
+- binary: perf_main (performance measurement)
+- 14+ integration tests
+
+### crates/gamereel-compositor (v0.1.0)
+- wgpu-based scene compositor, replaces CPU image_effect.rs path
+- modules: compositor (WgpuCompositor + CompositorError), scene_adapter, sprite (SpriteDraw)
+- opt-in via GAMEREEL_WORKER_COMPOSITOR=wgpu; default stays CPU for sparse-update scenes
+- 3 integration tests (break-even sweep, heavy scene comparison, init+blit)
 
 ### crates/gamereel-farm (v0.1.0)
 - worker pool runtime amortizing 284 ms CUDA init across many jobs
-- modules: job (RenderJob, RenderResult, JobPriority), worker (Worker trait, WorkerKind), worker/local (LocalWorker holding persistent CudaConverter + CudaHwContext), worker/remote (RemoteWorker stub for cloud GPU), pool (WorkerPool with bounded mpsc dispatch), probe (nvidia-smi-based GpuInfo + workers_for_gpu/workers_for_latency)
+- modules: job (RenderJob, RenderResult, JobPriority), worker (Worker trait, WorkerKind), worker/local (LocalWorker), worker/remote (RemoteWorker stub for cloud GPU), pool (WorkerPool), probe (nvidia-smi-based GpuInfo + recommended_worker_count)
 - key types: WorkerPool::spawn(count, w, h) → submit/collect_one/shutdown
 - design constraint: each LocalWorker pinned to its OS thread (CUDA context affinity)
 
-### crates/proto-puzzle, proto-bubble (v0.1.0 each)
-- skeleton protocol parsers; register via inventory::submit! against ProtocolDescriptor
-- replace lib.rs body with real binary decoder; no other changes needed
+### crates/gamereel-output (v0.1.0)
+- output sinks for rendered MP4s
+- modules: local_disk (LocalDiskSink), object_storage (ObjectStorageSink, S3-compatible via env vars), composite (CompositeSink parallel fan-out)
+- OutputSink async trait; DeliveryReceipt with public URL
+- 2 integration tests
 
-### apps/gamereel-cli (v0.1.0)
-- binary: gamereel
-- subcommands: list-protocols, render --protocol <name> --input <file>
-- json_flag: --json (matches CLAUDE.md repo convention)
-- force-links proto-* via `use proto_X as _;` so inventory constructors survive lto=fat
+### crates/proto-puzzle (v0.1.0)
+- protocol parser for puzzle-style games (block-matching, falling pieces)
+- modules: wire (JSON replay format), translate (replay → MetaSceneList timeline)
+- registers via inventory::submit! against ProtocolDescriptor
+- 1 integration test
 
-### apps/hs-mvp (v0.1.0)
-- demo: Hearthstone-style match recap; default uses CUDA pipeline, GAMEREEL_PIPELINE=sws falls back
-- bins: hs-mvp (production demo), trace (sws path instrumented), trace_cuda (M3 path instrumented), farm_bench (M5 100-job sweep across worker counts)
+### crates/proto-bubble (v0.1.0)
+- protocol parser for bubble-shooter style games (skeleton/stub)
+- registers via inventory::submit! against ProtocolDescriptor
 
 ## Scaling roadmap
 
@@ -103,9 +113,7 @@
 ```bash
 cargo build --workspace --release
 cargo test  --workspace
-cargo run   -p gamereel-cli -- list-protocols
-cargo run   -p gamereel-cli -- render --protocol puzzle --input some.bin
-cargo run   -p hs-mvp --bin farm_bench --release -- --jobs 100 --workers 1,2,4
+cargo run   -p gamereel-core --bin perf_main --release
 ```
 
 ## System requirements
@@ -118,12 +126,9 @@ cargo run   -p hs-mvp --bin farm_bench --release -- --jobs 100 --workers 1,2,4
 ## Documentation
 
 - README.md / README_CN.md: human-readable overview with capability + limitations + scaling tables
-- docs/optimization-log.md: every perf change with hypothesis + self-proof test + measurement + retro (entries O-001..O-020)
-- benches/results/m{0,1,2,3}.json + m5_farm.json: milestone trend artifacts (committed)
 
 ## Reproducibility commitments
 
 - 30 active tests + 10 CUDA-gated; full sweep `cargo test --workspace`
-- per-milestone bench scripts (benches/m{0..3}.sh) regenerate the trend JSON
-- farm_bench.rs sweeps worker counts on demand for any future GPU
-- optimization log records the hypothesis BEFORE the work starts; if the measurement contradicts, the log entry's retro section explains why
+- perf_main binary for on-demand performance measurement
+- commit messages record hypothesis BEFORE work starts; if measurement contradicts, the retro explains why

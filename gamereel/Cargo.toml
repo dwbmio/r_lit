@@ -7,8 +7,6 @@ members = [
     "crates/gamereel-output",
     "crates/proto-puzzle",
     "crates/proto-bubble",
-    "apps/hs-mvp",
-    "apps/gamereel-cli",
 ]
 
 # Profile note: this directory is CPU+GPU compute-bound (video encoding,

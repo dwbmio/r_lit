@@ -41,7 +41,7 @@
 
 ## 性能演进（M0 → M5 实测）
 
-同一硬件全程。每行可由 `benches/results/m{N}.json` 复现。
+同一硬件全程。
 
 | Milestone | 改了什么 | e2e fps (perf_main) |
 |---|---|---:|
@@ -54,7 +54,7 @@
 
 **总体：152 → 1113 fps = 7.3× 基线，画质同步保持（VMAF 97.5+）**。
 
-100 视频跑分（[m5_farm.json](benches/results/m5_farm.json) 完整数据）：
+100 视频跑分：
 
 | Workers | Wall (s) | Throughput (fps) | videos/min | p50 (ms) | p99 (ms) |
 |---:|---:|---:|---:|---:|---:|
@@ -172,17 +172,13 @@ else:
 ```
 gamereel/
 ├── Cargo.toml                         # 工作区根
-├── crates/
-│   ├── gamereel-core/                 # 视频生成引擎 + ProtocolParser trait
-│   ├── gamereel-farm/                 # worker pool + 硬件 probe + Worker trait
-│   ├── proto-puzzle/                  # 方块游戏协议解析（骨架）
-│   └── proto-bubble/                  # 泡泡龙协议解析（骨架）
-├── apps/
-│   ├── gamereel-cli/                  # CLI 入口
-│   └── hs-mvp/                        # 炉石风格 demo + trace + farm_bench bin
-├── benches/results/                   # m{0..3}.json + m5_farm.json 趋势数据
-├── tools/quality-eval/                # VMAF + grid_search + scale_path_bench
-└── docs/optimization-log.md           # 每次性能改动的假设/测试/实测/复盘
+└── crates/
+    ├── gamereel-core/                 # 视频生成引擎 + ProtocolParser trait + perf_main bin
+    ├── gamereel-compositor/           # wgpu compositor (M4) — opt-in 重场景路径
+    ├── gamereel-farm/                 # worker pool + 硬件 probe + Worker trait
+    ├── gamereel-output/               # OutputSink trait + LocalDiskSink + ObjectStorageSink
+    ├── proto-puzzle/                  # 方块游戏 v0 JSON 解析 + Scene 翻译
+    └── proto-bubble/                  # 泡泡龙协议解析（骨架）
 ```
 
 ## 构建
@@ -190,26 +186,20 @@ gamereel/
 ```bash
 cargo build --workspace --release
 cargo test  --workspace                 # 30 active + 10 CUDA-gated
-cargo run   -p gamereel-cli -- list-protocols
-cargo run   -p hs-mvp --bin farm_bench --release -- --jobs 100 --workers 1,2,4
+cargo run   -p gamereel-core --bin perf_main --release
 ```
 
-**前置依赖：** ffmpeg 开发库（`libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev`）、`clang`、`pkg-config`。CUDA 全栈：NVIDIA 驱动 ≥ 535、`libnvrtc12`、`libnvrtc-builtins12.0`。质量基准：`vmaf`（Netflix libvmaf 3.x）、`jq`。
+**前置依赖：** ffmpeg 开发库（`libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev`）、`clang`、`pkg-config`。CUDA 全栈：NVIDIA 驱动 ≥ 535、`libnvrtc12`、`libnvrtc-builtins12.0`。
 
 ## 加新游戏协议
 
 1. `cp -r crates/proto-puzzle crates/proto-<游戏名>` 然后改 Cargo.toml 包名。
 2. 给你的类型实现 `ProtocolParser`，用 `inventory::submit!` 注册。
-3. 在 `apps/gamereel-cli/Cargo.toml` 加 `proto-<游戏名>` dep + 在 `main.rs` 加 `use proto_<游戏名> as _;`（强制 link 防 `lto=fat` 剥光 inventory 构造器）。
-4. `cargo run -p gamereel-cli -- list-protocols` 应该能看到。
+3. 在你的消费 crate 中加 `proto-<游戏名>` dep + `use proto_<游戏名> as _;`（强制 link 防 `lto=fat` 剥光 inventory 构造器）。
 
 ## 取证纪律
 
-每一次性能改动在 [`docs/optimization-log.md`](docs/optimization-log.md) 都有条目——*假设*、*自证测试*、*实测增量*、*复盘*。几个月后回查决策时直接读这个文件。例子：
-
-- **O-011**：我曾说 CPU 合成占 e2e 80%。数据测出来是 13%。日志记下了纠错。
-- **O-014**：M3 CUDA 管线预测单跑 1.5–2×，实际 1.23×。复盘解释为什么 + M5 后续怎么吃回这块结构性投资。
-- **O-019**：基于纸面 NVENC concurrency 测试预测 RTX 3060 推荐 6 workers。实测 2 才是峰值。`probe::workers_for_gpu` 从 6 改到 2。
+每一次性能改动在 commit message 中记录 *假设*、*自证测试*、*实测增量*、*复盘*。几个月后回查决策时直接读 git log。
 
 ## License
 

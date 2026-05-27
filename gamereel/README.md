@@ -41,7 +41,7 @@ All numbers below are **measured on the actual hs-mvp scene** (720×1080 × 30 f
 
 ## Performance trend (measured, M0 → M5)
 
-Same hardware throughout. Each row reproduces from `benches/results/m{N}.json`.
+Same hardware throughout.
 
 | Milestone | What changed | e2e fps (perf_main) | Reference test |
 |---|---|---:|---|
@@ -52,7 +52,7 @@ Same hardware throughout. Each row reproduces from `benches/results/m{N}.json`.
 | **M5 (workers=1)** | Persistent CUDA + ffmpeg context across jobs | **1004 fps**, p99 290 ms | M5 |
 | **M5 (workers=2)** | WorkerPool round-robin dispatch | **1113 fps**, p99 547 ms | M5 |
 | **M4 (single, cold init)** | wgpu compositor + CUDA + h264_nvenc | **444 fps** (single video, includes 454 ms wgpu+cuda init); per-frame ceiling **1072 fps** | M4 |
-| **M4.5 (heavy scene case)** | wgpu compose vs CPU image_effect | wgpu wins **37–136×** when per-frame composited area > ~150K px (= 20 % of 720×1080). Shipped as opt-in `GAMEREEL_WORKER_COMPOSITOR=wgpu`; default stays CPU because hs-mvp's dirty cache wins on its scene class. See the [decision matrix](#compositor-decision-matrix-cpu-vs-wgpu) and [O-024](docs/optimization-log.md#o-024). | M4.5 |
+| **M4.5 (heavy scene case)** | wgpu compose vs CPU image_effect | wgpu wins **37–136×** when per-frame composited area > ~150K px (= 20 % of 720×1080). Shipped as opt-in `GAMEREEL_WORKER_COMPOSITOR=wgpu`; default stays CPU because hs-mvp's dirty cache wins on its scene class. See the [decision matrix](#compositor-decision-matrix-cpu-vs-wgpu). | M4.5 |
 
 **Total trajectory: 152 → 1113 fps = 7.3× over baseline**, with quality maintained (VMAF 97.5+).
 
@@ -174,21 +174,13 @@ For 720×1080 frames, 500 K pixels ≈ **3 sprites of 400×400 all moving each f
 ```
 gamereel/
 ├── Cargo.toml                         # workspace root
-├── crates/
-│   ├── gamereel-core/                 # video generation engine + ProtocolParser trait
-│   ├── gamereel-compositor/           # wgpu compositor (M4) — opt-in heavy-scene path
-│   ├── gamereel-farm/                 # worker pool, hardware probe, Worker trait
-│   ├── gamereel-output/               # OutputSink trait + LocalDiskSink + ObjectStorageSink
-│   ├── proto-puzzle/                  # 方块游戏 v0 JSON parser + Scene translator
-│   └── proto-bubble/                  # 泡泡龙 protocol parser (skeleton)
-├── apps/
-│   ├── gamereel-cli/                  # CLI entry: `gamereel render --protocol …`
-│   └── hs-mvp/                        # Hearthstone-style demo + trace + farm_bench bins
-├── benches/results/                   # m{0..3}.json + m5_farm.json trend artifacts
-├── tools/quality-eval/                # VMAF + grid_search + scale_path_bench
-└── docs/
-    ├── optimization-log.md            # every perf change with hypothesis/test/measurement/retro
-    └── protocols/match3-replay-spec.md # v0 wire format for proto-puzzle
+└── crates/
+    ├── gamereel-core/                 # video generation engine + ProtocolParser trait + perf_main bin
+    ├── gamereel-compositor/           # wgpu compositor (M4) — opt-in heavy-scene path
+    ├── gamereel-farm/                 # worker pool, hardware probe, Worker trait
+    ├── gamereel-output/               # OutputSink trait + LocalDiskSink + ObjectStorageSink
+    ├── proto-puzzle/                  # 方块游戏 v0 JSON parser + Scene translator
+    └── proto-bubble/                  # 泡泡龙 protocol parser (skeleton)
 ```
 
 ## Output delivery (S3-compatible, env-driven)
@@ -214,26 +206,20 @@ The receipt's `location` field is the public URL the player shares. CompositeSin
 ```bash
 cargo build --workspace --release       # all crates
 cargo test  --workspace                 # 30 active + 10 CUDA-gated
-cargo run   -p gamereel-cli -- list-protocols
-cargo run   -p hs-mvp --bin farm_bench --release -- --jobs 100 --workers 1,2,4
+cargo run   -p gamereel-core --bin perf_main --release
 ```
 
-**Requires:** ffmpeg dev libraries (`libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev`), `clang`, `pkg-config`. For the CUDA pipeline: NVIDIA driver ≥ 535, `libnvrtc12`, `libnvrtc-builtins12.0`. For quality benches: `vmaf` (Netflix libvmaf 3.x), `jq`.
+**Requires:** ffmpeg dev libraries (`libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswscale-dev`), `clang`, `pkg-config`. For the CUDA pipeline: NVIDIA driver ≥ 535, `libnvrtc12`, `libnvrtc-builtins12.0`.
 
 ## Adding a new game protocol
 
 1. `cp -r crates/proto-puzzle crates/proto-<gamename>` and rename in `Cargo.toml`.
 2. Implement `ProtocolParser` for your type, register with `inventory::submit!`.
-3. Add `proto-<gamename>` to `apps/gamereel-cli/Cargo.toml` deps + `use proto_<gamename> as _;` in `main.rs` (force-link so `inventory` constructors survive `lto = "fat"`).
-4. `cargo run -p gamereel-cli -- list-protocols` shows your new parser.
+3. Add `proto-<gamename>` as a dependency in your consumer crate + `use proto_<gamename> as _;` (force-link so `inventory` constructors survive `lto = "fat"`).
 
 ## Forensic discipline
 
-Every perf change has an entry in [`docs/optimization-log.md`](docs/optimization-log.md) — *hypothesis*, *self-proof test*, *measured delta*, *retro*. Read it back when revisiting a decision months from now. Examples:
-
-- **O-011**: I claimed CPU compositing was 80 % of e2e. The data showed 13 %. Logged the correction.
-- **O-014**: M3 CUDA pipeline predicted 1.5–2× single-shot, delivered 1.23×. Retro explains why and what M5 would harvest from the structural investment.
-- **O-019**: Predicted 6 workers per RTX 3060 from the standalone NVENC concurrency test. Measured 2 is the actual peak. Updated `probe::workers_for_gpu` from 6 → 2.
+Every perf change is documented with *hypothesis*, *self-proof test*, *measured delta*, *retro* in commit messages. Read git log when revisiting a decision months from now.
 
 ## License
 
