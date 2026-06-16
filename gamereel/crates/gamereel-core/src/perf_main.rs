@@ -19,7 +19,11 @@ fn main() -> Result<(), GamereelError> {
         .join("tests/perf_main/output2.mp4")
         .to_path_buf();
 
-    let mut rtx = RuntimeCtx::new(720, 1080, 10, 30);
+    let dur_secs: u64 = std::env::var("GAMEREEL_DURATION_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let mut rtx = RuntimeCtx::new(720, 1080, dur_secs, 30);
     let _ = rtx.init(Some(Path::new(project_root).to_path_buf()));
     let c: Result<(), GamereelError> = tokio::runtime::Builder::new_current_thread()
         .enable_all()

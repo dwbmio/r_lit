@@ -1,10 +1,13 @@
+mod bmfont;
 mod color;
 mod effect;
 mod error;
 mod font;
 mod render;
+mod runlog;
 
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 /// Generate stylized text images with visual effects
 /// 生成带视觉效果的艺术字图片
@@ -70,6 +73,36 @@ enum Commands {
         effects: Vec<String>,
     },
 
+    /// Bake stylized glyphs into a BMFont (.fnt + atlas) / 导出 BMFont 位图字体
+    Bmfont {
+        /// Characters to include (deduped) / 要收录的字符集
+        chars: String,
+
+        /// Output basename; writes <out>.fnt + <out>.png / 输出基名
+        #[arg(short, long, default_value = "textexture_font")]
+        output: String,
+
+        /// Font family name or .ttf/.otf path / 字体名或路径
+        #[arg(short, long)]
+        font: Option<String>,
+
+        /// Font size in pixels / 字号（像素）
+        #[arg(short = 's', long, default_value_t = 72.0)]
+        font_size: f32,
+
+        /// Text color (CSS) — used when no fill effect / 文字颜色（无 fill 效果时）
+        #[arg(short, long, default_value = "#ffffff")]
+        color: String,
+
+        /// Padding per glyph cell in px (room for effect bleed) / 每字内边距
+        #[arg(long, default_value_t = 12)]
+        padding: u32,
+
+        /// Effect spec, repeatable: name:key=val,... / 效果规格，可重复
+        #[arg(short, long = "effect")]
+        effects: Vec<String>,
+    },
+
     /// List available effects / 列出可用效果
     ListEffects,
 
@@ -81,35 +114,31 @@ enum Commands {
     },
 }
 
-fn init_logger() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {}] {}",
-                humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
-                record.level(),
-                message
-            ))
-        })
-        .level(if cfg!(debug_assertions) {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
-        .chain(std::io::stdout())
-        .apply()?;
-    Ok(())
+/// Sidecar `.log` path for a run, derived from the command's output target.
+/// `Render`/`Bmfont` attach the log next to their artifact (`<output>.log`);
+/// the read-only `list-*` commands produce nothing, so they get no sidecar.
+fn log_target(command: &Commands) -> Option<PathBuf> {
+    match command {
+        Commands::Render { output, .. } | Commands::Bmfont { output, .. } => {
+            Some(PathBuf::from(output).with_extension("log"))
+        }
+        Commands::ListEffects | Commands::ListFonts { .. } => None,
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = init_logger() {
-        eprintln!("Failed to init logger: {}", e);
-    }
+    runlog::init();
 
     let cli = Cli::parse();
+    let log_target = log_target(&cli.command);
 
     let result = run(&cli).await;
+
+    // Flush the buffered run log next to the produced artifact (errors too).
+    if let Some(path) = &log_target {
+        runlog::flush(path, &runlog::standard_header());
+    }
 
     match result {
         Ok(()) => {}
@@ -157,6 +186,27 @@ async fn run(cli: &Cli) -> error::Result<()> {
                 json: cli.json,
             };
             render::execute(&opts)?;
+        }
+        Commands::Bmfont {
+            chars,
+            output,
+            font,
+            font_size,
+            color,
+            padding,
+            effects,
+        } => {
+            let opts = bmfont::BmfontOpts {
+                chars: chars.clone(),
+                output: output.clone(),
+                font: font.clone(),
+                font_size: *font_size,
+                color: color.clone(),
+                padding: *padding,
+                effects: effects.clone(),
+                json: cli.json,
+            };
+            bmfont::execute(&opts)?;
         }
         Commands::ListEffects => {
             let effects = effect::list_effects();

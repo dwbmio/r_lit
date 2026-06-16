@@ -7,6 +7,9 @@ members = [
     "crates/gamereel-output",
     "crates/proto-puzzle",
     "crates/proto-bubble",
+    # v1.5 — Down 100 (titan-forge Phase 7.8 Replay fanout 消费侧)
+    "crates/proto-down100",
+    "crates/down100-replay-renderer",
 ]
 
 # Profile note: this directory is CPU+GPU compute-bound (video encoding,

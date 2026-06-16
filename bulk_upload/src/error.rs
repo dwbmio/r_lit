@@ -31,3 +31,7 @@ impl<E: std::fmt::Display> From<aws_sdk_s3::error::SdkError<E>> for AppError {
         AppError::S3PutError(e.to_string())
     }
 }
+
+/// 仓库约定：与 thiserror 枚举配套的 crate 级 `Result<T>` 别名。
+#[allow(dead_code)]
+pub type Result<T> = std::result::Result<T, AppError>;

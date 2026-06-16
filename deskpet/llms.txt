@@ -1,0 +1,93 @@
+name: deskpet
+type: rust-binary-crate
+purpose: Frameless transparent always-on-top 3D desktop mascot with a system-tray / macOS menu-bar resident icon, built with Bevy.
+engine: bevy 0.18 (trimmed features), bevy_egui 0.39, bevy_tray_icon 0.3
+entrypoint: src/main.rs
+binary: deskpet
+
+mascot:
+- 3D rigged GLB with idle animation, loaded from assets/block.glb (scene 0, animation 0)
+- generated from an image via fal.ai hosted Meshy 6 image-to-3d (rigging + animation)
+- fallback: built-in procedural slime (Sphere meshes) if no GLB present
+- HUD "Switch" toggles between assets/block.glb and assets/blast.glb
+- Mascot resource { use_glb, glb }, PetAnim { graph, node } component
+- setup_mascot_animation: on Added<AnimationPlayer>, play node looping (static GLB = no player = no-op)
+
+tray:
+- bevy_tray_icon TrayIconPlugin; TrayIcon resource { icon, tooltip, menu, show_menu_on_left_click=false }
+- icon: assets/tray.png; window starts visible=false (lives in tray)
+- tray_clicks system polls TrayIconEvent::receiver(): left Click(Up) -> toggle window.visible; DoubleClick(win-only) -> hide
+- tray_menu reads MenuMessage: show/hide/docs/quit ("docs" -> open_protocol_docs())
+- macОS: apply_platform_tweaks (Startup, NonSendMarker) sets NSApplication setActivationPolicy(Accessory) -> menu-bar only, no Dock icon (objc2-app-kit 0.2)
+
+window:
+- ClearColor(Color::NONE), transparent=true, composite_alpha_mode=PostMultiplied
+- decorations=false, resizable=false, has_shadow=false, WindowLevel::AlwaysOnTop, visible=false initially
+- AssetPlugin.file_path = CWD/assets (so direct-run binary finds assets, not exe-dir)
+- camera renders full window (NO viewport split: bevy_egui ties egui rect to camera viewport)
+- camera offset on +x so mascot lands in left pet area; HUD on right; Msaa::Off
+
+passthrough:
+- hit_test = (pointer on body circle, center=(PET_W/2,WIN_H/2), HIT_R) OR (pointer in HUD rect) OR dragging
+- pointer POSITION from OS-global (macOS core-graphics CGEvent; Windows GetCursorPos) -> global_cursor_physical(scale)
+- buttons from Bevy ButtonInput (hit_test on whenever click matters)
+- focus_on_hover: focus window on hover.near rising edge + at startup so macOS delivers events
+
+behavior:
+- random horizontal wander (paused when hover.near, dragging, or a reminder is showing), click hop, yaw facing
+- adaptive_frame_rate: active->ACTIVE_WAIT(60fps), near->NEAR_WAIT(30fps), idle->IDLE_WAIT(8fps); a showing reminder counts as active
+
+reminders (notify protocol, src/notify.rs):
+- purpose: protocol-driven system-info / custom reminder surface, LSP-style "send a message, it shows up"
+- transport: background thread owns TcpListener on 127.0.0.1:<port> (loopback only); reads NDJSON (one JSON object per line); many senders / many lines per connection
+- port: DEFAULT_PORT=47800, override via env DESKPET_PORT (shared by app + CLI)
+- wire format (every field but body optional, unknown fields ignored):
+  - {"type":"notify","title":?,"body":"...","level":"info|success|warn|error","duration_ms":?}
+  - {"type":"clear"}
+- level: serde de_level tolerant (warn/warning, error/err synonyms; unknown -> info)
+- Level::accent() -> bubble border/title color per severity
+- Notice::from_parts: explicit duration_ms clamped 800..120000; else derived base(info/success 4500, warn 6500, error 9000)+28ms/char, capped 20000
+- NotifyInbox(Arc<Mutex<VecDeque<Incoming>>>): listener pushes (CAP 256, drops oldest), drain_inbox pops each frame
+- NotifyState { current: Option<Notice>, timer, queue }: showing(), dismiss(); one reminder at a time, arrival order
+- drain_inbox: Notify -> queue.push + window.visible=true + attention hop (pet.vy=JUMP_V); Clear -> dismiss + queue.clear
+- advance_notify: tick timer, expire current, promote next from queue
+- notify_bubble (EguiPrimaryContextPass, before hud): top-anchored egui::Area, accent stroke, wrapped body, drawn even in passthrough
+- drive_input: BUBBLE_H=WIN_H*0.5 top strip added to hit_test+near while showing; left click on bubble -> NotifyState.dismiss() (priority over body drag)
+- CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> connect 127.0.0.1:<port>, write one NDJSON line; flags -t/--title -m/--body -l/--level -d/--duration --clear -h; body precedence: -m > positional > stdin (non-tty); connection-refused -> friendly hint exit 1
+- docs entry points: tray menu "Reminder Protocol Docs" + HUD "Protocol Docs" button -> open_protocol_docs() (main.rs): locale-aware PROTOCOL_CN.md vs PROTOCOL.md, local file (CWD/exe-dir/../Resources) else DOCS_URL_BASE github fallback, shells out to open/start/xdg-open (no extra dep)
+- full wire reference: PROTOCOL.md / PROTOCOL_CN.md
+- tests: src/notify.rs #[cfg(test)] cover parse (full/minimal/unknown-level/unknown-fields/clear) + TTL clamp/derive
+
+dependencies:
+- bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
+- bevy_egui = { default-features=false, features=[render, default_fonts] }
+- bevy_tray_icon = "0.3"
+- rand 0.8, thiserror 2, log 0.4
+- serde 1 (derive) + serde_json 1 (reminder protocol)
+- macOS: core-graphics 0.24, objc2-foundation 0.2, objc2-app-kit 0.2 (NSApplication/NSResponder/NSRunningApplication)
+- windows: windows-sys 0.59 (GetCursorPos)
+
+memory_optimizations:
+- mascot texture downscaled 2048->128 (VRAM 16MB->64KB) via tools/glb_shrink_texture.py
+- trimmed bevy + bevy_egui features (no audio/picking/bevy_ui/gilrs/sysinfo/clipboard/webbrowser)
+- Msaa::Off
+- measured: ~120MB RSS, ~290MB incl GPU (was ~150/~460), binary ~44MB
+
+tools:
+- tools/fal_meshy.py: image -> rigged+animated GLB via fal-ai/meshy/v6/image-to-3d (FAL_KEY=<uuid>:<secret>)
+- tools/meshy_image_to_3d.py: direct Meshy image-to-3d (blocked on free plan, 402)
+- tools/glb_shrink_texture.py: downscale embedded GLB texture, repack GLB
+- tools/glb_backup/: original full-res GLBs (block.full.glb, blast.full.glb)
+
+tunables_top_of_main:
+- PET_W=150, WIN_H=200, HUD_W=160, WIN_W=PET_W+HUD_W
+- UI_SCALE=1.2, HIT_R=WIN_H*0.45, NEAR_R=PET_W*1.4, GEAR_W/H=30*UI_SCALE
+- WALK_SPEED=90, JUMP_V=3.2, GRAVITY=14.0, FACE_YAW=0.45, BODY_W=1.0
+- ACTIVE_WAIT~16.7ms, NEAR_WAIT=33ms, IDLE_WAIT=120ms
+- MASCOT_GLB="block.glb"
+- BUBBLE_H=WIN_H*0.5, notify::DEFAULT_PORT=47800
+
+build:
+- cd deskpet && cargo run [--release]   # launches the mascot + reminder listener
+- deskpet send -t Build -l error "3 errors"   # push a reminder to a running instance
+- close: tray Quit / right-click mascot / Esc / pkill -x deskpet

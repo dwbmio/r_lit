@@ -23,3 +23,9 @@ pub enum ReError {
     #[error("{0}")]
     CustomError(String),
 }
+
+/// Repo convention: a crate-wide `Result<T>` alias alongside the `thiserror`
+/// enum. Some call sites still spell out `Result<_, ReError>` / `Box<dyn Error>`;
+/// new code should prefer this alias.
+#[allow(dead_code)]
+pub type Result<T> = std::result::Result<T, ReError>;

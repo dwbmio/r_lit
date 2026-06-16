@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod error;
+mod runlog;
 mod subcmd;
 
 #[derive(Parser)]
@@ -141,28 +142,25 @@ enum Commands {
     },
 }
 
+/// Sidecar `.log` path for a run. The log is attached to the input target:
+/// `<file>.log` for a single image, or `img_resize.log` inside a directory.
+fn log_target(command: &Commands) -> Option<PathBuf> {
+    match command {
+        Commands::RResize { path, .. } => Some(if path.is_dir() {
+            path.join("img_resize.log")
+        } else {
+            path.with_extension("log")
+        }),
+        Commands::Tinyfy { .. } => None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let c = fern::Dispatch::new()
-        // Perform allocation-free log formatting
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {}] {}",
-                humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
-                record.level(),
-                message
-            ))
-        })
-        // Add blanket level filter -
-        .level(if cfg!(debug_assertions) {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
-        .chain(std::io::stdout())
-        .apply()?;
+    runlog::init();
 
     let cli = Cli::parse();
+    let log_path = log_target(&cli.command);
 
     let result = match cli.command {
         Commands::RResize {
@@ -191,6 +189,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+
+    // Flush the buffered run log next to the processed target (errors too).
+    if let Some(path) = &log_path {
+        runlog::flush(path, &runlog::standard_header());
+    }
 
     if let Err(e) = result {
         if cli.json {

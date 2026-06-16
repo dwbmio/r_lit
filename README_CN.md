@@ -21,6 +21,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 | [looplog](looplog/) | 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；见 [微信 AI 调试指南](looplog/WECHAT_AI_DEBUG_CN.md)） |
 | [maquette](maquette/) | Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI） |
 | [group_vibe_workbench](group_vibe_workbench/) | 桌面协作工作台 (GPUI + P2P) |
+| [deskpet](deskpet/) | 无边框透明置顶 3D 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻） |
 | [video-generator](video-generator/) | 视频工具集 |
 | [crates/murmur](crates/murmur/) | P2P 协作库 (iroh-net + Automerge CRDT) |
 

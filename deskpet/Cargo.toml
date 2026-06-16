@@ -1,0 +1,89 @@
+[package]
+name = "deskpet"
+version = "0.1.0"
+edition = "2021"
+description = "Efficient frameless transparent desktop mascot (slime) built with Bevy"
+license = "MIT"
+repository = "https://github.com/nicholasgasior/r_lit"
+
+[dependencies]
+# Engine + ECS + winit windowing. Trimmed to the minimum a 3D + egui desktop
+# pet needs — we drop audio, picking, bevy_ui/sprite/text, gamepad (gilrs),
+# the sysinfo diagnostics thread, the default font, and webgl. Keeps the full
+# 3D renderer + glTF + skinned animation + scenes. This shrinks the binary and
+# trims baseline memory/threads vs. `default-features` (which pulls all of the
+# above in via the 2d/3d/ui/audio profiles).
+bevy = { version = "0.18", default-features = false, features = [
+    "default_app",     # asset, input_focus, log, state, window, async_executor, ...
+    "multi_threaded",
+    "bevy_winit",
+    "3d_bevy_render",  # render + core_pipeline + pbr + light + gltf + animation
+    "scene",           # bevy_scene, for loading the GLB SceneRoot
+    "png",             # decode the embedded PNG texture
+    "x11",
+    "wayland",
+] }
+
+# Immediate-mode HUD panel, drawn as an overlay on the same transparent
+# window as the 3D mascot. Version matched to Bevy 0.18 (same as `maquette`).
+# Trimmed to the minimum: `render` (draw egui) + `default_fonts` (HUD text).
+# Dropping the defaults removes clipboard (arboard), open_url (webbrowser), and
+# — crucially — `bevy_ui` + `picking`, which via Cargo feature-unification were
+# dragging bevy_ui_render and bevy_picking back into Bevy despite our trim.
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "render",
+    "default_fonts",
+] }
+
+# System-tray / macOS menu-bar resident icon, integrated with Bevy's winit
+# event loop. Click the icon to show/hide the mascot.
+bevy_tray_icon = "0.3"
+
+# Random walk targets / blink jitter.
+rand = "0.8"
+
+# Reminder protocol: external processes send NDJSON messages over a loopback
+# TCP socket (LSP-style "send a message, it shows up"), parsed with serde.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Repo conventions: thiserror error enum + log facade.
+thiserror = "2"
+log = "0.4"
+
+# Permission-free global cursor *position* read. Needed because once
+# `hit_test` is false the window stops receiving Bevy cursor events, so we
+# poll the OS to know when the pointer returns onto the mascot. We only need
+# the position — mouse buttons come from Bevy (the window always has hit_test
+# on whenever a click matters). NOTE: we deliberately do NOT use `device_query`;
+# its macOS path hard-asserts Accessibility permission and panics.
+[target.'cfg(target_os = "macos")'.dependencies]
+# Reading the current cursor location via CGEvent needs no Accessibility perm.
+core-graphics = "0.24"
+# Set the app's activation policy to Accessory at startup so it lives in the
+# menu bar only (no Dock icon) — a proper menu-bar resident. Versions pinned to
+# match winit 0.30 (objc2 0.5 / objc2-app-kit 0.2) to avoid duplicate crates.
+objc2-foundation = "0.2"
+objc2-app-kit = { version = "0.2", default-features = false, features = [
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3

@@ -1,0 +1,72 @@
+{
+  "animation_glb": null,
+  "animation_fbx": null,
+  "model_glb": {
+    "url": "https://v3b.fal.media/files/b/0a9e628f/VZiupIoyr6WwVubQvYbWV_model.glb",
+    "content_type": "model/gltf-binary",
+    "file_name": "model.glb",
+    "file_size": 5760596
+  },
+  "thumbnail": {
+    "url": "https://v3b.fal.media/files/b/0a9e6290/yf7l87Y1LQBtj7-sf-DtW_preview.png",
+    "content_type": "image/png",
+    "file_name": "preview.png",
+    "file_size": 84915
+  },
+  "model_urls": {
+    "glb": {
+      "url": "https://v3b.fal.media/files/b/0a9e628f/VZiupIoyr6WwVubQvYbWV_model.glb",
+      "content_type": "model/gltf-binary",
+      "file_name": "model.glb",
+      "file_size": 5760596
+    },
+    "fbx": {
+      "url": "https://v3b.fal.media/files/b/0a9e6290/at8DJ-vHS2tP7yZfdYOPE_model.fbx",
+      "content_type": "application/octet-stream",
+      "file_name": "model.fbx",
+      "file_size": 5966300
+    },
+    "obj": {
+      "url": "https://v3b.fal.media/files/b/0a9e6290/yZ-pPKTmO6gY1Aaq_9PgY_model.obj",
+      "content_type": "text/plain",
+      "file_name": "model.obj",
+      "file_size": 2856037
+    },
+    "usdz": {
+      "url": "https://v3b.fal.media/files/b/0a9e6290/aGk0vfdrlVbyXbJi_ojfX_model.usdz",
+      "content_type": "model/vnd.usdz+zip",
+      "file_name": "model.usdz",
+      "file_size": 5741257
+    },
+    "blend": null,
+    "stl": {
+      "url": "https://v3b.fal.media/files/b/0a9e6290/N3CjoxD6wDU8wH4EJSvdC_model.stl",
+      "content_type": "application/octet-stream",
+      "file_name": "model.stl",
+      "file_size": 1532284
+    }
+  },
+  "texture_urls": [
+    {
+      "base_color": {
+        "url": "https://v3b.fal.media/files/b/0a9e6290/VGSQHYRbqHu2PiEYcMCbF_texture_0.png",
+        "content_type": "image/png",
+        "file_name": "texture_0.png",
+        "file_size": 5610137
+      },
+      "metallic": null,
+      "normal": {
+        "url": "https://v3b.fal.media/files/b/0a9e6290/TXWY5XLPMDae1kJ70Ou-N_texture_0_normal.png",
+        "content_type": "image/png",
+        "file_name": "texture_0_normal.png",
+        "file_size": 2541731
+      },
+      "roughness": null
+    }
+  ],
+  "seed": 1025696628,
+  "rigged_character_glb": null,
+  "rigged_character_fbx": null,
+  "basic_animations": null,
+  "rig_task_id": null
+}

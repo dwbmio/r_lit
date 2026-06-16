@@ -21,6 +21,7 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 | [looplog](looplog/) | Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; see [WeChat AI debug guide](looplog/WECHAT_AI_DEBUG_CN.md)) |
 | [maquette](maquette/) | Kit-based low-poly modeling + glTF export (GUI + headless CLI) |
 | [group_vibe_workbench](group_vibe_workbench/) | Desktop collaboration workbench (GPUI + P2P) |
+| [deskpet](deskpet/) | Frameless transparent always-on-top 3D desktop mascot (Bevy + tray / menu-bar resident) |
 | [video-generator](video-generator/) | Video generation tools |
 | [crates/murmur](crates/murmur/) | P2P collaboration library (iroh-net + Automerge CRDT) |
 
