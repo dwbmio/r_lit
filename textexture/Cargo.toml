@@ -10,7 +10,6 @@ repository = "https://github.com/nicholasgasior/r_lit"
 clap = { version = "^4", features = ["cargo", "derive"] }
 thiserror = "^2"
 log = "0.4"
-fern = "0.7"
 humantime = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }

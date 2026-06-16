@@ -1,4 +1,5 @@
 mod error;
+mod runlog;
 mod subcmd;
 
 use clap::{Parser, Subcommand};
@@ -88,27 +89,29 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // init logger
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {}] {}",
-                humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
-                record.level(),
-                message
-            ))
-        })
-        .level(if cfg!(debug_assertions) {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        })
-        .chain(std::io::stdout())
-        .apply()?;
+async fn main() {
+    runlog::init();
 
     let cli = Cli::parse();
 
+    // No single output file (uploads land in S3), so the run log is dropped
+    // next to the working directory as `bulk_upload.log` for after-the-fact
+    // review of what was downloaded/uploaded.
+    let log_path = std::env::current_dir()
+        .unwrap_or_default()
+        .join("bulk_upload.log");
+
+    let result = run(cli).await;
+
+    runlog::flush(&log_path, &runlog::standard_header());
+
+    if let Err(e) = result {
+        log::error!("{}", e);
+        std::process::exit(1);
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Jq {
             json_text,
@@ -121,9 +124,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => {
                     use std::io::Read;
                     let mut buf = String::new();
-                    std::io::stdin()
-                        .read_to_string(&mut buf)
-                        .expect("从 stdin 读取 JSON 文本失败");
+                    std::io::stdin().read_to_string(&mut buf).map_err(|e| {
+                        error::AppError::CustomError(format!("从 stdin 读取 JSON 文本失败: {}", e))
+                    })?;
                     buf
                 }
             };

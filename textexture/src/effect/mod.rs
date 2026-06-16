@@ -3,6 +3,7 @@ pub mod outline;
 pub mod gradient;
 pub mod glow;
 pub mod neon;
+pub mod grain;
 
 use std::collections::HashMap;
 use cosmic_text::{Buffer, FontSystem, SwashCache};
@@ -68,6 +69,11 @@ pub fn list_effects() -> Vec<EffectInfo> {
             description: "Neon glow effect / 霓虹效果".into(),
             params: vec!["color".into(), "radius".into()],
         },
+        EffectInfo {
+            name: "grain".into(),
+            description: "Film/print grain on text / 颗粒感噪点".into(),
+            params: vec!["amount".into(), "seed".into(), "scale".into()],
+        },
     ]
 }
 
@@ -83,6 +89,7 @@ pub fn parse_effect_specs(specs: &[String]) -> Result<Vec<Box<dyn Effect>>> {
             "gradient" => Box::new(gradient::Gradient::from_params(&params)?),
             "glow" => Box::new(glow::Glow::from_params(&params)?),
             "neon" => Box::new(neon::Neon::from_params(&params)?),
+            "grain" => Box::new(grain::Grain::from_params(&params)?),
             _ => return Err(AppError::UnknownEffect(name)),
         };
         effects.push(effect);

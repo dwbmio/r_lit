@@ -15,7 +15,6 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
 futures = "0.3"
 log = "0.4"
-fern = "0.7"
 humantime = "2"
 
 [dev-dependencies]
