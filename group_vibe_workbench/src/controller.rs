@@ -90,7 +90,7 @@ pub fn start_search(
                             _ = tokio::time::sleep_until(deadline) => break,
                             event = events.recv() => {
                                 match event {
-                                    Ok(murmur::SwarmEvent::DataSynced) => {
+                                    Ok(murmur::SwarmEvent::DataSynced { .. }) => {
                                         log::info!("Search: data synced via event");
                                         got_sync = true;
                                         break;
@@ -101,7 +101,7 @@ pub fn start_search(
                                         tokio::select! {
                                             _ = tokio::time::sleep(tokio::time::Duration::from_millis(300)) => {}
                                             ev = events.recv() => {
-                                                if let Ok(murmur::SwarmEvent::DataSynced) = ev {
+                                                if let Ok(murmur::SwarmEvent::DataSynced { .. }) = ev {
                                                     log::info!("Search: data synced");
                                                     got_sync = true;
                                                 }
@@ -122,7 +122,7 @@ pub fn start_search(
                         tokio::select! {
                             _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {}
                             ev = events.recv() => {
-                                if let Ok(murmur::SwarmEvent::DataSynced) = ev {
+                                if let Ok(murmur::SwarmEvent::DataSynced { .. }) = ev {
                                     log::info!("Search: late data synced");
                                 }
                             }
@@ -135,7 +135,7 @@ pub fn start_search(
 
                     let mut groups_map: std::collections::HashMap<String, Vec<(String, String)>>
                         = std::collections::HashMap::new();
-                    for (node_id, nickname, group_id) in &peers {
+                    for murmur::PeerInfo { node_id, nickname, group_id } in &peers {
                         if !group_id.starts_with('_') {
                             groups_map.entry(group_id.clone())
                                 .or_default()
@@ -282,7 +282,7 @@ pub fn join_group(
                                             found = true;
                                             break;
                                         }
-                                        Ok(murmur::SwarmEvent::DataSynced) => {
+                                        Ok(murmur::SwarmEvent::DataSynced { .. }) => {
                                             log::info!("Join: data synced via event");
                                             found = true;
                                             break;
@@ -360,7 +360,7 @@ pub fn start_member_poll() -> mpsc::Receiver<MemberUpdate> {
                     let peers = swarm.list_announced_peers().await.unwrap_or_default();
                     let connected = swarm.connected_peers().await;
                     let mut members = Vec::new();
-                    for (node_id, nickname, group_id) in peers {
+                    for murmur::PeerInfo { node_id, nickname, group_id } in peers {
                         if group_id.starts_with('_') || node_id == my_node_id {
                             continue;
                         }
@@ -387,7 +387,7 @@ pub fn start_member_poll() -> mpsc::Receiver<MemberUpdate> {
                         match event {
                             Ok(murmur::SwarmEvent::PeerConnected { .. })
                             | Ok(murmur::SwarmEvent::PeerDisconnected { .. })
-                            | Ok(murmur::SwarmEvent::DataSynced) => {
+                            | Ok(murmur::SwarmEvent::DataSynced { .. }) => {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
