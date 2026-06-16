@@ -110,6 +110,7 @@ pub fn start_search(
                                         break;
                                     }
                                     Ok(murmur::SwarmEvent::PeerDisconnected { .. }) => continue,
+                                    Ok(_) => continue,
                                     Err(_) => break,
                                 }
                             }
@@ -288,6 +289,7 @@ pub fn join_group(
                                             break;
                                         }
                                         Ok(murmur::SwarmEvent::PeerDisconnected { .. }) => continue,
+                                        Ok(_) => continue,
                                         Err(_) => break,
                                     }
                                 }
@@ -390,6 +392,7 @@ pub fn start_member_poll() -> mpsc::Receiver<MemberUpdate> {
                             | Ok(murmur::SwarmEvent::DataSynced { .. }) => {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                             }
+                            Ok(_) => {}
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
