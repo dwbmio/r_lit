@@ -36,7 +36,7 @@ everywhere it isn't drawn. A small egui HUD provides quick controls.
 | Action | Result |
 |--------|--------|
 | Click tray / menu-bar icon | Toggle the mascot (show / hide) |
-| Right-click tray icon | Show / Hide / Quit menu |
+| Right-click tray icon | Show / Hide / **Reminder Protocol Docs** / Quit menu |
 | Left click on mascot body | Greeting hop |
 | Left drag on body | Move the mascot window |
 | Right click on body / Esc | Quit |
@@ -92,6 +92,10 @@ attention, and shows the text in a speech bubble that auto-dismisses (click it
 to dismiss early). This makes it a natural target for *system-info / custom
 reminders* — build results, long-job completion, battery/disk warnings, "stand
 up" nudges, anything you can `echo` from a script.
+
+The full wire reference is in **[`PROTOCOL.md`](PROTOCOL.md)** (中文：
+[`PROTOCOL_CN.md`](PROTOCOL_CN.md)) — also reachable in-app from the tray
+right-click menu (*Reminder Protocol Docs*) or the HUD's *Protocol Docs* button.
 
 ### Quick start
 

@@ -17,7 +17,7 @@ tray:
 - bevy_tray_icon TrayIconPlugin; TrayIcon resource { icon, tooltip, menu, show_menu_on_left_click=false }
 - icon: assets/tray.png; window starts visible=false (lives in tray)
 - tray_clicks system polls TrayIconEvent::receiver(): left Click(Up) -> toggle window.visible; DoubleClick(win-only) -> hide
-- tray_menu reads MenuMessage: show/hide/quit
+- tray_menu reads MenuMessage: show/hide/docs/quit ("docs" -> open_protocol_docs())
 - macОS: apply_platform_tweaks (Startup, NonSendMarker) sets NSApplication setActivationPolicy(Accessory) -> menu-bar only, no Dock icon (objc2-app-kit 0.2)
 
 window:
@@ -54,6 +54,8 @@ reminders (notify protocol, src/notify.rs):
 - notify_bubble (EguiPrimaryContextPass, before hud): top-anchored egui::Area, accent stroke, wrapped body, drawn even in passthrough
 - drive_input: BUBBLE_H=WIN_H*0.5 top strip added to hit_test+near while showing; left click on bubble -> NotifyState.dismiss() (priority over body drag)
 - CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> connect 127.0.0.1:<port>, write one NDJSON line; flags -t/--title -m/--body -l/--level -d/--duration --clear -h; body precedence: -m > positional > stdin (non-tty); connection-refused -> friendly hint exit 1
+- docs entry points: tray menu "Reminder Protocol Docs" + HUD "Protocol Docs" button -> open_protocol_docs() (main.rs): locale-aware PROTOCOL_CN.md vs PROTOCOL.md, local file (CWD/exe-dir/../Resources) else DOCS_URL_BASE github fallback, shells out to open/start/xdg-open (no extra dep)
+- full wire reference: PROTOCOL.md / PROTOCOL_CN.md
 - tests: src/notify.rs #[cfg(test)] cover parse (full/minimal/unknown-level/unknown-fields/clear) + TTL clamp/derive
 
 dependencies:

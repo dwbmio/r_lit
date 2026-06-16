@@ -17,7 +17,7 @@ tray 托盘:
 - bevy_tray_icon TrayIconPlugin; TrayIcon 资源 { icon, tooltip, menu, show_menu_on_left_click=false }
 - 图标 assets/tray.png; 窗口 visible=false 启动（常驻托盘）
 - tray_clicks 轮询 TrayIconEvent::receiver(): 左 Click(Up) -> 切 window.visible; DoubleClick(仅Win) -> 隐藏
-- tray_menu 读 MenuMessage: show/hide/quit
+- tray_menu 读 MenuMessage: show/hide/docs/quit（"docs" -> open_protocol_docs()）
 - macOS: apply_platform_tweaks(Startup, NonSendMarker) 调 NSApplication setActivationPolicy(Accessory) -> 仅菜单栏、无 Dock 图标 (objc2-app-kit 0.2)
 
 window 窗口:
@@ -54,6 +54,8 @@ reminders 提醒协议 (src/notify.rs):
 - notify_bubble (EguiPrimaryContextPass, 在 hud 之前): 顶部 egui::Area 气泡，按级别描边，body 自动换行，穿透状态下也照常绘制
 - drive_input: 展示时把 BUBBLE_H=WIN_H*0.5 顶部条带并入 hit_test+near；左键点气泡 -> NotifyState.dismiss()（优先于身体拖拽）
 - CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> 连 127.0.0.1:<port> 写一行 NDJSON；参数 -t/--title -m/--body -l/--level -d/--duration --clear -h；body 优先级: -m > 位置参数 > stdin(非 tty)；连接被拒 -> 友好提示并 exit 1
+- 文档入口: 托盘菜单 "Reminder Protocol Docs" + HUD "Protocol Docs" 按钮 -> open_protocol_docs() (main.rs)：按 locale 选 PROTOCOL_CN.md/PROTOCOL.md，优先本地文件(CWD/exe目录/../Resources)否则 DOCS_URL_BASE github 回退，shell 调 open/start/xdg-open（无额外依赖）
+- 完整线格式参考: PROTOCOL.md / PROTOCOL_CN.md
 - 测试: src/notify.rs #[cfg(test)] 覆盖解析(完整/最小/未知level/未知字段/clear) + TTL 钳制/派生
 
 dependencies 依赖:
