@@ -1,0 +1,10 @@
+/target/
+*.swp
+*.swo
+.DS_Store
+.env
+
+# Full-resolution source models (2048² textures, ~12MB). Kept locally as the
+# re-downscale source; regenerable via tools/fal_meshy.py. The runtime uses the
+# committed, downscaled block.glb / blast.glb instead.
+/tools/glb_backup/

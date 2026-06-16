@@ -1,0 +1,69 @@
+name: deskpet
+type: rust-binary-crate
+purpose: Frameless transparent always-on-top 3D desktop mascot with a system-tray / macOS menu-bar resident icon, built with Bevy.
+engine: bevy 0.18 (trimmed features), bevy_egui 0.39, bevy_tray_icon 0.3
+entrypoint: src/main.rs
+binary: deskpet
+
+mascot:
+- 3D rigged GLB with idle animation, loaded from assets/block.glb (scene 0, animation 0)
+- generated from an image via fal.ai hosted Meshy 6 image-to-3d (rigging + animation)
+- fallback: built-in procedural slime (Sphere meshes) if no GLB present
+- HUD "Switch" toggles between assets/block.glb and assets/blast.glb
+- Mascot resource { use_glb, glb }, PetAnim { graph, node } component
+- setup_mascot_animation: on Added<AnimationPlayer>, play node looping (static GLB = no player = no-op)
+
+tray:
+- bevy_tray_icon TrayIconPlugin; TrayIcon resource { icon, tooltip, menu, show_menu_on_left_click=false }
+- icon: assets/tray.png; window starts visible=false (lives in tray)
+- tray_clicks system polls TrayIconEvent::receiver(): left Click(Up) -> toggle window.visible; DoubleClick(win-only) -> hide
+- tray_menu reads MenuMessage: show/hide/quit
+- macОS: apply_platform_tweaks (Startup, NonSendMarker) sets NSApplication setActivationPolicy(Accessory) -> menu-bar only, no Dock icon (objc2-app-kit 0.2)
+
+window:
+- ClearColor(Color::NONE), transparent=true, composite_alpha_mode=PostMultiplied
+- decorations=false, resizable=false, has_shadow=false, WindowLevel::AlwaysOnTop, visible=false initially
+- AssetPlugin.file_path = CWD/assets (so direct-run binary finds assets, not exe-dir)
+- camera renders full window (NO viewport split: bevy_egui ties egui rect to camera viewport)
+- camera offset on +x so mascot lands in left pet area; HUD on right; Msaa::Off
+
+passthrough:
+- hit_test = (pointer on body circle, center=(PET_W/2,WIN_H/2), HIT_R) OR (pointer in HUD rect) OR dragging
+- pointer POSITION from OS-global (macOS core-graphics CGEvent; Windows GetCursorPos) -> global_cursor_physical(scale)
+- buttons from Bevy ButtonInput (hit_test on whenever click matters)
+- focus_on_hover: focus window on hover.near rising edge + at startup so macOS delivers events
+
+behavior:
+- random horizontal wander (paused when hover.near or dragging), click hop, yaw facing
+- adaptive_frame_rate: active->ACTIVE_WAIT(60fps), near->NEAR_WAIT(30fps), idle->IDLE_WAIT(8fps)
+
+dependencies:
+- bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
+- bevy_egui = { default-features=false, features=[render, default_fonts] }
+- bevy_tray_icon = "0.3"
+- rand 0.8, thiserror 2, log 0.4
+- macOS: core-graphics 0.24, objc2-foundation 0.2, objc2-app-kit 0.2 (NSApplication/NSResponder/NSRunningApplication)
+- windows: windows-sys 0.59 (GetCursorPos)
+
+memory_optimizations:
+- mascot texture downscaled 2048->128 (VRAM 16MB->64KB) via tools/glb_shrink_texture.py
+- trimmed bevy + bevy_egui features (no audio/picking/bevy_ui/gilrs/sysinfo/clipboard/webbrowser)
+- Msaa::Off
+- measured: ~120MB RSS, ~290MB incl GPU (was ~150/~460), binary ~44MB
+
+tools:
+- tools/fal_meshy.py: image -> rigged+animated GLB via fal-ai/meshy/v6/image-to-3d (FAL_KEY=<uuid>:<secret>)
+- tools/meshy_image_to_3d.py: direct Meshy image-to-3d (blocked on free plan, 402)
+- tools/glb_shrink_texture.py: downscale embedded GLB texture, repack GLB
+- tools/glb_backup/: original full-res GLBs (block.full.glb, blast.full.glb)
+
+tunables_top_of_main:
+- PET_W=150, WIN_H=200, HUD_W=160, WIN_W=PET_W+HUD_W
+- UI_SCALE=1.2, HIT_R=WIN_H*0.45, NEAR_R=PET_W*1.4, GEAR_W/H=30*UI_SCALE
+- WALK_SPEED=90, JUMP_V=3.2, GRAVITY=14.0, FACE_YAW=0.45, BODY_W=1.0
+- ACTIVE_WAIT~16.7ms, NEAR_WAIT=33ms, IDLE_WAIT=120ms
+- MASCOT_GLB="block.glb"
+
+build:
+- cd deskpet && cargo run [--release]
+- close: tray Quit / right-click mascot / Esc / pkill -x deskpet
