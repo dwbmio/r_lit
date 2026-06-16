@@ -28,9 +28,8 @@ See each subdirectory's README for detailed usage.
 
 ## Install (pre-built binaries)
 
-Every CLI tool is published to:
-- **GitHub Releases** — `https://github.com/dwbmio/r_lit/releases`
-- **Cloudflare R2 (mirror, stable URL)** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
+Every CLI tool is published (by the internal Jenkins cross-compile service) to:
+- **Cloudflare R2 (stable URL, primary)** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
 - **HFrog tracker** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
 
 One-line install (auto-detects Linux / macOS / Windows-Git-Bash):
@@ -46,8 +45,8 @@ curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 curl -fsSL https://r2.gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
 ```
 
-GUI apps (`maquette`, `group_vibe_workbench`) ship as a notarized `.dmg`
-on macOS; download from the GitHub Release page.
+GUI apps (`maquette`, `group_vibe_workbench`, `deskpet`) ship as a raw binary
+tarball per platform (Linux/macOS); install the same way.
 
 ## Build
 
@@ -57,21 +56,22 @@ cd <tool_dir> && cargo build --release
 
 ## Release
 
-Bump `version` in any `<tool>/Cargo.toml`, push to `main`, and the
-`Release` workflow will:
+The only publish path is the internal **Jenkins cross-compile service**
+(`ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build`). There is no
+GitHub Actions release path. Trigger the job manually, pick `TOOL_NAME` and
+platforms, and it will:
 
-1. Build the matrix of `targets` declared in `release-metadata.json` for that tool.
-2. Create a GitHub Release with binaries + `SHA256SUMS` + per-asset checksum table.
-3. Mirror everything to R2 (`s3://prod-hfrog/r_lit/<tool>/v<ver>/`)
-   and refresh `r_lit/<tool>/install.sh`.
-4. Sync `software / version / release / platform` records to HFrog with
-   real `file_size`, `checksum_sha256`, `source_type`, and `install_script_url`.
+1. Build per platform (Linux x86_64 native / macOS aarch64 native / Windows
+   x86_64 via the MinGW `x86_64-pc-windows-gnu` cross toolchain).
+2. Package each as `<tool>-<target>.tar.gz` (Windows: `.zip`).
+3. Upload to R2 (`s3://prod-hfrog/r_lit/<tool>/v<ver>/`) and refresh
+   `r_lit/<tool>/install.sh`.
+4. Sync `software / version / release / platform` records to HFrog with real
+   `file_size`, `checksum_sha256`, `source_type`, and `install_script_url`.
 
-To add a tool, append it to `release-metadata.json` (`description`,
-`category`, optional `gui`/`macos_app_name`/`targets`). Nothing else.
+The tool inventory of record is the Jenkinsfile `toolMap`.
 
-See [`docs/release.md`](docs/release.md) for the full pipeline diagram and
-required GitHub secrets.
+See [`docs/release.md`](docs/release.md) for the full pipeline diagram.
 
 ## License
 

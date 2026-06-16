@@ -1,116 +1,61 @@
 # Release Pipeline
 
-Reference for the `Release` workflow at
-[`.github/workflows/release.yml`](../.github/workflows/release.yml).
+> **唯一发布通道 = 内网 Jenkins 交叉编译服务。** GitHub Actions 发布路径
+> （旧 `.github/workflows/release.yml` + `release-metadata.json` 矩阵 + GitHub Release）**已移除**。
+> Pipeline 定义在 `ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build`。
 
 ## Pipeline overview
 
 ```
-release-metadata.json   (single source of truth: description, category,
-       │                 source_type, targets, gui, macos_app_name)
+Jenkins r_lit-binary-build  (参数: TOOL_NAME / GIT_BRANCH / BUILD_LINUX|MACOS|WINDOWS)
+       │  toolMap 是工具事实源 (dir/binary/buildable/description/category/
+       │  r2_prefix/cargo_features/system_deps/support_windows)
        ▼
-push:main / workflow_dispatch / repository_dispatch
-       │
+┌──────────────┐  并行构建 (各平台原生 / Windows 经 MinGW 交叉编译)
+│  build       │  Linux  → x86_64-unknown-linux-gnu   (native)
+│              │  macOS  → aarch64-apple-darwin        (native)
+│              │  Windows→ x86_64-pc-windows-gnu       (MinGW cross; GUI 工具默认跳过)
+└──────┬───────┘  产物: <tool>-<target>.tar.gz  (Windows: <tool>-<target>.zip)
        ▼
-┌──────────────┐
-│  detect      │  diff Cargo.toml + enrich each project from metadata
-└──────┬───────┘
-       │  projects = [{name, version, description, category,
-       │               source_type, gui, macos_app_name, targets}]
-       ▼
-┌──────────────┐
-│  build       │  per-target matrix; only targets the project actually
-│              │  declares; macOS GUI builds are signed + notarized
-└──────┬───────┘
-       │  artifacts = release/<tool>-<target>.{tar.gz,zip,dmg}
-       ▼
-┌──────────────┐
-│  release     │  per-tool GitHub Release with SHA256SUMS + per-asset
-│              │  size & checksum table; notes generated from template
-└──────┬───────┘
-       │  released = [{name, version, tag}]   pkg-* artifact
-       ▼
-┌──────────────┐  Cloudflare R2 — bucket prod-hfrog
-│  mirror-r2   │  → r_lit/<tool>/install.sh                (latest)
-│              │  → r_lit/<tool>/v<ver>/<assets>           (immutable)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐  HFrog — https://hfrog.gamesci-lite.com
-│  sync-hfrog  │  software   (name, description, install_command, install_script_url)
-│              │  platform   (code, os, arch, display_name) — only built targets
-│              │  version    (software_name, version, is_latest, release_notes,
-│              │              created_by)        ← release_notes = real RELEASE_NOTES.md
-│              │  release    (software_name, version, platform_code, download_url,
-│              │              file_size, checksum_sha256, source_type)
-│              │  category   patched via psql (UPDATE rb_softwares SET category_id=…)
+┌──────────────┐  hfrog_publisher.py (经 ci-all-in-one jenkins-publish.sh 同步调用)
+│  publish     │  R2 (bucket prod-hfrog):
+│              │   → r_lit/<tool>/install.sh                (latest，模板渲染)
+│              │   → r_lit/<tool>/v<ver>/<assets>           (immutable)
+│              │  HFrog (https://hfrog.gamesci-lite.com):
+│              │   software / platform / version / release  (file_size, checksum_sha256,
+│              │   source_type, install_script_url)；category 可选经 psql patch
 └──────────────┘
 ```
 
-`mirror-r2` and `sync-hfrog` both run from the same `release-pkgs` artifact
-the `release` job uploaded, so file sizes / sha256 / RELEASE_NOTES are
-authoritative across all sinks.
+`scripts/hfrog_publisher.py` 是 publisher 事实源；Jenkins 通过 `sync-publisher.sh`
+同步成 `ci-all-in-one/scripts/services/hfrog/publisher.py` 使用——**勿当作废弃脚本删除**。
+`scripts/install.sh.template` 与 ci-all-in-one 内同步副本须保持字节一致（CI 用后者渲染）。
 
-## Required GitHub Secrets
+## 凭证 (Jenkins credentials)
 
-Configure in `Settings → Secrets and variables → Actions`. Anything marked
-**required** will fail the workflow if missing; optional secrets degrade
-gracefully.
+R2 / HFrog 凭证以 Jenkins credentials 形式注入（见 Jenkinsfile `withCredentials`）：
+`r2-hfrog-endpoint` / `r2-hfrog-access-key-id` / `r2-hfrog-secret-access-key` /
+`hfrog-postgres-url`（可选，启用 `category_id` 的 SQL patch）。
+原始值见 `/Users/.../ci-all-in-one/secrets/.credentials.env`。R2 bucket `prod-hfrog`
+绑定公网域名 `r2.gamesci-lite.com`。
 
-| Secret | Required by | Notes |
-|---|---|---|
-| `R2_ACCESS_KEY_ID` | `mirror-r2` | Cloudflare R2 access key — value of `R2_HFROG_ACCESS_KEY_ID` in `ci-all-in-one/secrets/.credentials.env` |
-| `R2_SECRET_ACCESS_KEY` | `mirror-r2` | Cloudflare R2 secret key — value of `R2_HFROG_SECRET_ACCESS_KEY` |
-| `R2_ENDPOINT` | `mirror-r2` | `https://240d77865abd8ef6f48521ba34845508.r2.cloudflarestorage.com` |
-| `R2_BUCKET` | `mirror-r2` | `prod-hfrog` (bound to public domain `r2.gamesci-lite.com`) |
-| `MACOS_CERTIFICATE` | `build` (macOS GUI only) | base64-encoded `.p12` Developer ID Application cert. Skip → unsigned build |
-| `MACOS_CERTIFICATE_PWD` | `build` (macOS GUI only) | password for the .p12 |
-| `MACOS_KEYCHAIN_PASSWORD` | `build` (macOS GUI only) | transient keychain pwd, any string |
-| `MACOS_CERTIFICATE_NAME` | `build` (macOS GUI only) | e.g. `Developer ID Application: Foo (TEAMID)` |
-| `MACOS_TEAM_ID` | `build` (macOS GUI only) | 10-char Apple Team ID |
-| `MACOS_NOTARY_APPLE_ID` | `build` (macOS GUI only) | Apple ID e-mail for notarytool |
-| `MACOS_NOTARY_PWD` | `build` (macOS GUI only) | app-specific password |
-| `POSTGRES_HFROG_HOST` | `sync-hfrog` (optional) | If set, also patches `category_id` via SQL |
-| `POSTGRES_HFROG_PORT` | `sync-hfrog` (optional) | default `5432` |
-| `POSTGRES_HFROG_DB` | `sync-hfrog` (optional) | `hfrog` |
-| `POSTGRES_HFROG_USER` | `sync-hfrog` (optional) | `kong_gate_admin` |
-| `POSTGRES_HFROG_PASSWORD` | `sync-hfrog` (optional) | see `ci-all-in-one/secrets/.credentials.env` |
+## 添加 / 发布一个工具
 
-The four `R2_*` and the `POSTGRES_HFROG_*` values all live in
-`/Users/.../ci-all-in-one/secrets/.credentials.env`. Copy them verbatim
-into GitHub Actions secrets.
-
-## Adding a new tool
-
-1. Create the crate (`<tool>/Cargo.toml`).
-2. Append an entry under `tools` in
-   [`release-metadata.json`](../release-metadata.json):
-
-   ```json
-   "your_tool": {
-     "description": "What it does, in one paragraph.",
-     "category": "cli"
-   }
-   ```
-
-   Optional keys: `gui`, `macos_app_name`, `source_type`, `targets`.
-3. Bump `version` in `Cargo.toml`, push to `main` — done.
-
-The first release will create the `software` row in HFrog and the
-`r_lit/<tool>/install.sh` entry on R2.
+1. 创建 crate（`<tool>/Cargo.toml`），补齐 README/README_CN/llms/llms_cn。
+2. 在 `Jenkinsfile.binary-build` 的 `toolMap` 登记：`dir` / `binary` / `buildable` /
+   `description` / `category` / `source_type` / `r2_prefix`；GUI 工具补 `cargo_features`
+   （如 `gui`）、`system_deps`（Linux 系统库）、`support_windows: false`（bevy/GPUI MinGW 不可靠）。
+   不可构建的工具显式 `buildable: false` 并写明 `note`。
+3. 触发 Jenkins job，选 `TOOL_NAME` + 平台。首次发布会建好 HFrog `software` 行与
+   R2 上的 `r_lit/<tool>/install.sh`。
+4. 验证：R2 `install.sh` 与 `v<ver>/<tool>-<target>.{tar.gz,zip}`、HFrog metadata 的
+   `file_size` / `checksum_sha256`。
 
 ## One-shot remediation
 
-`scripts/repatch_hfrog.sh` exists for two scenarios:
-
-- After this CI overhaul lands, to retroactively backfill
-  `install_script_url`, `file_size`, `checksum_sha256`, `source_type`,
-  `release_notes`, and `category_id` for releases that pre-date the new
-  workflow (textexture-v0.1.0, maquette-v0.1.0).
-- To clean up `_probe_*` rows left over from API reverse-engineering
-  (hfrog has no DELETE endpoint, so these need raw SQL).
-
-Run locally with `ci-all-in-one/secrets/.credentials.env` sourced. Idempotent.
+`scripts/repatch_hfrog.sh` 用于回填历史 release 的 `install_script_url` /
+`file_size` / `checksum_sha256` / `source_type` / `release_notes` / `category_id`，
+以及清理 `_probe_*` 残留行（hfrog 无 DELETE，需 raw SQL）。本地 source 凭证后运行，幂等：
 
 ```bash
 source /Users/admin/data0/private_work/ci-all-in-one/secrets/.credentials.env
@@ -119,18 +64,13 @@ bash scripts/repatch_hfrog.sh
 
 ## Migration note: Nexus → Cloudflare R2
 
-We migrated all r_lit binary distribution from Nexus
-(`nexus.gamesci-lite.com`) to Cloudflare R2 (`gamesci-lite.com`). All old
-`nexus.gamesci-lite.com/repository/raw-prod/r_lit/...` URLs are dead.
-
-The `mirror-nexus` job in the previous `release.yml` is gone. If you have
-external scripts still pointing at Nexus, switch them to:
+r_lit 二进制分发已从 Nexus（`nexus.gamesci-lite.com`）迁到 Cloudflare R2。
+旧 `nexus.gamesci-lite.com/repository/raw-prod/r_lit/...` URL 全部失效。现行 URL：
 
 ```
 https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
-https://r2.gamesci-lite.com/r_lit/<tool>/v<ver>/<tool>-<target>.tar.gz
+https://r2.gamesci-lite.com/r_lit/<tool>/v<ver>/<tool>-<target>.tar.gz   # Windows: .zip
 ```
 
-A scan of remaining Nexus references in the sister `ci-all-in-one`
-repository (Jenkins pipelines, docs) lives at
-[`docs/nexus-deprecation-audit.md`](nexus-deprecation-audit.md).
+ci-all-in-one 内残留 Nexus 引用的扫描见
+[`docs/nexus-deprecation-audit.md`](nexus-deprecation-audit.md)。

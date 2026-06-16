@@ -6,20 +6,19 @@
 #   curl -fsSL https://r2.gamesci-lite.com/r_lit/{{TOOL}}/install.sh | INSTALL_DIR=$HOME/.local/bin bash
 #
 # Sources binaries from Cloudflare R2 (bucket: prod-hfrog,
-# public domain: r2.gamesci-lite.com). Falls back to GitHub Releases when
-# R2 is unreachable.
+# public domain: r2.gamesci-lite.com). Binaries are built & published by the
+# Jenkins cross-compile service (ci-all-in-one r_lit-binary-build); there is
+# no GitHub Actions / GitHub Release path anymore.
 #
-# Generated automatically by .github/workflows/release.yml — do not edit
-# the deployed copy directly; edit scripts/install.sh.template instead.
+# Generated automatically by the Jenkins publisher (hfrog_publisher.py) — do
+# not edit the deployed copy directly; edit scripts/install.sh.template instead.
 
 set -euo pipefail
 
 TOOL="{{TOOL}}"
 VERSION="{{VERSION}}"
-GITHUB_REPO="{{GITHUB_REPO}}"
 
 R2_BASE="${R2_PUBLIC_BASE:-https://r2.gamesci-lite.com/r_lit/${TOOL}}"
-GH_BASE="https://github.com/${GITHUB_REPO}/releases/download/${TOOL}-v${VERSION}"
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
@@ -45,7 +44,9 @@ detect_target() {
                 aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
                 *)             return 1 ;;
             esac ;;
-        MINGW*|MSYS*|CYGWIN*)  echo "x86_64-pc-windows-msvc" ;;
+        # Windows binaries are cross-compiled with the MinGW toolchain
+        # (x86_64-pc-windows-gnu), so match that target rather than msvc.
+        MINGW*|MSYS*|CYGWIN*)  echo "x86_64-pc-windows-gnu" ;;
         *) return 1 ;;
     esac
 }
@@ -67,22 +68,17 @@ main() {
 
     local archive_name="${TOOL}-${target}.${archive_ext}"
     local r2_url="${R2_BASE}/v${VERSION}/${archive_name}"
-    local gh_url="${GH_BASE}/${archive_name}"
 
     info "tool      : ${TOOL} v${VERSION}"
     info "target    : ${target}"
     info "install to: ${INSTALL_DIR}/${bin_name}"
 
     local tmp; tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
+    trap 'rm -rf "${tmp:-}"' EXIT
 
     info "downloading ${r2_url}"
-    if ! curl -fsSL --retry 2 -o "${tmp}/${archive_name}" "${r2_url}"; then
-        warn "R2 unreachable, falling back to GitHub Release"
-        info "downloading ${gh_url}"
-        curl -fsSL --retry 3 -o "${tmp}/${archive_name}" "${gh_url}" \
-            || die "both R2 and GitHub Release download failed"
-    fi
+    curl -fsSL --retry 3 -o "${tmp}/${archive_name}" "${r2_url}" \
+        || die "download failed: ${r2_url}"
 
     info "extracting ${archive_name}"
     case "$archive_ext" in

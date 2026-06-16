@@ -72,9 +72,21 @@ mj_atlas 已落地这套；其他短时 CLI 工具新增 / 改造时复用 `mj_a
 
 ## Release Process
 
-修改工具 `Cargo.toml` 版本号并 push 到 main，GitHub Actions 自动构建 3 平台目标（Linux/macOS/Windows x86_64，详见 `.github/workflows/release.yml`）并发布到 [hfrog.gamesci-lite.com](https://hfrog.gamesci-lite.com)。
+**唯一发布通道 = 内网 Jenkins 交叉编译服务**（GitHub Actions 发布路径已移除）。
+`ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build` 按工具手动触发（dev.gamesci-lite.com）：
+选 `TOOL_NAME`、勾平台（Linux x86_64 native / macOS aarch64 native / Windows x86_64 经 MinGW `x86_64-pc-windows-gnu` 交叉编译），
+构建产物打包成 `<tool>-<target>.tar.gz`（Windows 为 `.zip`），经 `hfrog_publisher.py` 上传 R2
+（`r2.gamesci-lite.com/r_lit/<tool>/v<ver>/`）+ 同步 HFrog（[hfrog.gamesci-lite.com](https://hfrog.gamesci-lite.com)）+ 渲染 `install.sh`。
 
-Release detect 矩阵覆盖以 `release-metadata.json` 为准，当前包括：`bulk_upload` `img_resize` `ui-trim` `textexture` `mj_atlas` `looplog` `group_vibe_workbench` `maquette`。GUI 项目（`maquette` `group_vibe_workbench`）在 macOS 走 codesign + notarize 出 .dmg。
+- 工具事实源是该 Jenkinsfile 的 `toolMap`：新增/改工具时同步登记；不可构建的显式 `buildable: false` 并写明 `note`。
+- GUI/桌面工具（`deskpet` `maquette` `group_vibe_workbench`）在 `toolMap` 内声明 Linux 构建所需系统依赖 `system_deps`；
+  bevy/GPUI 经 MinGW 交叉编译不可靠，故这些工具 `support_windows: false`（仅 Linux/macOS）。
+- 安装：`curl -fsSL https://r2.gamesci-lite.com/r_lit/<tool>/install.sh | bash`（模板 `scripts/install.sh.template`，
+  Jenkins 用的是 ci-all-in-one 内同步副本；二者须保持一致）。
+- `scripts/hfrog_publisher.py` 是 publisher 事实源，Jenkins 通过 `sync-publisher.sh` 同步使用——勿当作废弃脚本删除。
+
+> 注：`release-metadata.json` 原为 GitHub Actions 矩阵源，现已无构建消费方，仅作历史元信息参考；
+> 工具构建事实源以 Jenkins `toolMap` 为准。
 
 ## Just Commands
 
