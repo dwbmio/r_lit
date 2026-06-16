@@ -24,6 +24,7 @@
 //! click matters.
 
 mod error;
+mod notify;
 
 use std::time::Duration;
 
@@ -44,6 +45,8 @@ use bevy_tray_icon::{
     MouseButton as TrayMouseButton, MouseButtonState as TrayMouseButtonState, TrayIconEvent,
 };
 use rand::Rng;
+
+use notify::{Incoming, NotifyInbox, NotifyState};
 
 // ============================================================================
 //  SIZE / LAYOUT KNOBS — tune these to taste while debugging the pet.
@@ -118,7 +121,20 @@ fn pet_center() -> Vec2 {
     Vec2::new(PET_W * 0.5, WIN_H * 0.5)
 }
 
+/// Reminder bubble: a top-anchored speech bubble drawn over the upper part of
+/// the window when a reminder is active. Its zone is added to the interactive
+/// hit-test so a click anywhere on it dismisses the reminder.
+const BUBBLE_H: f32 = WIN_H * 0.5;
+
 fn main() {
+    // `deskpet send ...`: act as a tiny CLI client that pushes a reminder to a
+    // running instance over the loopback protocol, then exits. Everything else
+    // launches the mascot app.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.first().map(String::as_str), Some("send")) {
+        std::process::exit(notify::send_cli(&args[1..]));
+    }
+
     App::new()
         // Fully transparent background — only the mascot is painted.
         .insert_resource(ClearColor(Color::NONE))
@@ -136,6 +152,9 @@ fn main() {
         .init_resource::<Hover>()
         .init_resource::<Settings>()
         .init_resource::<Mascot>()
+        .init_resource::<NotifyState>()
+        // Start the loopback reminder listener and hand its inbox to the world.
+        .insert_resource(notify::spawn_listener())
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -185,6 +204,8 @@ fn main() {
             Update,
             (
                 init_screen,
+                drain_inbox,    // pull remote reminders into the world
+                advance_notify, // promote queued reminders, expire the current
                 drive_input,    // global cursor: hit_test + drag + click + quit
                 focus_on_hover, // activate window when hovered so egui gets events
                 consume_hop,    // HUD "Hop" button -> jump
@@ -197,8 +218,9 @@ fn main() {
         )
         // Start the GLB's looping idle animation once its AnimationPlayer loads.
         .add_systems(Update, setup_mascot_animation)
-        // egui HUD is drawn in its own pass on the primary window's context.
-        .add_systems(EguiPrimaryContextPass, hud_system)
+        // egui HUD + reminder bubble are drawn in the egui pass on the primary
+        // window's context.
+        .add_systems(EguiPrimaryContextPass, (notify_bubble, hud_system).chain())
         .run();
 }
 
@@ -615,6 +637,7 @@ fn drive_input(
     mut petwin: ResMut<PetWin>,
     mut drag: ResMut<Drag>,
     mut hover: ResMut<Hover>,
+    mut notify_state: ResMut<NotifyState>,
     mut q: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
     mut pets: Query<&mut Pet>,
     mut exit: MessageWriter<AppExit>,
@@ -654,10 +677,16 @@ fn drive_input(
         // Collapsed: just the gear button at the window's top-right corner.
         local.x >= WIN_W - GEAR_W && local.x <= WIN_W && local.y >= 0.0 && local.y <= GEAR_H
     };
-    let inside = on_body || in_hud;
+    // Active reminder bubble: a top strip that captures clicks (to dismiss).
+    let in_bubble = notify_state.showing()
+        && local.x >= 0.0
+        && local.x <= WIN_W
+        && local.y >= 0.0
+        && local.y <= BUBBLE_H;
+    let inside = on_body || in_hud || in_bubble;
     hover.on_body = on_body;
     hover.inside = inside;
-    hover.near = dist <= NEAR_R || in_hud;
+    hover.near = dist <= NEAR_R || in_hud || in_bubble;
 
     // Intercept the mouse over the body or the HUD (or mid-drag); everywhere
     // else the click falls through to whatever is behind the window.
@@ -666,9 +695,13 @@ fn drive_input(
         cursor.hit_test = want_hit;
     }
 
-    // Left press on the *body* (not the HUD) starts a window drag + hop.
-    // HUD clicks are left for egui.
-    if mouse.just_pressed(MouseButton::Left) && on_body {
+    // A left click on the reminder bubble dismisses it (takes priority over the
+    // body drag, since the bubble overlaps the mascot's upper area).
+    if in_bubble && mouse.just_pressed(MouseButton::Left) {
+        notify_state.dismiss();
+    } else if mouse.just_pressed(MouseButton::Left) && on_body {
+        // Left press on the *body* (not the HUD) starts a window drag + hop.
+        // HUD clicks are left for egui.
         if let Some(g) = global {
             drag.active = true;
             drag.offset = g - petwin.pos;
@@ -726,6 +759,60 @@ fn global_cursor_physical(_scale: f32) -> Option<Vec2> {
     None
 }
 
+/// GitHub fallback for the protocol docs when no local copy is found (e.g. a
+/// bundled `.app` without the markdown shipped alongside).
+const DOCS_URL_BASE: &str = "https://github.com/nicholasgasior/r_lit/blob/main/deskpet";
+
+/// Open the reminder protocol reference for the user. Picks the Chinese doc
+/// when the locale looks `zh-*`, else English; prefers a local copy (works from
+/// the crate dir or next to the binary) and falls back to the GitHub URL. No
+/// extra deps — shells out to the platform opener.
+fn open_protocol_docs() {
+    let zh = std::env::var("LANG")
+        .or_else(|_| std::env::var("LC_ALL"))
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .map(|l| l.to_lowercase().contains("zh"))
+        .unwrap_or(false);
+    let file = if zh { "PROTOCOL_CN.md" } else { "PROTOCOL.md" };
+
+    // Local candidates first: CWD (dev run / direct run from crate dir), then
+    // the exe dir and a macOS-bundle Resources sibling.
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(file));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(file));
+            candidates.push(dir.join("../Resources").join(file));
+        }
+    }
+    let target = candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{DOCS_URL_BASE}/{file}"));
+
+    open_path_or_url(&target);
+}
+
+/// Hand a file path or URL to the OS's default handler (no extra deps).
+fn open_path_or_url(target: &str) {
+    #[cfg(target_os = "macos")]
+    let res = std::process::Command::new("open").arg(target).spawn();
+    #[cfg(target_os = "windows")]
+    let res = std::process::Command::new("cmd")
+        .args(["/C", "start", "", target])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let res = std::process::Command::new("xdg-open").arg(target).spawn();
+
+    match res {
+        Ok(_) => info!("deskpet: opened protocol docs ({target})"),
+        Err(e) => warn!("deskpet: could not open protocol docs ({target}): {e}"),
+    }
+}
+
 /// Create the system-tray / macOS menu-bar icon. Left-click toggles the
 /// mascot; right-click opens a Show / Hide / Quit menu.
 fn create_tray(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -735,6 +822,9 @@ fn create_tray(mut commands: Commands, asset_server: Res<AssetServer>) {
         menu: Menu::new(vec![
             MenuItem::common("show", "Show", true, None),
             MenuItem::common("hide", "Hide", true, None),
+            MenuItem::separator(),
+            // Entry point to the reminder protocol reference (PROTOCOL.md).
+            MenuItem::common("docs", "Reminder Protocol Docs", true, None),
             MenuItem::separator(),
             MenuItem::common("quit", "Quit", true, None),
         ]),
@@ -757,6 +847,7 @@ fn tray_menu(
         match e.id.0.as_str() {
             "show" => window.visible = true,
             "hide" => window.visible = false,
+            "docs" => open_protocol_docs(),
             "quit" => {
                 exit.write(AppExit::Success);
             }
@@ -833,13 +924,14 @@ fn walk(
     drag: Res<Drag>,
     hover: Res<Hover>,
     settings: Res<Settings>,
+    notify_state: Res<NotifyState>,
     mut petwin: ResMut<PetWin>,
     mut walk: ResMut<Walk>,
     mut pets: Query<&mut Pet>,
 ) {
-    // Hold still while dragging, or when the pointer is near — so you can
-    // actually click the (otherwise moving) mascot and its HUD gear.
-    if !screen.ready || drag.active || hover.near || !settings.wander {
+    // Hold still while dragging, when the pointer is near, or while a reminder
+    // is showing — so you can read it and click the (otherwise moving) mascot.
+    if !screen.ready || drag.active || hover.near || !settings.wander || notify_state.showing() {
         // Cancel any in-progress move so it doesn't lurch when interaction ends.
         walk.moving = false;
         return;
@@ -948,13 +1040,14 @@ fn adaptive_frame_rate(
     walk: Res<Walk>,
     drag: Res<Drag>,
     hover: Res<Hover>,
+    notify_state: Res<NotifyState>,
     pets: Query<(&Pet, &Transform)>,
     mut winit: ResMut<WinitSettings>,
 ) {
     let busy = pets.iter().any(|(p, tf)| {
         tf.translation.y > 0.001 || p.vy.abs() > 0.001 || p.blink_amount < 0.999
     });
-    let active = drag.active || hover.inside || walk.moving || busy;
+    let active = drag.active || hover.inside || walk.moving || busy || notify_state.showing();
 
     let wait = if active {
         ACTIVE_WAIT
@@ -982,6 +1075,107 @@ fn consume_hop(mut settings: ResMut<Settings>, mut pets: Query<&mut Pet>) {
     if let Ok(mut pet) = pets.single_mut() {
         pet.vy = JUMP_V;
     }
+}
+
+/// Pull reminders that arrived over the loopback socket into the world. A new
+/// reminder auto-reveals the (possibly tray-hidden) mascot and triggers an
+/// attention hop; `clear` flushes everything pending.
+fn drain_inbox(
+    inbox: Res<NotifyInbox>,
+    mut state: ResMut<NotifyState>,
+    mut pets: Query<&mut Pet>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    let msgs = inbox.drain();
+    if msgs.is_empty() {
+        return;
+    }
+    let mut got_notify = false;
+    for msg in msgs {
+        match msg {
+            Incoming::Notify {
+                title,
+                body,
+                level,
+                duration_ms,
+            } => {
+                state
+                    .queue
+                    .push_back(notify::make_notice(title, body, level, duration_ms));
+                got_notify = true;
+            }
+            Incoming::Clear => {
+                state.dismiss();
+                state.queue.clear();
+            }
+        }
+    }
+    if got_notify {
+        if let Ok(mut window) = window.single_mut() {
+            window.visible = true;
+        }
+        if let Ok(mut pet) = pets.single_mut() {
+            pet.vy = JUMP_V;
+        }
+    }
+}
+
+/// Expire the on-screen reminder when its timer runs out, then promote the next
+/// queued one. Keeps a single reminder visible at a time, in arrival order.
+fn advance_notify(time: Res<Time>, mut state: ResMut<NotifyState>) {
+    let expired = match state.timer.as_mut() {
+        Some(timer) => {
+            timer.tick(time.delta());
+            timer.is_finished()
+        }
+        None => false,
+    };
+    if expired {
+        state.dismiss();
+    }
+    if state.current.is_none() {
+        if let Some(next) = state.queue.pop_front() {
+            state.timer = Some(Timer::new(next.ttl, TimerMode::Once));
+            state.current = Some(next);
+        }
+    }
+}
+
+/// Draw the active reminder as a top-anchored speech bubble over the mascot,
+/// accent-colored by severity. Text wraps within the window width; a click
+/// anywhere on it dismisses (handled in `drive_input` via the bubble hit zone).
+fn notify_bubble(mut contexts: EguiContexts, state: Res<NotifyState>) {
+    let Some(notice) = state.current.as_ref() else {
+        return;
+    };
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+
+    let [r, g, b] = notice.level.accent();
+    let accent = egui::Color32::from_rgb(r, g, b);
+    let glass = egui::Color32::from_rgba_unmultiplied(18, 20, 28, 230);
+    let body_col = egui::Color32::from_rgb(228, 231, 238);
+
+    egui::Area::new(egui::Id::new("notify_bubble"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(6.0, 6.0))
+        .show(ctx, |ui| {
+            ui.set_max_width(WIN_W - 12.0);
+            egui::Frame::new()
+                .fill(glass)
+                .stroke(egui::Stroke::new(1.5, accent))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(8)
+                .show(ui, |ui| {
+                    // Wrap text to the bubble's inner width.
+                    ui.set_max_width(WIN_W - 28.0);
+                    if let Some(title) = &notice.title {
+                        ui.label(egui::RichText::new(title).strong().color(accent));
+                    }
+                    ui.label(egui::RichText::new(&notice.body).color(body_col));
+                });
+        });
 }
 
 /// The egui HUD, drawn over the same (transparent) window as the mascot, in
@@ -1059,6 +1253,13 @@ fn hud_system(
                     settings.switch_request = true;
                 }
             });
+            if ui
+                .button("Protocol Docs")
+                .on_hover_text("Open the reminder protocol reference")
+                .clicked()
+            {
+                open_protocol_docs();
+            }
             if ui
                 .add(egui::Button::new("Quit").fill(egui::Color32::from_rgb(120, 40, 40)))
                 .clicked()

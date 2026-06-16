@@ -34,14 +34,34 @@ passthrough:
 - focus_on_hover: focus window on hover.near rising edge + at startup so macOS delivers events
 
 behavior:
-- random horizontal wander (paused when hover.near or dragging), click hop, yaw facing
-- adaptive_frame_rate: active->ACTIVE_WAIT(60fps), near->NEAR_WAIT(30fps), idle->IDLE_WAIT(8fps)
+- random horizontal wander (paused when hover.near, dragging, or a reminder is showing), click hop, yaw facing
+- adaptive_frame_rate: active->ACTIVE_WAIT(60fps), near->NEAR_WAIT(30fps), idle->IDLE_WAIT(8fps); a showing reminder counts as active
+
+reminders (notify protocol, src/notify.rs):
+- purpose: protocol-driven system-info / custom reminder surface, LSP-style "send a message, it shows up"
+- transport: background thread owns TcpListener on 127.0.0.1:<port> (loopback only); reads NDJSON (one JSON object per line); many senders / many lines per connection
+- port: DEFAULT_PORT=47800, override via env DESKPET_PORT (shared by app + CLI)
+- wire format (every field but body optional, unknown fields ignored):
+  - {"type":"notify","title":?,"body":"...","level":"info|success|warn|error","duration_ms":?}
+  - {"type":"clear"}
+- level: serde de_level tolerant (warn/warning, error/err synonyms; unknown -> info)
+- Level::accent() -> bubble border/title color per severity
+- Notice::from_parts: explicit duration_ms clamped 800..120000; else derived base(info/success 4500, warn 6500, error 9000)+28ms/char, capped 20000
+- NotifyInbox(Arc<Mutex<VecDeque<Incoming>>>): listener pushes (CAP 256, drops oldest), drain_inbox pops each frame
+- NotifyState { current: Option<Notice>, timer, queue }: showing(), dismiss(); one reminder at a time, arrival order
+- drain_inbox: Notify -> queue.push + window.visible=true + attention hop (pet.vy=JUMP_V); Clear -> dismiss + queue.clear
+- advance_notify: tick timer, expire current, promote next from queue
+- notify_bubble (EguiPrimaryContextPass, before hud): top-anchored egui::Area, accent stroke, wrapped body, drawn even in passthrough
+- drive_input: BUBBLE_H=WIN_H*0.5 top strip added to hit_test+near while showing; left click on bubble -> NotifyState.dismiss() (priority over body drag)
+- CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> connect 127.0.0.1:<port>, write one NDJSON line; flags -t/--title -m/--body -l/--level -d/--duration --clear -h; body precedence: -m > positional > stdin (non-tty); connection-refused -> friendly hint exit 1
+- tests: src/notify.rs #[cfg(test)] cover parse (full/minimal/unknown-level/unknown-fields/clear) + TTL clamp/derive
 
 dependencies:
 - bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
 - bevy_egui = { default-features=false, features=[render, default_fonts] }
 - bevy_tray_icon = "0.3"
 - rand 0.8, thiserror 2, log 0.4
+- serde 1 (derive) + serde_json 1 (reminder protocol)
 - macOS: core-graphics 0.24, objc2-foundation 0.2, objc2-app-kit 0.2 (NSApplication/NSResponder/NSRunningApplication)
 - windows: windows-sys 0.59 (GetCursorPos)
 
@@ -63,7 +83,9 @@ tunables_top_of_main:
 - WALK_SPEED=90, JUMP_V=3.2, GRAVITY=14.0, FACE_YAW=0.45, BODY_W=1.0
 - ACTIVE_WAIT~16.7ms, NEAR_WAIT=33ms, IDLE_WAIT=120ms
 - MASCOT_GLB="block.glb"
+- BUBBLE_H=WIN_H*0.5, notify::DEFAULT_PORT=47800
 
 build:
-- cd deskpet && cargo run [--release]
+- cd deskpet && cargo run [--release]   # launches the mascot + reminder listener
+- deskpet send -t Build -l error "3 errors"   # push a reminder to a running instance
 - close: tray Quit / right-click mascot / Esc / pkill -x deskpet

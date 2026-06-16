@@ -42,6 +42,11 @@ bevy_tray_icon = "0.3"
 # Random walk targets / blink jitter.
 rand = "0.8"
 
+# Reminder protocol: external processes send NDJSON messages over a loopback
+# TCP socket (LSP-style "send a message, it shows up"), parsed with serde.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 # Repo conventions: thiserror error enum + log facade.
 thiserror = "2"
 log = "0.4"

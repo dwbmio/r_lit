@@ -34,14 +34,34 @@ passthrough 穿透:
 - focus_on_hover: hover.near 上升沿 + 启动时聚焦窗口，否则 macOS 不给无边框 overlay 发事件
 
 behavior 行为:
-- 随机水平漫步（hover.near 或拖拽时暂停）、点击蹦跳、转身朝向
-- adaptive_frame_rate: 活跃->ACTIVE_WAIT(60fps), 靠近->NEAR_WAIT(30fps), 静止->IDLE_WAIT(8fps)
+- 随机水平漫步（hover.near、拖拽中或有提醒展示时暂停）、点击蹦跳、转身朝向
+- adaptive_frame_rate: 活跃->ACTIVE_WAIT(60fps), 靠近->NEAR_WAIT(30fps), 静止->IDLE_WAIT(8fps)；有提醒展示算活跃
+
+reminders 提醒协议 (src/notify.rs):
+- 用途: 协议驱动的系统信息 / 自定义提醒入口，类 LSP「按协议发条消息就弹出来」
+- 传输: 后台线程持有 TcpListener 监听 127.0.0.1:<port>（仅 loopback，不可被外部访问）；读 NDJSON（每行一个 JSON）；支持多发送方 / 单连接多条
+- 端口: DEFAULT_PORT=47800，可用环境变量 DESKPET_PORT 覆盖（app 与 CLI 共用）
+- 协议格式（除 body 外全部可选，未知字段忽略）:
+  - {"type":"notify","title":?,"body":"...","level":"info|success|warn|error","duration_ms":?}
+  - {"type":"clear"}
+- level: serde de_level 容错（warn/warning、error/err 同义；未知 -> info）
+- Level::accent() -> 按级别返回气泡描边/标题色
+- Notice::from_parts: 显式 duration_ms 钳制 800..120000；否则按级别派生 base(info/success 4500, warn 6500, error 9000)+28ms/字，上限 20000
+- NotifyInbox(Arc<Mutex<VecDeque<Incoming>>>): 监听线程 push（上限 CAP 256，超出丢最旧），drain_inbox 每帧取
+- NotifyState { current, timer, queue }: showing()、dismiss()；同一时刻只显示一条，按到达顺序
+- drain_inbox: Notify -> 入队 + window.visible=true + 蹦跳吸引注意(pet.vy=JUMP_V)；Clear -> dismiss + 清队列
+- advance_notify: tick 计时器、当前到期清除、从队列提升下一条
+- notify_bubble (EguiPrimaryContextPass, 在 hud 之前): 顶部 egui::Area 气泡，按级别描边，body 自动换行，穿透状态下也照常绘制
+- drive_input: 展示时把 BUBBLE_H=WIN_H*0.5 顶部条带并入 hit_test+near；左键点气泡 -> NotifyState.dismiss()（优先于身体拖拽）
+- CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> 连 127.0.0.1:<port> 写一行 NDJSON；参数 -t/--title -m/--body -l/--level -d/--duration --clear -h；body 优先级: -m > 位置参数 > stdin(非 tty)；连接被拒 -> 友好提示并 exit 1
+- 测试: src/notify.rs #[cfg(test)] 覆盖解析(完整/最小/未知level/未知字段/clear) + TTL 钳制/派生
 
 dependencies 依赖:
 - bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
 - bevy_egui = { default-features=false, features=[render, default_fonts] }
 - bevy_tray_icon = "0.3"
 - rand 0.8, thiserror 2, log 0.4
+- serde 1 (derive) + serde_json 1（提醒协议）
 - macOS: core-graphics 0.24, objc2-foundation 0.2, objc2-app-kit 0.2
 - windows: windows-sys 0.59 (GetCursorPos)
 
@@ -63,7 +83,9 @@ tunables 顶部常量:
 - WALK_SPEED=90, JUMP_V=3.2, GRAVITY=14.0, FACE_YAW=0.45, BODY_W=1.0
 - ACTIVE_WAIT~16.7ms, NEAR_WAIT=33ms, IDLE_WAIT=120ms
 - MASCOT_GLB="block.glb"
+- BUBBLE_H=WIN_H*0.5, notify::DEFAULT_PORT=47800
 
 build 构建:
-- cd deskpet && cargo run [--release]
+- cd deskpet && cargo run [--release]   # 启动萌宠 + 提醒监听
+- deskpet send -t Build -l error "3 errors"   # 向运行中的实例推送一条提醒
 - 关闭: 托盘 Quit / 右键萌宠 / Esc / pkill -x deskpet

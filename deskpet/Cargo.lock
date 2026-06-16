@@ -1996,6 +1996,8 @@ dependencies = [
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "rand 0.8.6",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "windows-sys 0.59.0",
 ]

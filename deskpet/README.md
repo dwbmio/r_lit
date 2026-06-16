@@ -22,6 +22,9 @@ everywhere it isn't drawn. A small egui HUD provides quick controls.
   whatever is behind; clicks on the mascot body / HUD are captured.
 - **Collapsible egui HUD**: a small gear that expands into a semi-transparent
   panel (walk speed, wander toggle, Hop, Switch, Quit).
+- **Protocol-driven reminders**: a loopback socket turns the mascot into a
+  *custom reminder surface* — any process sends a one-line JSON message and the
+  pet pops up and shows it (see [Reminders](#reminders)).
 - Random idle wandering, click-to-hop, drag-to-move, right-click / Esc to quit.
 - **Lazy rendering**: adaptive frame rate — ~60 fps while interacting, ~8 fps
   idle heartbeat when perched. CPU is ~0% when truly still.
@@ -39,6 +42,7 @@ everywhere it isn't drawn. A small egui HUD provides quick controls.
 | Right click on body / Esc | Quit |
 | Gear (mascot's top-right) | Open the HUD panel |
 | HUD "Switch" | Swap block ↔ blast mascot |
+| Click on a reminder bubble | Dismiss the reminder early |
 | Click on transparent area | Falls through to what's behind |
 
 ## Build & Run
@@ -78,6 +82,56 @@ To use your own model: drop a humanoid rigged `.glb` at `assets/block.glb`
 > *paid* Meshy plan — the free plan returns HTTP 402 on task creation. fal.ai
 > hosts the same Meshy model with pay-per-use billing (~$1.5/model), which is
 > why the pipeline goes through fal.
+
+## Reminders
+
+deskpet doubles as a **protocol-driven reminder surface**: in the same shape as
+an LSP client talking to a server, any process sends it a one-line JSON message
+and the mascot pops up (revealing itself if hidden in the tray), hops for
+attention, and shows the text in a speech bubble that auto-dismisses (click it
+to dismiss early). This makes it a natural target for *system-info / custom
+reminders* — build results, long-job completion, battery/disk warnings, "stand
+up" nudges, anything you can `echo` from a script.
+
+### Quick start
+
+```bash
+cargo run                                  # launch the mascot (also starts the listener)
+
+# from any other shell / script:
+deskpet send "build finished"                       # plain info reminder
+deskpet send -t Build -l error -m "3 errors"        # titled, error-colored
+deskpet send -l warn -d 10000 "battery at 12%"      # warn for 10s
+
+# composes in a pipe (body from stdin):
+df -h / | tail -1 | deskpet send -t Disk -l warn
+
+deskpet send --clear                                # dismiss what's showing
+```
+
+### Protocol
+
+The transport is **NDJSON over a loopback TCP socket** — `deskpet` listens on
+`127.0.0.1:47800` (override with `DESKPET_PORT`), reads one JSON object per
+line, and a single connection may stream many reminders. Send it directly from
+any language; `deskpet send` is just a thin convenience client:
+
+```bash
+printf '%s\n' '{"type":"notify","title":"CI","body":"green","level":"success"}' \
+  | nc 127.0.0.1 47800
+```
+
+| Field | Required | Notes |
+|-------|:--------:|-------|
+| `type` | yes | `"notify"` to show, `"clear"` to dismiss |
+| `body` | yes (notify) | the reminder text (wraps in the bubble) |
+| `title` | no | bold accent-colored title line |
+| `level` | no | `info` (default) / `success` / `warn` / `error` — sets the color |
+| `duration_ms` | no | display time; default derived from level + length |
+
+Unknown fields are ignored and unknown `level` values fall back to `info`, so
+the format is safe to extend. The socket is **loopback-only** (never reachable
+off the host).
 
 ## How passthrough works
 

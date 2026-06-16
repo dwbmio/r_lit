@@ -15,6 +15,8 @@
 - **透明无边框置顶窗口**（`ClearColor(Color::NONE)` + `CompositeAlphaMode::PostMultiplied`）。
 - **按像素感穿透**：透明区点击穿透到后面的程序；身体 / HUD 上的点击被接收。
 - **可折叠 egui HUD**：一个小齿轮，点开是半透明面板（行走速度、漫步开关、Hop、Switch、Quit）。
+- **协议驱动的提醒**：一个 loopback socket 把萌宠变成**自定义提醒入口**——任何进程发一行
+  JSON 消息，萌宠就弹出来并展示（见 [提醒](#提醒)）。
 - 随机漫步、点击蹦跳、拖拽移动、右键 / Esc 退出。
 - **懒渲染**：自适应帧率——交互时约 60fps，静止时约 8fps 心跳，真正不动时 CPU ~0%。
 - **精简内存**：裁掉 Bevy/egui 无用 feature（audio/picking/bevy_ui/手柄/sysinfo），萌宠贴图
@@ -31,6 +33,7 @@
 | 右键点身体 / Esc | 退出 |
 | 齿轮（萌宠右上角） | 打开 HUD 面板 |
 | HUD “Switch” | 切换 block ↔ blast |
+| 点击提醒气泡 | 提前关闭该提醒 |
 | 点透明区域 | 穿透到后面的窗口 |
 
 ## 构建与运行
@@ -66,6 +69,52 @@ python3 tools/glb_shrink_texture.py assets/block.glb --size 128
 > 直连 Meshy（`tools/meshy_image_to_3d.py` / `meshy-animator` skill）需要**付费版** Meshy
 > ——免费版创建任务返回 HTTP 402。fal.ai 托管了同款 Meshy 模型、按量计费（约 $1.5/个），
 > 所以流程走 fal。
+
+## 提醒
+
+deskpet 同时是一个**协议驱动的提醒入口**：和 LSP 客户端给服务端发消息是同一个形状——任何
+进程给它发一行 JSON 消息，萌宠就弹出来（若藏在托盘里会自动显示）、蹦一下吸引注意、并在头顶
+气泡里把文字展示出来，到时自动消失（点气泡可提前关闭）。因此它很适合做**系统信息 / 自定义
+提醒**：构建结果、长任务完成、电量 / 磁盘告警、「起来走两步」提醒，凡是脚本里能 `echo` 出来
+的都行。
+
+### 快速开始
+
+```bash
+cargo run                                  # 启动萌宠（同时启动监听）
+
+# 在任何别的 shell / 脚本里：
+deskpet send "构建完成"                              # 普通 info 提醒
+deskpet send -t 构建 -l error -m "3 个错误"          # 带标题、错误配色
+deskpet send -l warn -d 10000 "电量 12%"             # warn，显示 10 秒
+
+# 可在管道里组合（body 取自 stdin）：
+df -h / | tail -1 | deskpet send -t 磁盘 -l warn
+
+deskpet send --clear                                # 关闭当前提醒
+```
+
+### 协议
+
+传输是 **loopback TCP socket 上的 NDJSON**——`deskpet` 监听 `127.0.0.1:47800`（用
+`DESKPET_PORT` 覆盖），每行读一个 JSON 对象，单个连接可连续发多条。可从任意语言直接发，
+`deskpet send` 只是一个轻量便捷客户端：
+
+```bash
+printf '%s\n' '{"type":"notify","title":"CI","body":"green","level":"success"}' \
+  | nc 127.0.0.1 47800
+```
+
+| 字段 | 必填 | 说明 |
+|------|:----:|------|
+| `type` | 是 | `"notify"` 展示，`"clear"` 关闭 |
+| `body` | notify 必填 | 提醒正文（气泡内自动换行） |
+| `title` | 否 | 加粗、按级别配色的标题行 |
+| `level` | 否 | `info`(默认) / `success` / `warn` / `error`——决定颜色 |
+| `duration_ms` | 否 | 展示时长；缺省按级别 + 长度派生 |
+
+未知字段会被忽略、未知 `level` 回退为 `info`，所以格式可安全扩展。该 socket **仅 loopback**
+（外部主机无法访问）。
 
 ## 穿透原理
 
