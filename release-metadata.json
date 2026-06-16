@@ -54,6 +54,12 @@
       "category": "desktop",
       "gui": true,
       "macos_app_name": "Group Vibe Workbench"
+    },
+    "deskpet": {
+      "description": "无边框透明置顶 3D 桌面宠物 — Bevy + bevy_egui，系统托盘 / macOS 菜单栏常驻，点击托盘显隐；穿透点击、随机游走、点击跳跃。无 .glb 资源时回退内置程序化史莱姆。",
+      "category": "desktop",
+      "gui": true,
+      "macos_app_name": "Deskpet"
     }
   }
 }

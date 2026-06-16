@@ -20,6 +20,7 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 | [looplog](looplog/) | Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; see [WeChat AI debug guide](looplog/WECHAT_AI_DEBUG_CN.md)) |
 | [maquette](maquette/) | Kit-based low-poly modeling + glTF export (GUI + headless CLI) |
 | [group_vibe_workbench](group_vibe_workbench/) | Desktop collaboration workbench (GPUI + P2P) |
+| [deskpet](deskpet/) | Frameless transparent always-on-top 3D desktop mascot (Bevy + tray / menu-bar resident) |
 | [video-generator](video-generator/) | Video generation tools |
 | [crates/murmur](crates/murmur/) | P2P collaboration library (iroh-net + Automerge CRDT) |
 
@@ -45,8 +46,8 @@ curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 curl -fsSL https://r2.gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
 ```
 
-GUI apps (`maquette`, `group_vibe_workbench`) ship as a notarized `.dmg`
-on macOS; download from the GitHub Release page.
+GUI / desktop apps (`maquette`, `group_vibe_workbench`, `deskpet`) ship as a
+notarized `.dmg` on macOS; download from the GitHub Release page.
 
 ## Build
 

@@ -20,6 +20,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 | [looplog](looplog/) | 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；见 [微信 AI 调试指南](looplog/WECHAT_AI_DEBUG_CN.md)） |
 | [maquette](maquette/) | Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI） |
 | [group_vibe_workbench](group_vibe_workbench/) | 桌面协作工作台 (GPUI + P2P) |
+| [deskpet](deskpet/) | 无边框透明置顶 3D 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻） |
 | [video-generator](video-generator/) | 视频工具集 |
 | [crates/murmur](crates/murmur/) | P2P 协作库 (iroh-net + Automerge CRDT) |
 
@@ -45,7 +46,7 @@ curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 curl -fsSL https://r2.gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
 ```
 
-GUI 应用（`maquette`、`group_vibe_workbench`）在 macOS 以
+GUI / 桌面应用（`maquette`、`group_vibe_workbench`、`deskpet`）在 macOS 以
 notarized `.dmg` 形式发布，请到 GitHub Release 页面下载。
 
 ## 构建
