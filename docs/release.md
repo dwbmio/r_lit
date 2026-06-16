@@ -11,10 +11,10 @@ Jenkins r_lit-binary-build  (参数: TOOL_NAME / GIT_BRANCH / BUILD_LINUX|MACOS|
        │  toolMap 是工具事实源 (dir/binary/buildable/description/category/
        │  r2_prefix/cargo_features/system_deps/support_windows)
        ▼
-┌──────────────┐  并行构建 (各平台原生 / Windows 经 MinGW 交叉编译)
+┌──────────────┐  并行构建 (Linux/macOS 原生 / Windows 经 cargo-xwin 交叉编译)
 │  build       │  Linux  → x86_64-unknown-linux-gnu   (native)
 │              │  macOS  → aarch64-apple-darwin        (native)
-│              │  Windows→ x86_64-pc-windows-gnu       (MinGW cross; GUI 工具默认跳过)
+│              │  Windows→ x86_64-pc-windows-msvc      (cargo-xwin cross; GUI 工具默认跳过)
 └──────┬───────┘  产物: <tool>-<target>.tar.gz  (Windows: <tool>-<target>.zip)
        ▼
 ┌──────────────┐  hfrog_publisher.py (经 ci-all-in-one jenkins-publish.sh 同步调用)
@@ -44,7 +44,7 @@ R2 / HFrog 凭证以 Jenkins credentials 形式注入（见 Jenkinsfile `withCre
 1. 创建 crate（`<tool>/Cargo.toml`），补齐 README/README_CN/llms/llms_cn。
 2. 在 `Jenkinsfile.binary-build` 的 `toolMap` 登记：`dir` / `binary` / `buildable` /
    `description` / `category` / `source_type` / `r2_prefix`；GUI 工具补 `cargo_features`
-   （如 `gui`）、`system_deps`（Linux 系统库）、`support_windows: false`（bevy/GPUI MinGW 不可靠）。
+   （如 `gui`）、`system_deps`（Linux 系统库）、`support_windows: false`（bevy/GPUI GUI 交叉编 Windows 不可靠）。
    不可构建的工具显式 `buildable: false` 并写明 `note`。
 3. 触发 Jenkins job，选 `TOOL_NAME` + 平台。首次发布会建好 HFrog `software` 行与
    R2 上的 `r_lit/<tool>/install.sh`。

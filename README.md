@@ -63,7 +63,7 @@ GitHub Actions release path. Trigger the job manually, pick `TOOL_NAME` and
 platforms, and it will:
 
 1. Build per platform (Linux x86_64 native / macOS aarch64 native / Windows
-   x86_64 via the MinGW `x86_64-pc-windows-gnu` cross toolchain).
+   x86_64 via cargo-xwin to `x86_64-pc-windows-msvc`).
 2. Package each as `<tool>-<target>.tar.gz` (Windows: `.zip`).
 3. Upload to R2 (`s3://prod-hfrog/r_lit/<tool>/v<ver>/`) and refresh
    `r_lit/<tool>/install.sh`.

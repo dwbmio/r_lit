@@ -61,8 +61,8 @@ cd <tool_dir> && cargo build --release
 （`ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build`），已无 GitHub Actions 发布路径。
 手动触发该任务、选 `TOOL_NAME` 与平台后，它会：
 
-1. 按平台构建（Linux x86_64 原生 / macOS aarch64 原生 / Windows x86_64 经 MinGW
-   `x86_64-pc-windows-gnu` 交叉编译）。
+1. 按平台构建（Linux x86_64 原生 / macOS aarch64 原生 / Windows x86_64 经 cargo-xwin
+   交叉编译到 `x86_64-pc-windows-msvc`）。
 2. 打包成 `<tool>-<target>.tar.gz`（Windows 为 `.zip`）。
 3. 上传 R2（`s3://prod-hfrog/r_lit/<tool>/v<ver>/`）并刷新 `r_lit/<tool>/install.sh`。
 4. 把 `software / version / release / platform` 全套记录写入 HFrog，
