@@ -36,7 +36,9 @@
     "mj_atlas": {
       "description": "MJAtlas — 游戏 sprite 图集打包工具，UV-stable 增量构建、多边形 mesh、manifest 一等公民（inspect/diff/verify/tag）、可选 hfrog mirror、Godot native 输出。带 GUI 浏览器 + CLI 子命令双模。",
       "category": "cli",
-      "cargo_features": ["gui"]
+      "cargo_features": [
+        "gui"
+      ]
     },
     "looplog": {
       "description": "本地日志摄入 / 查询工具 — SQLite 落盘、24 小时短周期保留、loopback HTTP 协议、CLI JSON 查询，并提供微信小程序 AI 自主循环调试指南。",
@@ -47,7 +49,9 @@
       "category": "desktop",
       "gui": true,
       "macos_app_name": "Maquette",
-      "cargo_features": ["gui"]
+      "cargo_features": [
+        "gui"
+      ]
     },
     "group_vibe_workbench": {
       "description": "桌面协作工作台 — GPUI + Murmur P2P，多人远程协同。",
@@ -59,7 +63,10 @@
       "description": "无边框透明置顶 3D 桌面宠物 — Bevy + bevy_egui，系统托盘 / macOS 菜单栏常驻，点击托盘显隐；穿透点击、随机游走、点击跳跃。无 .glb 资源时回退内置程序化史莱姆。",
       "category": "desktop",
       "gui": true,
-      "macos_app_name": "Deskpet"
+      "macos_app_name": "Deskpet",
+      "cargo_features": [
+        "os-notify"
+      ]
     }
   }
 }

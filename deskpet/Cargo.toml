@@ -1,6 +1,6 @@
 [package]
 name = "deskpet"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Efficient frameless transparent desktop mascot (slime) built with Bevy"
 license = "MIT"
@@ -51,6 +51,20 @@ serde_json = "1"
 thiserror = "2"
 log = "0.4"
 
+# RPC server: small synchronous HTTP server on 127.0.0.1 for the Swagger UI
+# surface and a `POST /m/<method>` endpoint that wraps the same dispatch as
+# the NDJSON server. tiny_http is sync — perfect fit for "one thread per
+# listener" pattern we already use for the TCP socket.
+tiny_http = "0.12"
+
+# OpenAPI 3.0 schema generation. Each RPC method declares a typed
+# `#[derive(Deserialize)]` params struct + `#[utoipa::path]` annotation;
+# `ApiDoc` aggregates them into a single OpenAPI doc served at
+# `/openapi.json`. Doesn't require axum — we just call `.to_json()` and
+# write the string to the HTTP response. `derive` is built-in (no feature
+# flag needed); `debug` adds a few extra traces that help when authoring.
+utoipa = { version = "5", features = ["debug"] }
+
 # Permission-free global cursor *position* read. Needed because once
 # `hit_test` is false the window stops receiving Bevy cursor events, so we
 # poll the OS to know when the pointer returns onto the mascot. We only need
@@ -69,12 +83,28 @@ objc2-app-kit = { version = "0.2", default-features = false, features = [
     "NSResponder",
     "NSRunningApplication",
 ] }
+# Native Notification Center integration via NSUserNotification. Versions
+# match objc2 0.5 to keep one objc2 in the tree (Cargo would otherwise pull
+# two via notify-rust's transitive `mac-usernotifications` which uses 0.3).
+mac-notification-sys = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# Native Action Center toast. The crates.io name is `tauri-winrt-notification`
+# but it imports as `winrt_notification` — confusing, just how the maintainer
+# published it.
+tauri-winrt-notification = "0.7"
+
+[features]
+# Default empty: OS notifications are compiled in by default on macOS and
+# Windows hosts via the `[target.cfg(...)]` deps above. The Cargo `os-notify`
+# feature is a build-time *override*: turning it off forces the noop backend
+# even on supported targets (useful for CI smoke tests or debugging the
+# in-app bubble alone).
+os-notify-off = []
 
 [profile.dev]
 opt-level = 1

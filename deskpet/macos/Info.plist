@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <!-- macos-bundle.sh sed-substitutes the marketing version into these. -->
+    <key>CFBundleDisplayName</key>
+    <string>Deskpet</string>
+
+    <key>CFBundleName</key>
+    <string>Deskpet</string>
+
+    <key>CFBundleExecutable</key>
+    <string>deskpet</string>
+
+    <!-- Must match an app the signing identity is allowed to sign for.
+         If you re-sign under a different Apple Developer team, change this. -->
+    <key>CFBundleIdentifier</key>
+    <string>com.gamesci-lite.deskpet</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>__MARKETING_VERSION__</string>
+
+    <key>CFBundleVersion</key>
+    <string>__MARKETING_VERSION__</string>
+
+    <key>CFBundleSignature</key>
+    <string>????</string>
+
+    <!-- Bevy 0.18 + wgpu 27 minimum: macOS 11 (Big Sur).
+         Lowering this requires testing every Bevy/wgpu release on older OS. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <!-- Mascot / toy category. Pick something representative — Apple
+         reviews against this when notarizing. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.entertainment</string>
+
+    <!-- Standard Cocoa hints -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 GameSci. MIT License.</string>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- We render an always-on-top transparent window and post OS
+         notifications. These two Info.plist keys keep macOS from treating
+         the app as background-only. -->
+    <key>LSUIElement</key>
+    <false/>
+
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
+</dict>
+</plist>

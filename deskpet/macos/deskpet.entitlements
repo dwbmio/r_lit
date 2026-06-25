@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- wgpu (Metal backend on macOS) uses JIT-compiled shaders; the
+         hardened runtime needs this exception or shader compilation
+         aborts at runtime. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Bevy allocates executable memory for fast paths (e.g. polling
+         paths, future ECS hot loops). Required when hardened runtime is on. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- wgpu loads libvk_swiftshader / MoltenVK if Vulkan is requested
+         instead of Metal. We use Metal by default but disable-library-validation
+         keeps it harmless if user forces Vulkan. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Deskpet doesn't need dyld env vars (no plugin loading). Setting
+         this false explicitly avoids spurious hardened-runtime violations. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <false/>
+
+    <!-- deskpet reads global cursor position via CGEvent (already covered
+         by App Sandbox being OFF, but explicit false makes the no-microphone
+         / no-camera intent auditable). -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+
+    <key>com.apple.security.device.camera</key>
+    <false/>
+
+    <!-- deskpet does NOT enable App Sandbox: it lives in the user's menu bar,
+         reads the global cursor, and binds loopback RPC ports. All of these
+         break under sandbox without significant refactoring. If/when sandbox
+         is desired later, the following entitlements will be needed in
+         addition to com.apple.security.app-sandbox = true:
+           - com.apple.security.network.server    (HTTP RPC on 127.0.0.1)
+           - com.apple.security.network.client    (outbound webhook relays)
+           - com.apple.security.device.cgEvent    (or rework input pipeline) -->
+</dict>
+</plist>

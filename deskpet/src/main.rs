@@ -25,6 +25,9 @@
 
 mod error;
 mod notify;
+mod os_notify;
+mod rpc;
+mod rpc_methods;
 
 use std::time::Duration;
 
@@ -46,7 +49,8 @@ use bevy_tray_icon::{
 };
 use rand::Rng;
 
-use notify::{Incoming, NotifyInbox, NotifyState};
+use notify::NotifyState;
+use os_notify::{OsNotifyPlugin, make_notifier};
 
 // ============================================================================
 //  SIZE / LAYOUT KNOBS — tune these to taste while debugging the pet.
@@ -126,13 +130,58 @@ fn pet_center() -> Vec2 {
 /// hit-test so a click anywhere on it dismisses the reminder.
 const BUBBLE_H: f32 = WIN_H * 0.5;
 
+const HELP: &str = "\
+deskpet — frameless transparent always-on-top 3D mascot (Bevy)
+
+USAGE:
+    deskpet                       Launch the mascot (default).
+    deskpet help                  Print this help.
+    deskpet send [OPTIONS] [BODY] Push a reminder. Alias for `call notification/show`.
+    deskpet call <METHOD> [-p JSON] [-q] [--json]
+                                  Invoke any RPC method (NDJSON).
+
+NETWORK:
+    NDJSON RPC + Swagger UI       See log on startup for ports.
+                                  NDJSON: 127.0.0.1:${DESKPET_RPC_PORT:-47800}
+                                  HTTP:   http://127.0.0.1:${DESKPET_HTTP_PORT:-47801}/
+
+ENV:
+    DESKPET_RPC_PORT              Override NDJSON RPC port.
+    DESKPET_HTTP_PORT             Override HTTP RPC port.
+    DESKPET_PORT                  Legacy alias for DESKPET_RPC_PORT (send CLI).
+
+See docs/rpc.md for the full RPC method catalog.
+";
+
+fn print_help() {
+    println!("{HELP}");
+}
+
 fn main() {
-    // `deskpet send ...`: act as a tiny CLI client that pushes a reminder to a
-    // running instance over the loopback protocol, then exits. Everything else
-    // launches the mascot app.
+    // CLI subcommand dispatch. `deskpet send ...` is the legacy reminder CLI
+    // (now an alias for `deskpet call notification/show`). `deskpet call
+    // <method> -p '<json>'` is the new general entry. Anything else launches
+    // the mascot app.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if matches!(args.first().map(String::as_str), Some("send")) {
-        std::process::exit(notify::send_cli(&args[1..]));
+    match args.first().map(String::as_str) {
+        Some("send") => std::process::exit(rpc::cli::send_cli(&args[1..])),
+        Some("call") => std::process::exit(rpc::cli::call_cli(&args[1..])),
+        Some("help") | Some("--help") | Some("-h") => {
+            print_help();
+            std::process::exit(0);
+        }
+        _ => {}
+    }
+
+    // RPC listeners run on their own threads outside Bevy's executor — they
+    // own plain OS sockets + threads, just need a clone of the inbox to
+    // push tasks into. The Bevy drain system pulls them off each frame.
+    let rpc_inbox = rpc::bevy_bridge::RpcTaskInbox::new();
+    if let Err(e) = rpc::server::spawn_listener(rpc_inbox.clone()) {
+        log::error!("deskpet: NDJSON RPC failed to start: {e}");
+    }
+    if let Err(e) = rpc::http::spawn_server(rpc_inbox.clone()) {
+        log::error!("deskpet: HTTP RPC failed to start: {e}");
     }
 
     App::new()
@@ -153,8 +202,11 @@ fn main() {
         .init_resource::<Settings>()
         .init_resource::<Mascot>()
         .init_resource::<NotifyState>()
-        // Start the loopback reminder listener and hand its inbox to the world.
-        .insert_resource(notify::spawn_listener())
+        // RPC: register every method + share the inbox the listener threads
+        // are pushing into. The Bevy drain system below pulls requests out
+        // and dispatches them with full World access.
+        .insert_resource(rpc_methods::register_all())
+        .insert_resource(rpc_inbox)
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -195,6 +247,12 @@ fn main() {
         )
         .add_plugins(EguiPlugin::default())
         .add_plugins(TrayIconPlugin)
+        // OS-level desktop notifications (Notification Center / Action Center).
+        // Noop backend unless built with `--features os-notify`; see
+        // src/os_notify/mod.rs for the feature/target matrix.
+        .add_plugins(OsNotifyPlugin {
+            notifier: make_notifier(),
+        })
         .add_systems(Startup, (spawn_scene, create_tray))
         .add_systems(
             Update,
@@ -204,7 +262,7 @@ fn main() {
             Update,
             (
                 init_screen,
-                drain_inbox,    // pull remote reminders into the world
+                rpc::bevy_bridge::drain_rpc_tasks, // exclusive: dispatches RPC with World access
                 advance_notify, // promote queued reminders, expire the current
                 drive_input,    // global cursor: hit_test + drag + click + quit
                 focus_on_hover, // activate window when hovered so egui gets events
@@ -237,16 +295,16 @@ struct Screen {
 
 /// Logical top-left position of the window on the desktop (physical pixels).
 #[derive(Resource, Default)]
-struct PetWin {
-    pos: Vec2,
+pub(crate) struct PetWin {
+    pub(crate) pos: Vec2,
 }
 
 /// Idle wander state machine.
 #[derive(Resource)]
-struct Walk {
-    target_x: f32,
-    moving: bool,
-    wait: Timer,
+pub(crate) struct Walk {
+    pub(crate) target_x: f32,
+    pub(crate) moving: bool,
+    pub(crate) wait: Timer,
 }
 
 impl Default for Walk {
@@ -284,15 +342,15 @@ struct Hover {
 
 /// User-tweakable settings, shared between the HUD and the behavior systems.
 #[derive(Resource)]
-struct Settings {
-    walk_speed: f32,
-    wander: bool,
+pub(crate) struct Settings {
+    pub(crate) walk_speed: f32,
+    pub(crate) wander: bool,
     /// Set by the HUD "Hop" button; consumed by `consume_hop`.
-    hop_request: bool,
+    pub(crate) hop_request: bool,
     /// Set by the HUD "Switch" button; consumed by `switch_mascot`.
-    switch_request: bool,
+    pub(crate) switch_request: bool,
     /// HUD collapsed (just a gear) vs expanded (full panel).
-    hud_open: bool,
+    pub(crate) hud_open: bool,
 }
 
 impl Default for Settings {
@@ -342,11 +400,11 @@ struct PetCamera;
 
 /// Which mascot is in use this run.
 #[derive(Resource, Default)]
-struct Mascot {
+pub(crate) struct Mascot {
     /// True when a rigged GLB model was loaded instead of the procedural slime.
-    use_glb: bool,
+    pub(crate) use_glb: bool,
     /// Currently loaded GLB filename (under `assets/`); toggled by the HUD.
-    glb: String,
+    pub(crate) glb: String,
 }
 
 /// Carries the loaded GLB's animation graph + node so `setup_mascot_animation`
@@ -1077,63 +1135,40 @@ fn consume_hop(mut settings: ResMut<Settings>, mut pets: Query<&mut Pet>) {
     }
 }
 
-/// Pull reminders that arrived over the loopback socket into the world. A new
-/// reminder auto-reveals the (possibly tray-hidden) mascot and triggers an
-/// attention hop; `clear` flushes everything pending.
-fn drain_inbox(
-    inbox: Res<NotifyInbox>,
-    mut state: ResMut<NotifyState>,
-    mut pets: Query<&mut Pet>,
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
-) {
-    let msgs = inbox.drain();
-    if msgs.is_empty() {
-        return;
-    }
-    let mut got_notify = false;
-    for msg in msgs {
-        match msg {
-            Incoming::Notify {
-                title,
-                body,
-                level,
-                duration_ms,
-            } => {
-                state
-                    .queue
-                    .push_back(notify::make_notice(title, body, level, duration_ms));
-                got_notify = true;
-            }
-            Incoming::Clear => {
-                state.dismiss();
-                state.queue.clear();
-            }
-        }
-    }
-    if got_notify {
-        if let Ok(mut window) = window.single_mut() {
-            window.visible = true;
-        }
-        if let Ok(mut pet) = pets.single_mut() {
-            pet.vy = JUMP_V;
-        }
-    }
-}
-
-/// Expire the on-screen reminder when its timer runs out, then promote the next
-/// queued one. Keeps a single reminder visible at a time, in arrival order.
+/// Expire the on-screen reminder when its timer runs out (or its
+/// `expires_at` deadline has passed), then promote the next queued one.
+/// Keeps a single reminder visible at a time, in arrival order. Also
+/// drops queued notices whose deadline has passed (stale background
+/// notifications).
 fn advance_notify(time: Res<Time>, mut state: ResMut<NotifyState>) {
-    let expired = match state.timer.as_mut() {
+    let now = std::time::Instant::now();
+    // Expire current if its TTL timer ran out OR its deadline has passed.
+    let timer_done = match state.timer.as_mut() {
         Some(timer) => {
             timer.tick(time.delta());
             timer.is_finished()
         }
         None => false,
     };
-    if expired {
+    let deadline_done = state
+        .current
+        .as_ref()
+        .map(|n| n.is_expired(now))
+        .unwrap_or(false);
+    if timer_done || deadline_done {
         state.dismiss();
     }
     if state.current.is_none() {
+        // Drop queued notices whose deadline has passed. Loop in case
+        // many are expired at once (e.g., batch background work that
+        // all finished too late).
+        while let Some(front) = state.queue.front() {
+            if front.is_expired(now) {
+                state.queue.pop_front();
+            } else {
+                break;
+            }
+        }
         if let Some(next) = state.queue.pop_front() {
             state.timer = Some(Timer::new(next.ttl, TimerMode::Once));
             state.current = Some(next);
