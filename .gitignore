@@ -13,3 +13,5 @@
 crates/murmur/data/
 *.bak
 *.bak2
+# generated test-output media (e.g. video-generator/**/tests/**/output2.mp4)
+**/tests/**/output*.mp4

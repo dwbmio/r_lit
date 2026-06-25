@@ -15,6 +15,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 |------|------|
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [img_resize](img_resize/) | 图片缩放与压缩 |
+| [ui-trim](ui-trim/) | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | [textexture](textexture/) | 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹） |
 | [mj_atlas](mj_atlas/) | 精灵图集 / 打包工具，支持增量构建 |
 | [looplog](looplog/) | 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；见 [微信 AI 调试指南](looplog/WECHAT_AI_DEBUG_CN.md)） |
@@ -28,9 +29,8 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 
 ## 安装预编译二进制
 
-所有 CLI 工具同时发布到三处：
-- **GitHub Releases** — `https://github.com/dwbmio/r_lit/releases`
-- **Cloudflare R2（镜像，稳定 URL）** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
+所有 CLI 工具由内网 Jenkins 交叉编译服务发布到：
+- **Cloudflare R2（稳定 URL，主通道）** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
 - **HFrog 制品中心** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
 
 一行安装（自动识别 Linux / macOS / Windows-Git-Bash）：
@@ -46,8 +46,8 @@ curl -fsSL https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh | bash
 curl -fsSL https://r2.gamesci-lite.com/r_lit/img_resize/install.sh  | INSTALL_DIR=$HOME/.local/bin bash
 ```
 
-GUI / 桌面应用（`maquette`、`group_vibe_workbench`、`deskpet`）在 macOS 以
-notarized `.dmg` 形式发布，请到 GitHub Release 页面下载。
+GUI 应用（`maquette`、`group_vibe_workbench`、`deskpet`）按平台以原始
+二进制 tar 包发布（Linux/macOS），安装方式相同。
 
 ## 构建
 
@@ -57,22 +57,20 @@ cd <tool_dir> && cargo build --release
 
 ## 发布
 
-任何 `<tool>/Cargo.toml` 的 `version` 字段变更并 push 到 `main` 后，
-`Release` workflow 会自动：
+唯一发布通道是内网 **Jenkins 交叉编译服务**
+（`ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build`），已无 GitHub Actions 发布路径。
+手动触发该任务、选 `TOOL_NAME` 与平台后，它会：
 
-1. 按 `release-metadata.json` 中该工具声明的 `targets` 构建。
-2. 创建 GitHub Release，附带二进制 + `SHA256SUMS` + 每个产物的校验和。
-3. 同步到 R2（`s3://prod-hfrog/r_lit/<tool>/v<ver>/`），
-   并刷新 `r_lit/<tool>/install.sh` 入口脚本。
+1. 按平台构建（Linux x86_64 原生 / macOS aarch64 原生 / Windows x86_64 经 cargo-xwin
+   交叉编译到 `x86_64-pc-windows-msvc`）。
+2. 打包成 `<tool>-<target>.tar.gz`（Windows 为 `.zip`）。
+3. 上传 R2（`s3://prod-hfrog/r_lit/<tool>/v<ver>/`）并刷新 `r_lit/<tool>/install.sh`。
 4. 把 `software / version / release / platform` 全套记录写入 HFrog，
-   带上真实的 `file_size`、`checksum_sha256`、`source_type`、
-   `install_script_url`。
+   带上真实的 `file_size`、`checksum_sha256`、`source_type`、`install_script_url`。
 
-新增工具：只需在 `release-metadata.json` 中追加一项
-（`description` / `category` / 可选 `gui`、`macos_app_name`、`targets`），
-其余文件无需改动。
+工具清单的事实源是 Jenkinsfile 的 `toolMap`。
 
-完整流程图与所需的 GitHub Secrets 见 [`docs/release.md`](docs/release.md)。
+完整流程图见 [`docs/release.md`](docs/release.md)。
 
 ## License
 

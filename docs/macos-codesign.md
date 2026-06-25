@@ -1,11 +1,14 @@
 # macOS 代码签名 + 公证（Developer ID 分发）
 
-本仓库的 GUI 项目（`maquette`、`group_vibe_workbench`）通过 GitHub Actions
-自动产出 **签名 + 公证 + stapled** 的 `.dmg`，可直接发到 GitHub Releases /
-HFrog 给最终用户双击安装，无需 Gatekeeper 绕过。
+> ⚠️ **现状（GitHub Actions 移除后）**：自动出 `.dmg` 的流水线
+> （`.github/workflows/release.yml` → `.github/scripts/macos-bundle.sh`）**已删除**。
+> 当前唯一发布通道是内网 Jenkins，对 GUI 工具只产出**未签名**的 `<tool>-aarch64-apple-darwin.tar.gz`。
+> 本文档保留作为「将来要在 Jenkins 或本地恢复签名/公证」的参考；下述步骤与所需资源
+> （`<project>/macos/Info.plist` + `<project>/macos/<bin>.entitlements`、Developer ID 证书、notarytool）
+> 仍然有效，只是触发点需改到 Jenkins 阶段或本地手动执行。
 
-> 流水线: `.github/workflows/release.yml` → `.github/scripts/macos-bundle.sh`
-> Bundle 资源: `<project>/macos/Info.plist` + `<project>/macos/<bin>.entitlements`
+本仓库的 GUI 项目（`maquette`、`group_vibe_workbench`）若要产出
+**签名 + 公证 + stapled** 的 `.dmg`（最终用户双击安装、免 Gatekeeper 绕过），按下文操作。
 
 ---
 

@@ -1,0 +1,53 @@
+# ui-trim
+
+- 用途: 把 AI 生成的 UI 素材 PNG 清理成 tight 透明 PNG
+- 仓库定位: r_lit 中的独立短时运行 Rust CLI 工具
+- 二进制: ui-trim
+- 输入: PNG 图片
+- 输出: PNG RGBA 图片
+- 主要场景: 移除 UI 元素边缘连通的伪透明背景、棋盘格、大透明边和红色裁切辅助线
+- 实现策略: 默认纯 Rust CPU 实现，不引入 OpenCV 依赖
+- 实现标签: pure_rust_cpu
+- 加速标签: specialized_u8_mask_kernel; PNG 编解码依赖内部可能使用 CPU intrinsic
+- 编解码: image crate，PNG feature，RGBA8 buffer
+- 算法:
+  - 从图片边缘采样 matte 颜色聚类
+  - 只 flood-fill 与边缘连通的 matte 像素
+  - 对背景 mask 做 1px close/open 形态学
+  - 清零背景 alpha，并可选 soft feather 邻近前景 alpha
+  - 计算 alpha bbox，按 padding 外扩，裁切并编码 PNG
+- CLI 示例: ui-trim --input raw.png --output clean.png --padding 6 --feather 2 --remove-red-guides --json
+- JSON 输出: ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings
+- JSON options 字段: padding_px, alpha_threshold, feather_px, max_bg_distance, remove_red_guides, implementation, acceleration
+- JSON timings_ms 字段: decode, sample_matte, flood_fill, morphology, alpha_cleanup, bbox_crop, encode, total
+- 默认 padding: 6
+- 默认 alpha_threshold: 4
+- 默认 feather: 2
+- 默认 max_bg_distance: 48
+- 参数语义:
+  - padding: 保留 alpha bbox 外的视觉呼吸空间；icon/button 常用 4-6，glow/bubble 可用 8-16
+  - alpha_threshold: alpha <= 阈值时视为背景；保持较低可避免误删微弱光晕
+  - feather: 0-3px 背景邻近前景 alpha 软化；过高可能收缩细高光
+  - max_bg_distance: 与边缘 matte 聚类的 RGB 距离；暖色/不均匀 matte 可调高，浅色主体被误删时调低
+  - remove_red_guides: 只移除与边缘连通的红色 guide 像素
+- 质量信号:
+  - alpha_ratio 接近 1: 可能背景没有清掉
+  - alpha_ratio 极低: 可能主体被过度裁掉
+  - removed_pixels: 边缘连通背景 mask 的规模
+  - warnings: 机器可读诊断
+- 性能定位: 添加加速前先 benchmark；当前路径是 CPU 标量 mask kernel 加 image/png 编解码依赖
+- 本机 release benchmark 快照:
+  - 512x512: avg_algorithm_ms 18.5, throughput_mp_s 20.0
+  - 1024x1024: avg_algorithm_ms 56.7, throughput_mp_s 20.7
+  - 2048x2048: avg_algorithm_ms 197.7, throughput_mp_s 21.5
+- 当前瓶颈: mask 处理，尤其 morphology 和 alpha_cleanup
+- 加速策略:
+  - 默认不引入 OpenCV
+  - SIMD 只在 benchmark 证明 morphology/feather 是瓶颈后作为 feature 引入
+  - 候选 SIMD crate: mask kernel 看 fast_morphology，未来 resize 看 fast_image_resize
+  - GPU 不作为 MVP 路径，除非流水线已有 GPU resident 数据或批量超大图
+- 依赖: clap, image, serde, serde_json, thiserror
+- 构建: cargo build --release
+- 测试: cargo test
+- smoke 示例: cargo run --example smoke
+- benchmark 示例: cargo run --release --example benchmark

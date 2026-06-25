@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """hfrog_publisher — single source of truth for publishing artifacts.
 
-Combines three previously-duplicated jobs into one tool used by both:
+Combines three previously-duplicated jobs into one tool. r_lit's GitHub Actions
+release path has been removed; the publisher is now driven solely by the
+internal Jenkins cross-compile service:
 
-  * r_lit's GitHub Actions (`.github/workflows/release.yml`)
-  * Every Rust pipeline in ci-all-in-one (`task/ci/pipeline/<proj>/Jenkinsfile.*`)
+  * Every Rust pipeline in ci-all-in-one (`task/ci/pipeline/<proj>/Jenkinsfile.*`),
+    which syncs this file to `scripts/services/hfrog/publisher.py` and invokes it.
 
 What it does for one (tool, version, [assets…]) tuple:
 
