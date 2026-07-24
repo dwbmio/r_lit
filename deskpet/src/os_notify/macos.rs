@@ -40,8 +40,18 @@ impl MacOsNotifier {
         // running .app's Info.plist at runtime; we pass this only as a
         // fallback for unbundled execution.
         let initialized = mac_notification_sys::set_application(&bundle_id).is_ok();
+        let embedded_in_starlink = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().contains("starlink-dev")))
+            .unwrap_or(false);
+
         if initialized {
             info!("deskpet: macOS notifications via NSUserNotificationCenter (bundle id '{bundle_id}')");
+        } else if embedded_in_starlink {
+            info!(
+                "deskpet: macOS 系统通知不可用（嵌入 starlink-dev，无 .app bundle）；\
+                 应用内气泡提醒仍正常"
+            );
         } else {
             warn!(
                 "deskpet: macOS notification permission / bundle id setup failed \

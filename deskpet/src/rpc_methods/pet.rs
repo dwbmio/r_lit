@@ -2,7 +2,6 @@
 //! resources. Cross-cutting concerns (window visibility, world state) are
 //! also exposed so external tools can drive the pet without UI access.
 
-use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use serde::{Deserialize, Serialize};
@@ -30,6 +29,8 @@ pub struct StateResult {
     pub mascot_glb: String,
     /// Whether the pet window is currently visible.
     pub visible: bool,
+    /// HUD「显示动画」：false 时隐藏 3D 萌宠.
+    pub show_animation: bool,
 }
 
 pub struct StateMethod;
@@ -57,6 +58,10 @@ impl Method for StateMethod {
             .get_resource::<Mascot>()
             .map(|m| (!m.use_glb, m.glb.clone()))
             .unwrap_or((true, String::new()));
+        let show_animation = world
+            .get_resource::<Settings>()
+            .map(|s| s.show_animation)
+            .unwrap_or(true);
         let visible = world
             .query_filtered::<&Window, With<PrimaryWindow>>()
             .single(world)
@@ -71,6 +76,7 @@ impl Method for StateMethod {
             is_slime,
             mascot_glb,
             visible,
+            show_animation,
         };
         Ok(serde_json::to_value(result).map_err(|e| RpcError::Internal(e.to_string()))?)
     }
@@ -107,9 +113,10 @@ pub enum PetAction {
     WalkTo,
     /// Toggle idle wander on/off. Requires `enabled`.
     SetWander,
-    /// Switch to a GLB mascot by filename (e.g. "block.glb", "blast.glb").
-    /// Requires `name`. Triggers the same switch path the HUD "Switch" button uses.
+    /// Reload mascot assets (normally `mascot.glb`; requires pet restart).
     SetGlb,
+    /// 开关 HUD「显示动画」（false = 隐藏桌面萌宠模型）.
+    SetShowAnimation,
     /// Toggle the HUD panel open/closed.
     ToggleHud,
     /// Reset the pet window to the center of the primary monitor.
@@ -267,16 +274,11 @@ impl Method for ControlMethod {
                 .map_err(|e| RpcError::Internal(e.to_string()))?)
             }
             PetAction::Quit => {
-                // Send AppExit (Bevy 0.18 renamed events → messages).
-                // Bevy processes it at the end of the current frame's
-                // schedule — the reply goes out first (drain system is in
-                // the same Update chain), so callers always get a
-                // successful response before the process exits.
-                world.write_message(AppExit::Success);
-                info!("deskpet: AppExit requested via pet/control quit");
+                info!("deskpet: quit requested via pet/control");
+                crate::app::shutdown_after_rpc();
                 Ok(serde_json::to_value(ControlResult {
                     applied: true,
-                    note: Some("AppExit sent — process will exit after this frame".into()),
+                    note: Some("shutting down".into()),
                 })
                 .map_err(|e| RpcError::Internal(e.to_string()))?)
             }
@@ -285,8 +287,6 @@ impl Method for ControlMethod {
                     .name
                     .clone()
                     .ok_or_else(|| RpcError::InvalidParams("set_glb requires 'name'".into()))?;
-                // Sanity check: only allow simple filenames (no path
-                // separators — the GLB loader resolves under assets/).
                 if name.contains('/') || name.contains('\\') || name.contains("..") {
                     return Err(RpcError::Server {
                         code: AppError::InvalidAction.code(),
@@ -298,7 +298,6 @@ impl Method for ControlMethod {
                         })),
                     });
                 }
-                // Update Mascot + trigger the same switch path the HUD uses.
                 world
                     .get_resource_mut::<Mascot>()
                     .ok_or_else(|| RpcError::Internal("Mascot resource missing".into()))?
@@ -307,13 +306,25 @@ impl Method for ControlMethod {
                     .get_resource_mut::<Mascot>()
                     .ok_or_else(|| RpcError::Internal("Mascot resource missing".into()))?
                     .use_glb = true;
+                Ok(serde_json::to_value(ControlResult {
+                    applied: true,
+                    note: Some(format!(
+                        "glb={name} recorded; restart `starlink-serve restart` to reload model"
+                    )),
+                })
+                .map_err(|e| RpcError::Internal(e.to_string()))?)
+            }
+            PetAction::SetShowAnimation => {
+                let enabled = p.enabled.ok_or_else(|| {
+                    RpcError::InvalidParams("set_show_animation requires 'enabled'".into())
+                })?;
                 world
                     .get_resource_mut::<Settings>()
                     .ok_or_else(|| RpcError::Internal("Settings resource missing".into()))?
-                    .switch_request = true;
+                    .show_animation = enabled;
                 Ok(serde_json::to_value(ControlResult {
                     applied: true,
-                    note: Some(format!("glb={name}, switch_request=true")),
+                    note: Some(format!("show_animation={enabled}")),
                 })
                 .map_err(|e| RpcError::Internal(e.to_string()))?)
             }

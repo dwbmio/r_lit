@@ -6,6 +6,14 @@ description = "Efficient frameless transparent desktop mascot (slime) built with
 license = "MIT"
 repository = "https://github.com/nicholasgasior/r_lit"
 
+[lib]
+name = "deskpet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deskpet"
+path = "src/main.rs"
+
 [dependencies]
 # Engine + ECS + winit windowing. Trimmed to the minimum a 3D + egui desktop
 # pet needs — we drop audio, picking, bevy_ui/sprite/text, gamepad (gilrs),
@@ -37,7 +45,7 @@ bevy_egui = { version = "0.39", default-features = false, features = [
 
 # System-tray / macOS menu-bar resident icon, integrated with Bevy's winit
 # event loop. Click the icon to show/hide the mascot.
-bevy_tray_icon = "0.3"
+bevy_tray_icon = { path = "patches/bevy_tray_icon" }
 
 # Random walk targets / blink jitter.
 rand = "0.8"
