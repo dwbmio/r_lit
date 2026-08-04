@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package titan.down100;
+
+// "是男人就下100层" 玩法协议。
+// 设计目标: 客户端帧优先表现, 服务端权威校验, 轻量确定性规则, 不引入刚体物理。
+
+enum Down100RoomStatus {
+  DOWN100_ROOM_STATUS_UNSPECIFIED = 0;
+  DOWN100_ROOM_STATUS_PLAYING = 1;
+  DOWN100_ROOM_STATUS_PAUSED_FOR_ASSIST = 2;
+  DOWN100_ROOM_STATUS_READY_CHECK = 3;
+  DOWN100_ROOM_STATUS_ENDED = 4;
+}
+
+enum Down100PlayerState {
+  DOWN100_PLAYER_STATE_UNSPECIFIED = 0;
+  DOWN100_PLAYER_STATE_ALIVE = 1;
+  DOWN100_PLAYER_STATE_DOWNED = 2;
+  DOWN100_PLAYER_STATE_ESCAPED = 3;
+  // v1.1.2 待救援状态. HP 归零进入, 10s 内队友 interact + 距离<1m + 持续 3s 可救起.
+  DOWN100_PLAYER_STATE_RESCUABLE = 4;
+}
+
+// v1.1.1 平台类型 (FloorKind). 6 种 (含 UNSPECIFIED 兼容老 client).
+enum Down100FloorKind {
+  DOWN100_FLOOR_KIND_UNSPECIFIED = 0; // 老 client / 未设置 = 视同 NORMAL
+  DOWN100_FLOOR_KIND_NORMAL = 1;      // 普通平台
+  DOWN100_FLOOR_KIND_SPRING = 2;      // 弹簧 (跳起 2x 高度, 自动起跳)
+  DOWN100_FLOOR_KIND_SPIKE = 3;       // 钉板 (扣血/受伤, 弹开, 不站立)
+  DOWN100_FLOOR_KIND_CONVEYOR_L = 4;  // 传送带, 推向左
+  DOWN100_FLOOR_KIND_CONVEYOR_R = 5;  // 传送带, 推向右
+  DOWN100_FLOOR_KIND_ICE = 6;         // 冰板, 摩擦 → vx 线性插值收敛 (滑感)
+}
+
+message Down100StartRequest {
+  uint32 seed = 1;
+  // V1 重连恢复: 客户端在 try_reconnect 时塞之前学到的 player_id, server 端在
+  // pending_disconnect grace 窗口内会按这个 id 找回原房间, 重发 snapshot + 把这条
+  // 连接重新关联到该玩家的 outgoing channel. 空字符串 = 走正常匹配开新局 (V0 行为).
+  string resume_player_id = 2;
+}
+
+message Down100Input {
+  uint64 client_tick = 1;
+  uint32 input_seq = 2;
+  float move_x = 3;
+  bool jump_pressed = 4;
+  bool interact_pressed = 5;
+  // v1.1.1: 按↓加速下落 (Fast Fall, 重力 ×1.8). proto3 默认 false, 老 client 兼容.
+  bool fast_fall_pressed = 6;
+}
+
+message Down100RemoteInput {
+  string player_id = 1;
+  uint64 client_tick = 2;
+  uint32 input_seq = 3;
+  float move_x = 4;
+  bool jump_pressed = 5;
+  bool interact_pressed = 6;
+  uint64 server_tick = 7;
+  bool fast_fall_pressed = 8;
+}
+
+message Down100AssistRequest {
+}
+
+message Down100AssistJoinRequest {
+  string assist_token = 1;
+}
+
+message Down100ReadyRequest {
+  bool ready = 1;
+}
+
+message Down100SnapshotRequest {
+}
+
+message Down100PlayerSnapshot {
+  string player_id = 1;
+  float x = 2;
+  float y = 3;
+  float vx = 4;
+  float vy = 5;
+  uint32 current_floor = 6;
+  uint32 last_input_seq = 7;
+  Down100PlayerState state = 8;
+  bool ready = 9;
+  // v1.1.2: 当前 HP (默认 3, 老 snapshot 此字段缺失 → 0, server 端会矫正为 PLAYER_MAX_HP).
+  uint32 hp = 10;
+}
+
+message Down100FloorSnapshot {
+  uint32 floor = 1;
+  float y = 2;
+  float left = 3;
+  float right = 4;
+  bool breakable = 5;
+  // v1.1.1: 平台类型. proto3 默认 0 (UNSPECIFIED, 视同 NORMAL).
+  Down100FloorKind kind = 6;
+}
+
+message Down100Snapshot {
+  string room_id = 1;
+  uint64 server_tick = 2;
+  Down100RoomStatus status = 3;
+  repeated Down100PlayerSnapshot players = 4;
+  repeated Down100FloorSnapshot floors = 5;
+  string assist_token = 6;
+  uint32 seed = 7;
+  uint32 floor_window_start = 8;
+  uint32 floor_window_count = 9;
+  // 服务端当前联机调参。客户端预测必须使用 server_tick_rate_hz 计算 input step，
+  // 不能把 20Hz/30Hz 写死在 client。
+  uint32 server_tick_rate_hz = 10;
+  uint32 solo_snapshot_hz = 11;
+  uint32 coop_snapshot_hz = 12;
+}
+
+message Down100Event {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_ROOM_STARTED = 1;
+    KIND_ASSIST_REQUESTED = 2;
+    KIND_ASSIST_JOINED = 3;
+    KIND_READY_CHANGED = 4;
+    KIND_ROOM_RESUMED = 5;
+    KIND_PLAYER_DOWNED = 6;
+    KIND_ROOM_ENDED = 7;
+    // 匹配链路 (玩家跨过 10 层后触发, 同地域容差匹配)
+    KIND_MATCH_REQUESTED = 8;
+    KIND_MATCH_FOUND = 9;
+    KIND_MATCH_TIMEOUT = 10;
+    KIND_MATCH_CANCELLED = 11;
+    // v1.1.1: 平台触发反馈 (Spring 弹起 / Spike 受伤 / Falling 即将塌等).
+    // floor + kind 见 platform_hit_kind 字段 (按数值映射 Down100FloorKind).
+    KIND_PLATFORM_HIT = 12;
+    // v1.1.2 HP + 互救事件 (player_id = 当事人)
+    KIND_HP_CHANGED = 13;       // hp 字段更新 (Spike 扣血或复活)
+    KIND_RESCUE_REQUESTED = 14; // HP=0, 进 Rescuable, floor=当前楼层
+    KIND_RESCUE_PROGRESS = 15;  // 队友 interact 蓄力中, rescuer_id + rescue_progress_pct
+    KIND_PLAYER_RESCUED = 16;   // 救援成功, rescuer_id 为救援者
+  }
+
+  Kind kind = 1;
+  string room_id = 2;
+  string player_id = 3;
+  string detail = 4;
+  // 匹配成功时携带配对玩家 (KIND_MATCH_FOUND 用; 其它事件留空)
+  repeated string partners = 5;
+  // v1.1.1 KIND_PLATFORM_HIT 用: 触发平台的楼层号.
+  uint32 floor = 6;
+  // v1.1.1 KIND_PLATFORM_HIT 用: 触发的平台类型 (映射 Down100FloorKind).
+  Down100FloorKind platform_hit_kind = 7;
+  // v1.1.2 KIND_HP_CHANGED 用: 当前 HP 值 (0 = 进 Rescuable).
+  uint32 hp = 8;
+  // v1.1.2 KIND_RESCUE_PROGRESS / KIND_PLAYER_RESCUED 用: 救援者 player_id.
+  string rescuer_id = 9;
+  // v1.1.2 KIND_RESCUE_PROGRESS 用: 蓄力进度 0..=100 (整数百分比).
+  uint32 rescue_progress_pct = 10;
+}
+
+message Down100Reject {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_BAD_REQUEST = 1;
+    REASON_NOT_IN_ROOM = 2;
+    REASON_ROOM_NOT_FOUND = 3;
+    REASON_ROOM_FULL = 4;
+    REASON_NOT_PAUSED = 5;
+  }
+
+  Reason reason = 1;
+  string detail = 2;
+}

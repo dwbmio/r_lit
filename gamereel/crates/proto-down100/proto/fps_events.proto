@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package titan;
+
+// ============================================================
+// FPS 事件协议
+// ============================================================
+
+/// 命中确认 — 服务端→客户端 (碰撞检测后)
+message HitConfirmation {
+  int64 tick = 1;
+  int64 attacker_id = 2;
+  int64 target_id = 3;
+  float damage = 4;
+  float target_remaining_hp = 5;
+}
+
+/// 武器切换 — 客户端→服务端
+message WeaponSwitch {
+  int32 weapon_slot = 1;
+}
+
+/// 击杀播报 — 服务端→客户端
+message KillFeed {
+  int64 tick = 1;
+  int64 killer_id = 2;
+  int64 victim_id = 3;
+  int32 weapon_id = 4;
+}
+
+/// 射击 — 客户端→服务端 (hitscan 射线方向)
+message Shoot {
+  float direction_x = 1;
+  float direction_y = 2;
+}
+
+/// FPS 动作容器 — 嵌入 ActionCommand.action_data oneof
+message FpsAction {
+  oneof action {
+    WeaponSwitch weapon_switch = 1;
+    Shoot shoot = 2;
+  }
+}

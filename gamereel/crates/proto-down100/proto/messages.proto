@@ -1,0 +1,300 @@
+syntax = "proto3";
+
+package titan;
+
+import "fps_events.proto";
+import "moba_events.proto";
+
+// ============================================================
+// 基础消息
+// ============================================================
+
+message Ping {
+  int64 timestamp = 1;
+}
+
+message Pong {
+  int64 timestamp = 1;
+  int64 server_time = 2;
+}
+
+// NTP-like 时钟同步 (v1.0.0-dev1 Sub-tick 对标)
+// 流程: Auth 成功 → 服务端发 ClockSyncProbe → 客户端回 ClockSyncRequest → 服务端回 ClockSyncResponse
+// 取 3 轮中 RTT 最小的 offset 作为初始校准值
+message ClockSyncRequest {
+  int64 client_send_us = 1;   // 客户端发送时刻 (微秒, epoch)
+}
+
+message ClockSyncResponse {
+  int64 client_send_us = 1;   // 原样回传
+  int64 server_recv_us = 2;   // 服务端收到时刻
+  int64 server_send_us = 3;   // 服务端发送时刻
+}
+
+// ============================================================
+// 认证
+// ============================================================
+
+// TCP 帧认证 (MSG_AUTH / MSG_AUTH_OK)
+// 旧客户端: 发裸 JWT bytes → 服务端 fallback 兼容
+// 新客户端: 发 AuthRequest protobuf → 服务端返回 AuthResponse
+message AuthRequest {
+  string token = 1;
+  string client_version = 2;   // 语义化版本 "x.y.z"
+  // v1.1.1 反作弊握手: "<unix_ts>.<base64_hmac>"
+  //   服务端在 [anticheat.handshake].enabled=true 时校验; 关闭时忽略,
+  //   对客户端完全可选 (老客户端发空字符串即可通过 required=false)。
+  string anticheat_token = 3;
+}
+
+message AuthResponse {
+  string server_version = 1;
+  string min_client_version = 2;
+}
+
+// HTTP /auth/login
+message LoginRequest {
+  string token = 1;
+  string client_version = 2;
+  TransportPreference transport = 3;
+}
+
+enum TransportPreference {
+  TRANSPORT_AUTO = 0;
+  TRANSPORT_TCP = 1;
+  TRANSPORT_RUDP = 2;
+  TRANSPORT_WEBSOCKET = 3;
+}
+
+message LoginResponse {
+  bool success = 1;
+  string player_id = 2;
+  string session_token = 3;
+  string message = 4;
+}
+
+// 客户端预测 ACK — 每个 input 处理后立即发给该玩家 (不等广播周期)
+// 用途: 客户端收到后丢弃已确认输入, 用 authoritative 位置做和解
+message InputAck {
+  uint32 last_input_seq = 1;   // 服务端最后处理的 input_seq
+  int64 server_tick = 2;       // 服务端当前 tick (用于时间线对齐)
+  float pos_x = 3;             // 权威位置 X
+  float pos_y = 4;             // 权威位置 Y
+  float vel_x = 5;             // 权威速度 X
+  float vel_y = 6;             // 权威速度 Y
+}
+
+// ============================================================
+// 玩家操作
+// ============================================================
+
+message PlayerInput {
+  int64 tick = 1;
+  float move_x = 2;
+  float move_y = 3;
+  repeated ActionCommand actions = 4;
+  int64 client_timestamp_us = 5;  // Sub-tick 客户端输入微秒时间戳
+  uint32 input_seq = 6;           // 客户端输入序列号 (用于服务端纠偏)
+}
+
+message ActionCommand {
+  int32 action_id = 1;
+  int64 target_entity = 2;
+  oneof action_data {
+    FpsAction fps_action = 10;
+    MobaAction moba_action = 11;
+  }
+}
+
+// ============================================================
+// 状态同步
+// ============================================================
+
+message WorldSnapshot {
+  int64 tick = 1;
+  repeated EntityState entities = 2;
+  // reserved 3: last_input_seq 已迁移到 per-entity EntityState.last_input_seq
+}
+
+message EntityState {
+  int64 entity_id = 1;
+  float pos_x = 2;
+  float pos_y = 3;
+  float pos_z = 4;
+  float vel_x = 5;
+  float vel_y = 6;
+  float health = 7;
+  int32 state = 8;
+  uint32 last_input_seq = 9;  // 该实体最后处理的客户端输入序号
+}
+
+message EntityDelta {
+  int64 tick = 1;
+  int64 entity_id = 2;
+  repeated FieldUpdate updates = 3;
+}
+
+message FieldUpdate {
+  int32 field_id = 1;
+  oneof value {
+    float f32_val = 2;
+    int32 i32_val = 3;
+    int64 i64_val = 4;
+    string str_val = 5;
+    bytes raw_val = 6;
+    sint32 quantized_val = 7;  // v0.8.2.2: quantized f32 = round(f32 * scale), zigzag 编码
+  }
+}
+
+message DeltaBatch {
+  int64 tick = 1;
+  repeated EntityDelta deltas = 2;
+  repeated EntityState new_entities = 3;
+  repeated int64 removed_entity_ids = 4;
+}
+
+// ============================================================
+// 通用房间事件
+// ============================================================
+
+message RoomEvent {
+  oneof event {
+    RoomGameOver game_over = 1;
+    RoomPlayerKilled player_killed = 2;
+    RoomPlayerRespawned player_respawned = 3;
+    RoomTimeSync time_sync = 4;
+    RoomReadyCheck ready_check = 5;
+    RoomCountdown countdown = 6;
+    RoomGameStart game_start = 7;
+  }
+}
+
+message RoomGameOver {
+  int64 tick = 1;
+  string reason = 2;
+}
+
+message RoomPlayerKilled {
+  int64 killer_id = 1;
+  int64 victim_id = 2;
+  int32 weapon_id = 3;
+}
+
+message RoomPlayerRespawned {
+  int64 player_id = 1;
+  float x = 2;
+  float y = 3;
+}
+
+message RoomTimeSync {
+  uint32 remaining_secs = 1;
+}
+
+message RoomReadyCheck {
+  repeated string player_ids = 1;
+}
+
+message RoomCountdown {
+  uint32 seconds = 1;
+}
+
+message RoomGameStart {
+  uint32 kill_limit = 1;
+  uint32 time_limit_secs = 2;
+}
+
+// ============================================================
+// 房间/匹配
+// ============================================================
+
+message JoinRoomRequest {
+  string room_id = 1;
+}
+
+message JoinRoomResponse {
+  bool success = 1;
+  string room_id = 2;
+  repeated PlayerInfo players = 3;
+}
+
+// (legacy) 跨玩法旧版玩家显示信息 — 仅 ECS 房间 JoinRoomResponse 使用。
+// v1.4.0+ 新代码请用 PlayerProfile / PlayerRoster (msg_id=90, 跨所有玩法).
+message PlayerInfo {
+  option deprecated = true;
+  string player_id = 1;
+  string name = 2;
+  int32 team = 3;
+}
+
+// ============================================================
+// v1.4.0 通用玩家档案 (跨玩法共享, down100 / tung / fps / moba 都用)
+//
+// 数据来源: JWT Claims (平台签发 token 时一并塞入)。titan-forge 不查 PG，
+// 守 0 IO 红线。运维/管理后台 PG 查询走外围服务 (titan-admin / 网关).
+//
+// 老 token (无 display_name) fallback: server 用 player_id[:8] 兜底.
+// ============================================================
+
+message PlayerProfile {
+  string player_id = 1;        // 唯一 ID (UUID), 与 Claims.sub / 各玩法 player_id 同义
+  string display_name = 2;     // 昵称 (UTF-8)
+  uint32 level = 3;            // 等级
+  string avatar_url = 4;       // 头像 URL (可选, 空 = 无)
+  uint32 elo = 5;              // ELO 分 (可选, 0 = 未排位)
+  string country_code = 6;     // ISO 3166-1 alpha-2 (可选)
+  string title = 7;            // 称号 (可选)
+  // 业务态扩展位 — 留空, 后续按需 (equipment / badges / vip_tier 等)
+  // map 不破坏向后兼容; 客户端遇到未知 key 应忽略.
+  map<string, string> extras = 10;
+}
+
+// 服务端主动下发: client 收到后合并进本地 player_id → PlayerProfile 字典.
+//
+// 触发时机:
+//   1. 认证成功后 (你自己的档案, replace=true 单条)
+//   2. 进入房间 / 匹配成功 (整局玩家档案, replace=true)
+//   3. 中途有人加入 (新增项, replace=false)
+//   4. V1 重连 try_resume 后重发整局 (replace=true)
+message PlayerRoster {
+  repeated PlayerProfile profiles = 1;
+  // true = 全量替换本地缓存 / false = 增量合并
+  bool replace = 2;
+}
+
+// 客户端主动查 (战绩页 / 邀请好友 / 观战时)。
+// v1.4.0 留协议占位, 服务端默认不响应 (留给外围 PG 查询服务对接).
+message PlayerQueryRequest {
+  repeated string player_ids = 1;
+}
+
+// ============================================================
+// 信封 — 统一消息包装
+// ============================================================
+
+message Envelope {
+  uint32 msg_id = 1;
+  uint32 seq = 2;
+  int64 timestamp = 3;
+
+  oneof payload {
+    Ping ping = 10;
+    Pong pong = 11;
+    LoginRequest login_req = 20;
+    LoginResponse login_resp = 21;
+    PlayerInput player_input = 30;
+    WorldSnapshot world_snapshot = 31;
+    EntityDelta entity_delta = 32;
+    DeltaBatch delta_batch = 33;
+    JoinRoomRequest join_room_req = 40;
+    JoinRoomResponse join_room_resp = 41;
+    RoomEvent room_event = 42;
+    // FPS 事件
+    HitConfirmation hit_confirmation = 50;
+    WeaponSwitch weapon_switch = 51;
+    KillFeed kill_feed = 52;
+    // MOBA 事件
+    SkillCast skill_cast = 70;
+    BuffApplied buff_applied = 71;
+    LevelUp level_up = 72;
+  }
+}

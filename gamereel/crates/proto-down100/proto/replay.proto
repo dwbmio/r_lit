@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package titan.replay;
+
+// v1.2.2  — 对局回放协议 (本地落盘版, FPS 已经接, 仅保留兼容)
+// v1.5.0  — Phase 7.8: in-memory + fanout 改造 (down100 接入), 0 磁盘
+//   * ReplayEventKind 新增 down100 专用 kind (10-14, 按 msg_id 一对一)
+//   * 新增 ReplayShipPayload — LPUSH 给 rustyme 的 envelope.kwargs.payload
+//
+// 消息 ID 范围 220~224 仅给 GM 列表/分块下载 (本地落盘版用); fanout 版本不占协议 msg_id.
+//
+// 解码契约 (离线渲染 / gamereel):
+//   1. envelope.kwargs.op == "render_replay" → 取 envelope.kwargs.payload
+//   2. payload (JSON) → ReplayShipPayload (有等价字段)
+//   3. zstd.decode(payload.zstd_blob) → ReplayHeader + N × ReplayEvent (varint length-prefixed)
+//   4. 按 ReplayEvent.kind 路由到对应 proto:
+//        REPLAY_DOWN100_SNAPSHOT      → titan.down100.Down100Snapshot
+//        REPLAY_DOWN100_EVENT         → titan.down100.Down100Event
+//        REPLAY_DOWN100_REMOTE_INPUT  → titan.down100.Down100RemoteInput
+//        REPLAY_DOWN100_INPUT_RAW     → titan.down100.Down100Input (备用对账)
+//        REPLAY_DOWN100_ROSTER        → titan.PlayerRoster
+//   5. 用 ReplayEvent.ts_ms 单调排序 (服务端时间) → 时间轴回放
+
+// 单条录制事件 (服务端决策的上游输入 / 实际广播帧)
+message ReplayEvent {
+  uint64 tick = 1;
+  int64 ts_ms = 2;           // 服务端时间 (毫秒, 单调)
+  string player_id = 3;      // 触发者 (广播帧填空字符串, 输入帧填实际玩家 id)
+  ReplayEventKind kind = 4;
+  bytes payload = 5;         // 按 kind 解码 (见 kind ↔ proto 表)
+}
+
+enum ReplayEventKind {
+  REPLAY_UNSPECIFIED = 0;
+
+  // ── v1.2.2 FPS 房间 (兼容保留, 不改) ──
+  REPLAY_PLAYER_JOIN = 1;
+  REPLAY_PLAYER_LEAVE = 2;
+  REPLAY_PLAYER_INPUT = 3;
+  REPLAY_SHOOT = 4;
+  REPLAY_KILL = 5;
+  REPLAY_GAME_OVER = 6;
+
+  // ── v1.5.0 down100 旁路广播帧 (一 msg_id 一 kind) ──
+  REPLAY_DOWN100_SNAPSHOT     = 10;  // msg_id 306 — Down100Snapshot
+  REPLAY_DOWN100_EVENT        = 11;  // msg_id 307 — Down100Event
+  REPLAY_DOWN100_REMOTE_INPUT = 12;  // msg_id 309 — Down100RemoteInput
+  REPLAY_DOWN100_INPUT_RAW    = 13;  // msg_id 301 — Down100Input (备用对账)
+  REPLAY_DOWN100_ROSTER       = 14;  // msg_id  90 — PlayerRoster
+}
+
+// 录像文件头 (序列化在 zstd_blob 起始)
+message ReplayHeader {
+  string room_id = 1;
+  string game_mode = 2;
+  int64 started_at_ms = 3;
+  int64 ended_at_ms = 4;
+  repeated string player_ids = 5;
+  uint32 tick_rate = 6;
+  string version = 7;        // server version
+}
+
+// v1.5.0 — fanout envelope 的 payload 段 (LPUSH 到 rustyme 队列)
+//
+// rustyme 那边 envelope.kwargs = { "op": "render_replay", "payload": ReplayShipPayload }
+// zstd_blob 解开 = varint length-prefixed ReplayHeader + ReplayEvent stream
+message ReplayShipPayload {
+  string room_id = 1;
+  string game_mode = 2;           // "down100"
+  int64 started_at_ms = 3;
+  int64 ended_at_ms = 4;
+  repeated string player_ids = 5;
+  // 房间结果摘要 (供 rustyme 决策端二次过滤是否真生成视频, 不解 zstd_blob 也能读)
+  string result_kind = 6;          // "player-escaped" / "player-downed" / ...
+  string winner_id = 7;
+  uint32 max_floor = 8;            // 队内最高楼层 (down100 主要指标)
+  uint32 duration_secs = 9;
+  uint32 event_count = 10;         // zstd_blob 里 ReplayEvent 总数
+  uint32 raw_bytes = 11;           // zstd 前原始 bytes (用来算压缩比)
+  bytes zstd_blob = 12;            // ReplayHeader + length-prefixed ReplayEvent stream
+}
+
+// ── 以下是 v1.2.2 本地落盘版的 GM API, 给离线渲染服务保留 (msg_id 220/221) ──
+
+message ReplayIndexEntry {
+  string replay_id = 1;
+  string game_mode = 2;
+  int64 started_at_ms = 3;
+  int64 ended_at_ms = 4;
+  uint64 bytes_size = 5;
+  uint32 event_count = 6;
+  repeated string player_ids = 7;
+}
+
+message ReplayRequest {
+  string replay_id = 1;
+  uint32 chunk_index = 2;
+  uint32 chunk_size = 3;
+}
+
+message ReplayChunk {
+  string replay_id = 1;
+  uint32 chunk_index = 2;
+  uint32 total_chunks = 3;
+  bytes data = 4;
+  bool last = 5;
+}

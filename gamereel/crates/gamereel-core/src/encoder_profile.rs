@@ -47,6 +47,12 @@ impl EncoderProfile {
     /// without GPU, and the *behavior* — Fast is faster, TikTokHQ is
     /// higher quality — survives even on the software path).
     pub fn to_encoder_choice(self) -> Result<EncoderChoice, crate::error::GamereelError> {
+        // v1.5 — GAMEREEL_FORCE_SW=1 跳过 HW probe, 直接 libx264 (GPU mismatch / no GPU)
+        if std::env::var("GAMEREEL_FORCE_SW").is_ok() {
+            if ffmpeg::codec::encoder::find_by_name("libx264").is_some() {
+                return Ok(self.libx264_choice());
+            }
+        }
         // Probe what's available. Hardware path first.
         let has_nvenc = ffmpeg::codec::encoder::find_by_name("h264_nvenc").is_some();
         if has_nvenc {

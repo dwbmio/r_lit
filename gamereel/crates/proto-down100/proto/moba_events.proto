@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package titan;
+
+// ============================================================
+// MOBA 事件协议
+// ============================================================
+
+/// 技能施放 — 客户端→服务端
+message SkillCast {
+  int32 skill_slot = 1;
+  float target_x = 2;
+  float target_y = 3;
+  int64 target_entity = 4;
+}
+
+/// Buff 生效通知 — 服务端→客户端
+message BuffApplied {
+  int64 tick = 1;
+  int64 entity_id = 2;
+  int32 buff_id = 3;
+  float duration_secs = 4;
+  int32 stacks = 5;
+}
+
+/// 升级通知 — 服务端→客户端
+message LevelUp {
+  int64 tick = 1;
+  int64 entity_id = 2;
+  int32 new_level = 3;
+}
+
+/// MOBA 动作容器 — 嵌入 ActionCommand.action_data oneof
+message MobaAction {
+  oneof action {
+    SkillCast skill_cast = 1;
+  }
+}
