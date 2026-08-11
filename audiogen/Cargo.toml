@@ -1,0 +1,63 @@
+[package]
+name = "audiogen"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust game audio pipeline. Multi-format codec trait (encode-only in v1), MiniMax async submit/collect via SSH, procedural SFX synthesis."
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "audiogen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "audiogen"
+path = "src/main.rs"
+
+[[bin]]
+name = "dry_run"
+path = "src/bin/dry_run.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4.6", features = ["derive", "env"] }
+
+# Jobs file (JSON)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+# Audio — MP3 encode + multi-format decode (mp3/ogg/wav/flac/aac via symphonia)
+shine-rs = "0.1"
+symphonia = { version = "0.6", features = ["mp3", "ogg", "wav", "flac", "pcm", "aac"] }
+
+# FLAC encoder (pure Rust, lossy-free hi-fi)
+flacenc = "0.5"
+
+# SSH to VPS (pure Rust) + async runtime
+russh = "0.62"
+russh-keys = "0.50.0-beta.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+
+# Redis client (direct LPUSH/BRPOP without SSH)
+redis = { version = "1", default-features = false, features = ["tokio-comp"] }
+
+# Result payload decode
+base64 = "0.22"
+
+# Future helpers (boxed) for russh Handler trait
+futures = "0.3"
+
+# S3 client for R2 (Cloudflare S3-compatible storage)
+rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+url = "2"
+
+# SHA1 + MD5 for HFrog artifactory md5 field
+md-5 = "0.10"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

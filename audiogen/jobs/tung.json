@@ -1,0 +1,42 @@
+{
+  "game": "tung",
+  "style": "Chinese-style bubble shooter game soundtrack, playful and bright; light woodwind and pipa plucks; cheerful arcade tempo; family-friendly",
+  "voice_id": "female-shaonv",
+  "output_dir": "origin_res/tung/audio",
+  "install_dir": "tung/tung/audio",
+  "jobs": [
+    {
+      "name": "bgm_main",
+      "kind": "music",
+      "prompt": "bubble shooter main loop, cheerful and bright Chinese folk melody, guzheng pizzicato + dizi melody, mid tempo ~120 bpm, playful but focused, loopable",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 96000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_main_flac",
+      "kind": "music",
+      "prompt": "bubble shooter main loop, cheerful and bright Chinese folk melody, guzheng pizzicato + dizi melody, mid tempo ~120 bpm, playful but focused, loopable",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "sfx_pop",
+      "kind": "music",
+      "prompt": "short bubble pop, bright high-pitched 'plink' sound, ~0.1s, clean decay, no reverb",
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_shoot",
+      "kind": "music",
+      "prompt": "bubble shooter launch, rising woodwind chirp with soft thud on landing, ~0.2s, energetic",
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    }
+  ]
+}

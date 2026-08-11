@@ -1,0 +1,62 @@
+{
+  "game": "emoji",
+  "style": "casual mobile puzzle game, cheerful and bouncy; marimba / kalimba / xylophone plucks; light pizzicato; kid-friendly tone",
+  "voice_id": "female-shaonv",
+  "output_dir": "origin_res/emoji/audio",
+  "install_dir": "emoji/emoji/audio",
+  "jobs": [
+    {
+      "name": "bgm_lobby",
+      "kind": "music",
+      "prompt": "cheerful casual puzzle menu loop, marimba arpeggios + soft bells, mid tempo ~110 bpm, inviting and warm, loopable",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 96000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_lobby_flac",
+      "kind": "music",
+      "prompt": "cheerful casual puzzle menu loop, marimba arpeggios + soft bells, mid tempo ~110 bpm, inviting and warm, loopable",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "sfx_click",
+      "kind": "procedural",
+      "synth": "woodblock",
+      "duration_secs": 0.05,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    },
+    {
+      "name": "sfx_match",
+      "kind": "procedural",
+      "synth": "ding",
+      "duration_secs": 0.6,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    },
+    {
+      "name": "sfx_combo",
+      "kind": "procedural",
+      "synth": "fanfare",
+      "duration_secs": 1.0,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    },
+    {
+      "name": "sfx_clear",
+      "kind": "procedural",
+      "synth": "pluck",
+      "duration_secs": 0.4,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "game": "classroom",
+  "style": "Chinese xianxia / wuxia fantasy RPG soundtrack, traditional Chinese instruments: bamboo flute (dizi), guzheng, xiao (vertical flute), pipa, erhu; haunting and elegant; suitable for elementary-school classroom educational context; no harsh percussion; mid-low tempo for focus",
+  "voice_id": "female-shaonv",
+  "output_dir": "origin_res/classroom/audio",
+  "install_dir": "classroom/classroom/audio",
+  "jobs": [
+    {
+      "name": "bgm_lobby",
+      "kind": "music",
+      "prompt": "calm lobby music loop while waiting for a peer to join, soft guzheng arpeggios + distant xiao, mid tempo ~90 bpm, atmospheric and inviting, not sleepy",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 96000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_lobby_flac",
+      "kind": "music",
+      "prompt": "calm lobby music loop while waiting for a peer to join, soft guzheng arpeggios + distant xiao, mid tempo ~90 bpm, atmospheric and inviting, not sleepy",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "bgm_main",
+      "kind": "music",
+      "prompt": "in-game loop while the idiom chain is being built, dizi melody over light guzheng pizzicato, mid tempo ~110 bpm, focus-friendly, rhythmic but unobtrusive, slight momentum as the chain grows",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 128000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_main_flac",
+      "kind": "music",
+      "prompt": "in-game loop while the idiom chain is being built, dizi melody over light guzheng pizzicato, mid tempo ~110 bpm, focus-friendly, rhythmic but unobtrusive, slight momentum as the chain grows",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "sfx_correct",
+      "kind": "music",
+      "prompt": "triumphant short rising dizi motif, four notes ascending major scale (5-6-1-2 in solfege), bright and crisp, no percussion, ~1s",
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_wrong",
+      "kind": "music",
+      "prompt": "low gong hit 'dong', short dull thud, low pitch around 110Hz with quick decay, no melody, ~0.8s",
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_fail",
+      "kind": "music",
+      "prompt": "xiao flute descending melancholy phrase over soft low drum, three descending notes, ~1.5s, signaling the chain has broken",
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_success",
+      "kind": "music",
+      "prompt": "celebratory pipa flourish + wind chimes, ascending pentatonic phrase 1-2-3-5-6 with ringing chime overtones, ~2s, warm and positive",
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_finish",
+      "kind": "music",
+      "prompt": "triumphant xianxia victory jingle, full dizi melody over guzheng strum + cymbal swell, bright major key, climax and resolve, designed to be short (~6s) when truncated",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 96000
+    },
+    {
+      "name": "voice_hint",
+      "kind": "voice",
+      "text": "再想想看",
+      "voice_id": "female-shaonv",
+      "speed": 0.95,
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_click",
+      "kind": "procedural",
+      "synth": "woodblock",
+      "duration_secs": 0.05,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    },
+    {
+      "name": "sfx_chain",
+      "kind": "procedural",
+      "synth": "pluck",
+      "duration_secs": 0.3,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 64000
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "game": "racing",
+  "style": "retro arcade racing video game soundtrack, synthwave chiptune fusion, driving energy, catchy melodic hook, clean loopable",
+  "voice_id": "male-qn-jingying",
+  "output_dir": "origin_res/racing/audio",
+  "install_dir": "racing/racing/audio",
+  "jobs": [
+    {
+      "name": "bgm_menu",
+      "kind": "music",
+      "prompt": "relaxed yet upbeat main menu loop, mid tempo around 110 bpm, warm inviting, anticipation before the race",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 64000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_menu_flac",
+      "kind": "music",
+      "prompt": "relaxed yet upbeat main menu loop, mid tempo around 110 bpm, warm inviting, anticipation before the race",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "bgm_race",
+      "kind": "music",
+      "prompt": "high energy fast-paced in-race loop, fast tempo around 150 bpm, adrenaline, pounding drums, forward momentum",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 128000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_race_flac",
+      "kind": "music",
+      "prompt": "high energy fast-paced in-race loop, fast tempo around 150 bpm, adrenaline, pounding drums, forward momentum",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "bgm_victory",
+      "kind": "music",
+      "prompt": "triumphant celebratory victory fanfare, bright major key, fireworks finale energy",
+      "sample_rate": 32000,
+      "channels": 2,
+      "bitrate": 64000,
+      "format": "mp3"
+    },
+    {
+      "name": "bgm_victory_flac",
+      "kind": "music",
+      "prompt": "triumphant celebratory victory fanfare, bright major key, fireworks finale energy",
+      "sample_rate": 44100,
+      "channels": 2,
+      "format": "flac"
+    },
+    {
+      "name": "voice_countdown",
+      "kind": "voice",
+      "text": "Three. Two. One. Go!",
+      "voice_id": "male-qn-jingying",
+      "speed": 1.05,
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "voice_finish",
+      "kind": "voice",
+      "text": "Finish!",
+      "voice_id": "male-qn-jingying",
+      "speed": 1.0,
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "voice_newrecord",
+      "kind": "voice",
+      "text": "New record!",
+      "voice_id": "male-qn-jingying",
+      "speed": 1.0,
+      "sample_rate": 24000,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_engine",
+      "kind": "procedural",
+      "synth": "engine",
+      "duration_secs": 2.0,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_accel",
+      "kind": "procedural",
+      "synth": "accel",
+      "duration_secs": 1.2,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_skid",
+      "kind": "procedural",
+      "synth": "skid",
+      "duration_secs": 0.9,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_crash",
+      "kind": "procedural",
+      "synth": "crash",
+      "duration_secs": 0.6,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    },
+    {
+      "name": "sfx_explode",
+      "kind": "procedural",
+      "synth": "explode",
+      "duration_secs": 1.0,
+      "sample_rate": 22050,
+      "channels": 1,
+      "bitrate": 32000
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "game": "_tencent_demo",
+  "style": "test",
+  "output_dir": "/tmp/audiogen_tencent_demo",
+  "install_dir": "",
+  "jobs": [
+    {
+      "name": "demo_tone",
+      "kind": "music",
+      "prompt": "test tone, will not actually run AI",
+      "sample_rate": 32000,
+      "channels": 1,
+      "bitrate": 64000
+    }
+  ]
+}
