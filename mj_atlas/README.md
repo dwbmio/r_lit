@@ -162,7 +162,7 @@ JSON output (`--json`) is available on every subcommand for CI / dashboards.
 
 ## hfrog Cloud Drive (optional)
 
-mj_atlas can use an [hfrog](https://github.com/dingcode-icu/hfrog) artifact registry as a "cloud drive": every saved project / exported atlas / refreshed manifest gets mirrored, AND the GUI's Welcome screen lists projects from hfrog merged with local recents. Disabled by default; opt-in via `~/.config/mj_atlas/config.toml`:
+mj_atlas can use an [hfrog](https://github.com/dingcode-cc/hfrog) artifact registry as a "cloud drive": every saved project / exported atlas / refreshed manifest gets mirrored, AND the GUI's Welcome screen lists projects from hfrog merged with local recents. Disabled by default; opt-in via `~/.config/mj_atlas/config.toml`:
 
 ```toml
 [hfrog]

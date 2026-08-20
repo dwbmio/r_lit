@@ -1,6 +1,6 @@
 # hfrog Mirror
 
-Optional integration that pushes a copy of every saved project, exported atlas, and refreshed manifest to an [hfrog](https://github.com/dingcode-icu/hfrog) artifact registry. Enabled per-user via `~/.config/mj_atlas/config.toml`; disabled by default — local saves and packs work identically with or without hfrog.
+Optional integration that pushes a copy of every saved project, exported atlas, and refreshed manifest to an [hfrog](https://github.com/dingcode-cc/hfrog) artifact registry. Enabled per-user via `~/.config/mj_atlas/config.toml`; disabled by default — local saves and packs work identically with or without hfrog.
 
 ## What gets uploaded
 

@@ -162,7 +162,7 @@ mj_atlas tag ./out/atlas.png hero_idle.png --add hero,idle --set-source-url http
 
 ## hfrog 云盘（可选）
 
-mj_atlas 可以把 [hfrog](https://github.com/dingcode-icu/hfrog) 制品仓库当**云盘**用：每次保存项目 / 导出 atlas / 刷新 manifest 都会同步推一份到 hfrog；同时 GUI 欢迎页会把 hfrog 上的项目跟本地最近项目**合并展示**。默认关闭，需要在 `~/.config/mj_atlas/config.toml` 里手动启用：
+mj_atlas 可以把 [hfrog](https://github.com/dingcode-cc/hfrog) 制品仓库当**云盘**用：每次保存项目 / 导出 atlas / 刷新 manifest 都会同步推一份到 hfrog；同时 GUI 欢迎页会把 hfrog 上的项目跟本地最近项目**合并展示**。默认关闭，需要在 `~/.config/mj_atlas/config.toml` 里手动启用：
 
 ```toml
 [hfrog]
