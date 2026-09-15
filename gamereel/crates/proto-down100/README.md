@@ -61,11 +61,11 @@ assets::write_assets(tmp.path(), &trans.room_id, &trans.player_ids)?;
 
 | ReplayEventKind                  | msg_id | proto Message                       |
 |----------------------------------|--------|-------------------------------------|
-| REPLAY_DOWN100_SNAPSHOT     = 10 | 306    | `titan.down100.Down100Snapshot`     |
-| REPLAY_DOWN100_EVENT        = 11 | 307    | `titan.down100.Down100Event`        |
-| REPLAY_DOWN100_REMOTE_INPUT = 12 | 309    | `titan.down100.Down100RemoteInput`  |
-| REPLAY_DOWN100_INPUT_RAW    = 13 | 301    | `titan.down100.Down100Input`        |
-| REPLAY_DOWN100_ROSTER       = 14 | 90     | `titan.PlayerRoster`                |
+| REPLAY_DOWN100_SNAPSHOT     = 10 | 7006    | `titan.down100.Down100Snapshot`     |
+| REPLAY_DOWN100_EVENT        = 11 | 7007    | `titan.down100.Down100Event`        |
+| REPLAY_DOWN100_REMOTE_INPUT = 12 | 7009    | `titan.down100.Down100RemoteInput`  |
+| REPLAY_DOWN100_INPUT_RAW    = 13 | 7001    | `titan.down100.Down100Input`        |
+| REPLAY_DOWN100_ROSTER       = 14 | 400     | `titan.PlayerRoster`                |
 
 ## 为什么不实现 `ProtocolParser` trait?
 

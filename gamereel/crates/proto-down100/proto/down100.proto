@@ -39,6 +39,9 @@ message Down100StartRequest {
   // pending_disconnect grace 窗口内会按这个 id 找回原房间, 重发 snapshot + 把这条
   // 连接重新关联到该玩家的 outgoing channel. 空字符串 = 走正常匹配开新局 (V0 行为).
   string resume_player_id = 2;
+  // 玩家地理赛区 id (cn-*, 如 "cn-gd"): 客户端显式下发用 (平台来源/dev override)。
+  // 空串 = 服务端按连接 IP 推断 (ip2region, 与抖音 IP 属地同原理), 再兜底 cn-unknown。
+  string region_id = 3;
 }
 
 message Down100Input {
@@ -115,6 +118,10 @@ message Down100Snapshot {
   uint32 server_tick_rate_hz = 10;
   uint32 solo_snapshot_hz = 11;
   uint32 coop_snapshot_hz = 12;
+  // 常量下发: 该房是否"游戏过程中继续匹配"(join-in-progress)。
+  // 由服务端 [matchmaking].join_in_progress 全局开关决定 (titan-forge room 填充)。
+  // proto3 默认 false, 老客户端忽略即可。
+  bool join_in_progress = 13;
 }
 
 message Down100Event {

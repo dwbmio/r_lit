@@ -218,7 +218,7 @@ message JoinRoomResponse {
 }
 
 // (legacy) 跨玩法旧版玩家显示信息 — 仅 ECS 房间 JoinRoomResponse 使用。
-// v1.4.0+ 新代码请用 PlayerProfile / PlayerRoster (msg_id=90, 跨所有玩法).
+// v1.4.0+ 新代码请用 PlayerProfile / PlayerRoster (msg_id=400, 跨所有玩法).
 message PlayerInfo {
   option deprecated = true;
   string player_id = 1;

@@ -42,11 +42,18 @@ enum ReplayEventKind {
   REPLAY_GAME_OVER = 6;
 
   // ── v1.5.0 down100 旁路广播帧 (一 msg_id 一 kind) ──
-  REPLAY_DOWN100_SNAPSHOT     = 10;  // msg_id 306 — Down100Snapshot
-  REPLAY_DOWN100_EVENT        = 11;  // msg_id 307 — Down100Event
-  REPLAY_DOWN100_REMOTE_INPUT = 12;  // msg_id 309 — Down100RemoteInput
-  REPLAY_DOWN100_INPUT_RAW    = 13;  // msg_id 301 — Down100Input (备用对账)
-  REPLAY_DOWN100_ROSTER       = 14;  // msg_id  90 — PlayerRoster
+  REPLAY_DOWN100_SNAPSHOT     = 10;  // msg_id 7006 — Down100Snapshot
+  REPLAY_DOWN100_EVENT        = 11;  // msg_id 7007 — Down100Event
+  REPLAY_DOWN100_REMOTE_INPUT = 12;  // msg_id 7009 — Down100RemoteInput
+  REPLAY_DOWN100_INPUT_RAW    = 13;  // msg_id 7001 — Down100Input (备用对账)
+  REPLAY_DOWN100_ROSTER       = 14;  // msg_id  400 — PlayerRoster
+
+  // ── v1.6.0 classroom 旁路广播帧 (一 msg_id 一 kind) ──
+  REPLAY_CLASSROOM_SNAPSHOT     = 20;  // msg_id 3006 — ClassroomSnapshot (广播)
+  REPLAY_CLASSROOM_EVENT        = 21;  // msg_id 3005 — ClassroomEvent (广播)
+  REPLAY_CLASSROOM_CREATE_RESP  = 22;  // msg_id 3001 — ClassroomCreateResponse (建房成功, 单播)
+  REPLAY_CLASSROOM_JOIN_RESP    = 23;  // msg_id 3003 — ClassroomJoinResponse (加入成功/失败, 单播)
+  REPLAY_CLASSROOM_COMMAND      = 24;  // msg_id 3004 — ClassroomCommand (ready/load_done/start/leave 上行)
 }
 
 // 录像文件头 (序列化在 zstd_blob 起始)
