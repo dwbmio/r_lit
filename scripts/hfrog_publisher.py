@@ -256,6 +256,7 @@ def sync_hfrog_records(client: HfrogClient, *,
                         source_type: str,
                         release_notes: str, created_by: str,
                         assets_with_checksum: list[tuple[str, Path, str, int, str]],
+                        git_commit: str = "", jenkins_url: str = "",
                         ) -> bool:
     """Push the four hfrog API records. Returns True on full success."""
     ok = True
@@ -288,6 +289,7 @@ def sync_hfrog_records(client: HfrogClient, *,
         "is_latest": True,
         "release_notes": release_notes,
         "created_by": created_by,
+        **({"git_commit": git_commit} if git_commit else {}),
     })[0]
 
     for target, _, download_url, file_size, checksum in assets_with_checksum:
@@ -299,6 +301,8 @@ def sync_hfrog_records(client: HfrogClient, *,
             "file_size": file_size,
             "checksum_sha256": checksum,
             "source_type": source_type,
+            **({"git_commit": git_commit} if git_commit else {}),
+            **({"jenkins_url": jenkins_url} if jenkins_url else {}),
         })[0]
 
     return ok
@@ -408,6 +412,7 @@ def cmd_publish(args) -> int:
         release_notes=args.release_notes or f"{args.tool} {version_v}",
         created_by=args.created_by,
         assets_with_checksum=enriched,
+        git_commit=args.git_commit, jenkins_url=args.jenkins_url,
     )
 
     # 4. SQL patch (optional, e.g. category_id, llms_txt, readme_url)
@@ -470,6 +475,10 @@ def _add_metadata_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--install-command",    default="")
     p.add_argument("--install-script-url", default="")
     p.add_argument("--readme-url",         default="")
+    p.add_argument("--git-commit",         default="",
+                   help="CI 溯源：构建 git commit（Jenkins $GIT_COMMIT）")
+    p.add_argument("--jenkins-url",        default="",
+                   help="CI 溯源：构建链接（Jenkins $BUILD_URL）")
     p.add_argument("--llms-txt-url",       default="")
 
 
