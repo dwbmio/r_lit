@@ -1,7 +1,7 @@
 # mj_atlas — 游戏级纹理图集打包工具
 
 - 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据；manifest 是一等公民，可 inspect / diff / verify / tag
-- 版本: 0.6.0
+- 版本: 0.6.1
 - 语言: Rust
 - 二进制名: mj_atlas
 - 许可证: MIT（imagequant/quantize 功能为 GPL-3.0）
