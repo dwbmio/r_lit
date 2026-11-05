@@ -6,15 +6,48 @@ mod font;
 mod render;
 mod runlog;
 
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
+use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::path::PathBuf;
+
+/// Machine-call annotations for `__schema` (see `docs/cli-contract.md`).
+static CONTRACT: Contract = Contract {
+    tool: env!("CARGO_PKG_NAME"),
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("render", Effects::LocalWrite)
+            .io(&[("output", Io::OutputFile)])
+            .note("Writes one PNG (+ <output>.log). Output is reproducible when --font is a .ttf/.otf path; a family name resolves against fonts installed on the machine. List effect specs with `textexture list-effects --json`."),
+        CommandSpec::new("bmfont", Effects::LocalWrite)
+            .io(&[("output", Io::OutputStem)])
+            .note("Writes <output>.fnt + <output>.png (BMFont text format, page 0). Same font-resolution caveat as render."),
+        CommandSpec::new("list-effects", Effects::ReadOnly),
+        CommandSpec::new("list-fonts", Effects::ReadOnly).note("Lists fonts installed on this machine; results differ per host."),
+    ],
+};
 
 /// Generate stylized text images with visual effects
 /// 生成带视觉效果的艺术字图片
-#[derive(Parser)]
-#[command(name = "textexture", version, about, long_about = None)]
+#[derive(clap::Parser)]
+#[command(
+    name = "textexture",
+    version,
+    about,
+    long_about = "Generate stylized art-text PNGs and BMFont bitmap fonts \
+        (shadow / stroke / gradient / glow / neon).\n\
+        生成带视觉效果的艺术字图片与 BMFont 位图字体。\n\n\
+        Examples:\n  \
+        textexture render \"Level Up\" -o title.png -s 96 -e outline:color=#000000,width=4 -e glow:color=#ffcc00,radius=12\n  \
+        textexture render \"胜利\" -f ./fonts/zcool.ttf --transparent -o win.png --json\n  \
+        textexture bmfont \"0123456789\" -o digits -e gradient:start=#ffffff,end=#ffcc00,angle=90\n  \
+        textexture list-effects --json",
+    after_help = "Machine-readable output (r_lit CLI contract v1):\n  \
+        --json works on every subcommand; stdout is one envelope {ok, tool, version, command, data, artifacts, error}.\n  \
+        Exit codes: 0 ok, 1 runtime, 2 usage (bad color / effect spec), 3 input (font not found).\n  \
+        `textexture __schema` prints a JSON Schema for every subcommand."
+)]
 struct Cli {
-    /// Output in JSON format / JSON 格式输出
+    /// Print one machine-readable JSON envelope to stdout / JSON 信封输出
     #[arg(long, global = true)]
     json: bool,
 
@@ -68,7 +101,10 @@ enum Commands {
         #[arg(long, default_value_t = 40)]
         padding: u32,
 
-        /// Effect spec, repeatable: name:key=val,key=val / 效果规格，可重复
+        /// Effect spec, repeatable: name:key=val,key=val / 效果规格，可重复.
+        /// Effects: shadow(color,ox,oy,blur) outline(color,width)
+        /// gradient(start,end,angle) glow(color,radius) neon(color,radius)
+        /// grain(amount,seed,scale). See `list-effects --json`.
         #[arg(short, long = "effect")]
         effects: Vec<String>,
     },
@@ -98,7 +134,8 @@ enum Commands {
         #[arg(long, default_value_t = 12)]
         padding: u32,
 
-        /// Effect spec, repeatable: name:key=val,... / 效果规格，可重复
+        /// Effect spec, repeatable: name:key=val,... / 效果规格，可重复.
+        /// Same specs as `render -e` (see `list-effects --json`).
         #[arg(short, long = "effect")]
         effects: Vec<String>,
     },
@@ -130,7 +167,7 @@ fn log_target(command: &Commands) -> Option<PathBuf> {
 async fn main() {
     runlog::init();
 
-    let cli = Cli::parse();
+    let cli: Cli = CONTRACT.parse();
     let log_target = log_target(&cli.command);
 
     let result = run(&cli).await;
@@ -138,21 +175,20 @@ async fn main() {
     // Flush the buffered run log next to the produced artifact (errors too).
     if let Some(path) = &log_target {
         runlog::flush(path, &runlog::standard_header());
+        rlit_cli::add_artifact(path, "log");
     }
 
-    match result {
-        Ok(()) => {}
-        Err(e) => {
-            if cli.json {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"status": "error", "error": format!("{}", e)})
-                );
-            } else {
-                log::error!("{}", e);
-            }
-            std::process::exit(1);
-        }
+    rlit_cli::finish(result, error_kind);
+}
+
+/// Map errors onto the contract's exit-code classes.
+fn error_kind(e: &error::AppError) -> ErrorKind {
+    use error::AppError as E;
+    match e {
+        E::Io(io) => rlit_cli::io_error_kind(io),
+        E::FontNotFound(_) | E::FontLoad(_) | E::Image(_) => ErrorKind::Input,
+        E::ColorParse(_) | E::UnknownEffect(_) | E::InvalidEffectParam(_) => ErrorKind::Usage,
+        E::Render(_) | E::PngEncode(_) => ErrorKind::Runtime,
     }
 }
 
@@ -211,7 +247,7 @@ async fn run(cli: &Cli) -> error::Result<()> {
         Commands::ListEffects => {
             let effects = effect::list_effects();
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&effects)?);
+                rlit_cli::set_data(&effects);
             } else {
                 for e in &effects {
                     println!("  {} — {}", e.name, e.description);
@@ -221,7 +257,7 @@ async fn run(cli: &Cli) -> error::Result<()> {
         Commands::ListFonts { search } => {
             let fonts = font::list_fonts(search.as_deref());
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&fonts)?);
+                rlit_cli::set_data(&fonts);
             } else {
                 for f in &fonts {
                     println!("  {} ({})", f.family, f.style);
@@ -236,5 +272,18 @@ async fn run(cli: &Cli) -> error::Result<()> {
 impl From<serde_json::Error> for error::AppError {
     fn from(e: serde_json::Error) -> Self {
         error::AppError::Render(format!("JSON serialization error: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every subcommand/arg must carry help text and a machine-call spec.
+    #[test]
+    fn cli_contract_is_complete() {
+        let problems = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(problems.is_empty(), "contract problems:\n{}", problems.join("\n"));
     }
 }

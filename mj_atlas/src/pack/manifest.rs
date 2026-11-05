@@ -132,7 +132,7 @@ impl Manifest {
         }
         let content = std::fs::read_to_string(path)?;
         let manifest: Self = serde_json::from_str(&content)
-            .map_err(|e| AppError::Custom(format!("manifest parse error: {}", e)))?;
+            .map_err(|e| AppError::Input(format!("manifest parse error: {}", e)))?;
         if manifest.version != MANIFEST_VERSION {
             log::warn!(
                 "manifest version mismatch (file={}, expected={}); ignoring cache",
@@ -493,12 +493,12 @@ pub fn resolve_manifest_path(input: &Path) -> Result<PathBuf> {
             }
         }
         return match hits.len() {
-            0 => Err(AppError::Custom(format!(
+            0 => Err(AppError::Input(format!(
                 "no `*.manifest.json` found in directory {}",
                 input.display()
             ))),
             1 => Ok(hits.pop().unwrap()),
-            n => Err(AppError::Custom(format!(
+            n => Err(AppError::Input(format!(
                 "{n} manifests in {} — pass an exact path",
                 input.display()
             ))),
@@ -527,7 +527,7 @@ pub fn resolve_manifest_path(input: &Path) -> Result<PathBuf> {
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::Custom(format!("invalid path: {}", input.display())))?;
+        .ok_or_else(|| AppError::Input(format!("invalid path: {}", input.display())))?;
 
     let direct = parent.join(format!("{}.manifest.json", stem));
     if direct.is_file() {
@@ -542,7 +542,7 @@ pub fn resolve_manifest_path(input: &Path) -> Result<PathBuf> {
         }
     }
 
-    Err(AppError::Custom(format!(
+    Err(AppError::Input(format!(
         "no manifest sidecar for {} (looked for {}.manifest.json next to it)",
         input.display(),
         stem

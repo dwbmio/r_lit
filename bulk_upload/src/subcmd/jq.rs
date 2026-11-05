@@ -18,18 +18,34 @@ struct S3Config {
     region: String,
 }
 
-/// 从 .s3 dotenv 文件中加载配置
-fn load_s3_config(path: &Path) -> Result<S3Config, AppError> {
-    let content = std::fs::read_to_string(path)?;
-    let mut map = HashMap::new();
+/// Environment variables accepted in place of a `.s3` file.
+pub const S3_ENV_KEYS: &[&str] = &["S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_REGION"];
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+/// 加载 S3 配置：给了 `.s3` dotenv 文件就读文件，否则读同名环境变量
+/// (S3_BUCKET / S3_ACCESS_KEY / S3_SECRET_KEY / S3_ENDPOINT / S3_REGION)。
+fn load_s3_config(path: Option<&Path>) -> Result<S3Config, AppError> {
+    let mut map = HashMap::new();
+    match path {
+        Some(path) => {
+            let content = std::fs::read_to_string(path).map_err(|e| {
+                AppError::S3ConfigError(format!("无法读取 .s3 配置文件 {}: {}", path.display(), e))
+            })?;
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    map.insert(key.trim().to_string(), value.trim().to_string());
+                }
+            }
         }
-        if let Some((key, value)) = line.split_once('=') {
-            map.insert(key.trim().to_string(), value.trim().to_string());
+        None => {
+            for key in S3_ENV_KEYS {
+                if let Ok(v) = std::env::var(key) {
+                    map.insert(key.to_string(), v);
+                }
+            }
         }
     }
 
@@ -37,7 +53,12 @@ fn load_s3_config(path: &Path) -> Result<S3Config, AppError> {
         map.get(key)
             .filter(|v| !v.is_empty())
             .cloned()
-            .ok_or_else(|| AppError::S3ConfigError(format!(".s3 文件缺少必需字段: {}", key)))
+            .ok_or_else(|| {
+                AppError::S3ConfigError(format!(
+                    "缺少必需字段 {} (missing {} in .s3 file or environment)",
+                    key, key
+                ))
+            })
     };
 
     let region = map
@@ -78,15 +99,6 @@ fn extract_urls(value: &serde_json::Value, urls: &mut Vec<String>) {
 }
 
 #[derive(Serialize)]
-struct BatchResult {
-    batch: usize,
-    total_batches: usize,
-    success: usize,
-    failed: usize,
-    files: Vec<FileResult>,
-}
-
-#[derive(Serialize)]
 struct FileResult {
     source_url: String,
     s3_key: String,
@@ -97,16 +109,18 @@ struct FileResult {
 
 #[derive(Serialize)]
 struct FinalSummary {
+    bucket: String,
     total_urls: usize,
     total_success: usize,
     total_failed: usize,
     batches: usize,
+    files: Vec<FileResult>,
 }
 
 /// 接收 JSON 文本，提取所有 URL，分批并发下载后上传到 S3
 pub async fn exec(
     json_text: &str,
-    s3_config_path: &Path,
+    s3_config_path: Option<&Path>,
     prefix: &str,
     concurrency: usize,
     json_output: bool,
@@ -133,6 +147,15 @@ pub async fn exec(
 
     if urls.is_empty() {
         log::warn!("JSON 文件中无 URL，跳过");
+        rlit_cli::warn("no http(s) URL found in the JSON input");
+        rlit_cli::set_data(FinalSummary {
+            bucket: cfg.bucket.clone(),
+            total_urls: 0,
+            total_success: 0,
+            total_failed: 0,
+            batches: 0,
+            files: Vec::new(),
+        });
         return Ok(());
     }
 
@@ -145,6 +168,7 @@ pub async fn exec(
     let total_batches = urls.len().div_ceil(concurrency);
     let mut total_success = 0;
     let mut total_failed = 0;
+    let mut all_files: Vec<FileResult> = Vec::new();
 
     for (batch_idx, chunk) in urls.chunks(concurrency).enumerate() {
         if !json_output {
@@ -205,7 +229,8 @@ pub async fn exec(
         let upload_results = join_all(upload_futures).await;
 
         let mut success_count = 0;
-        let mut fail_count = 0;
+        // Download failures were pushed above; count them too.
+        let mut fail_count = file_results.len();
 
         for (i, result) in upload_results.into_iter().enumerate() {
             let (url, s3_key) = &url_key_pairs[i];
@@ -237,16 +262,8 @@ pub async fn exec(
         total_success += success_count;
         total_failed += fail_count;
 
-        if json_output {
-            let batch_result = BatchResult {
-                batch: batch_idx + 1,
-                total_batches,
-                success: success_count,
-                failed: fail_count,
-                files: file_results,
-            };
-            println!("{}", serde_json::to_string(&batch_result)?);
-        } else {
+        all_files.extend(file_results);
+        if !json_output {
             log::info!(
                 "批次 {}/{} 完成: {} 成功, {} 失败",
                 batch_idx + 1,
@@ -257,21 +274,31 @@ pub async fn exec(
         }
     }
 
-    if json_output {
-        let summary = FinalSummary {
-            total_urls: urls.len(),
-            total_success,
-            total_failed,
-            batches: total_batches,
+    log::info!(
+        "全部处理完成: {} 成功, {} 失败",
+        total_success,
+        total_failed
+    );
+    if total_failed > 0 {
+        // Some uploads landed → partial (exit 5); none did → external (exit 4).
+        let kind = if total_success > 0 {
+            rlit_cli::ErrorKind::Partial
+        } else {
+            rlit_cli::ErrorKind::External
         };
-        println!("{}", serde_json::to_string(&summary)?);
-    } else {
-        log::info!(
-            "全部处理完成: {} 成功, {} 失败",
-            total_success,
-            total_failed
+        rlit_cli::set_failure(
+            kind,
+            format!("{} of {} URL(s) failed", total_failed, urls.len()),
         );
     }
+    rlit_cli::set_data(FinalSummary {
+        bucket: cfg.bucket.clone(),
+        total_urls: urls.len(),
+        total_success,
+        total_failed,
+        batches: total_batches,
+        files: all_files,
+    });
     Ok(())
 }
 

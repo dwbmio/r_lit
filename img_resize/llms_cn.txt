@@ -1,7 +1,7 @@
 # img_resize — 图片缩放压缩 CLI
 
 - 用途: 图片缩放与压缩（PNG/JPG/WebP/BMP/GIF/TIFF），纯 Rust 实现，无网络依赖
-- 版本: 0.2.0
+- 版本: 0.3.0
 - 语言: Rust
 - 类型: CLI 二进制
 - 支持格式: PNG, JPEG, WebP, BMP, GIF, TIFF（输入）；PNG, JPEG（输出）
@@ -9,7 +9,7 @@
 ## 命令格式
 
 ```
-img_resize [--json] r_resize <PATH> [选项]
+img_resize r_resize <PATH> [-o <DIR>] [选项] [--json]
 ```
 
 ## 参数
@@ -18,9 +18,10 @@ img_resize [--json] r_resize <PATH> [选项]
 - `-m, --max-pixel <SIZE>`: 最大边像素值，等比缩放（保持宽高比）
 - `--rw <WIDTH>`: 精确宽度（必须配合 --rh）
 - `--rh <HEIGHT>`: 精确高度（必须配合 --rw）
-- `-c, --config <FILE>`: YAML 配置文件，批量生成多尺寸
-- `-j`: 强制输出为 JPG
-- `--json`: 结构化 JSON 输出（全局标志）
+- `-o, --out-dir <DIR>`: 结果写到 DIR，不覆盖输入（目录输入按文件名平铺），不可与 -c 同用
+- `-c, --resize-config <FILE>`: YAML 配置文件，批量生成多尺寸（固定 PNG，路径取自 YAML）
+- `-j, --force-jpg`: 转成 JPG（质量 100），不做缩放
+- `--json`: stdout 输出一个 JSON envelope（全局标志，位置任意）
 
 ## 缩放模式（互斥）
 
@@ -65,12 +66,24 @@ img_resize r_resize -c sizes.yaml image.png
 ## 备注
 
 - 目录处理: 递归查找图片文件，跳过隐藏目录
-- 输出: 默认覆盖原文件（等比/精确模式）
-- `tinyfy` 子命令已禁用（OpenSSL/musl 不兼容）
-- 退出码: 0 成功，1 错误
+- 输出: 默认覆盖原文件（等比/精确模式）；传 `-o/--out-dir` 可保留原文件
+- 用 -m 时已在限制内的图片不处理（status 为 "unchanged"；给了 -o 会复制过去）
+- `tinyfy` 子命令已禁用并隐藏（OpenSSL/musl 不兼容）
+- JSON data: {total, failed, results:[{file, output, status: success|unchanged|converted|skipped|failed, original_size, new_size, error}]}
+- 退出码: 见「机器调用契约」（5 = 部分文件失败）
 
 ## 构建
 
 ```bash
 cd img_resize && cargo build --release
 ```
+
+## 机器调用契约 (r_lit CLI contract v1)
+
+- 规范: 仓库根 docs/cli-contract.md；实现: crates/rlit_cli
+- JSON: `--json` 为全局参数；stdout 只输出一个 JSON envelope（失败也是）；日志走 stderr
+- envelope: {"contract":1, "ok", "tool":"img_resize", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- 退出码: 0 成功, 1 运行时错误, 2 参数错误, 3 输入错误, 4 外部服务失败, 5 部分失败（ok=false，data 仍完整）
+- schema: `img_resize __schema` 输出每个子命令的 JSON Schema (draft 2020-12)，含 x-cli（argv 还原、io 角色）、x-effects、x-env、x-stdin、x-note
+- 非交互: 不会弹任何提示
+- 副作用: r_resize=pure（只写声明的输出；不带 --out-dir 时原地覆盖）

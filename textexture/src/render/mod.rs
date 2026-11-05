@@ -207,17 +207,14 @@ pub fn execute(opts: &RenderOpts) -> Result<()> {
     let png_data = pixmap.encode_png()
         .map_err(|e| AppError::PngEncode(e.to_string()))?;
     std::fs::write(&opts.output, &png_data)?;
+    rlit_cli::add_artifact(&opts.output, "image");
 
     if opts.json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "ok",
-                "output": opts.output,
-                "width": img_w,
-                "height": img_h
-            })
-        );
+        rlit_cli::set_data(serde_json::json!({
+            "output": opts.output,
+            "width": img_w,
+            "height": img_h
+        }));
     } else {
         info!("Written {} ({}x{})", opts.output, img_w, img_h);
     }

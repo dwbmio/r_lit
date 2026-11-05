@@ -1,7 +1,7 @@
 # mj_atlas — Game-Ready Texture Atlas Packer
 
 - purpose: Pack sprite images into optimized texture atlases with metadata for game engines; manifest is a first-class artifact you can inspect / diff / verify / tag
-- version: 0.3.0
+- version: 0.6.0
 - language: Rust
 - binary: mj_atlas
 - license: MIT (imagequant/quantize feature is GPL-3.0)
@@ -22,7 +22,7 @@ cd mj_atlas && cargo build --release --features gui  # CLI + GUI
 
 ## Global Flags
 
-- `--json`: Machine-readable JSON output on stdout (all subcommands)
+- `--json`: One JSON envelope on stdout for every subcommand, including failures (see Machine Call Contract)
 
 ## Subcommands
 
@@ -66,8 +66,10 @@ mj_atlas pack <INPUT_DIR> [OPTIONS]
 - `--quantize-quality <1-100>`: Quantization quality (default: 85). Lower = smaller, more artifacts.
 - `--incremental`: Enable incremental packing. Reads `<output>.manifest.json` sidecar and picks the cheapest path: full-skip (no changes) / partial repack (small changes) / full repack (layout-breaking changes). **Guarantees UV stability** — every unchanged sprite keeps its exact `(x, y, rotated)` across runs. Already-deployed clients can drop in a new atlas PNG without rebaking UVs.
 - `--force`: With --incremental, ignore the manifest and force a full repack. Useful for verifying determinism.
+- `--recursive <BOOL>`: Scan subdirectories (default: true). `--recursive false` reads only the top level.
+- `--no-mirror` (env `MJ_ATLAS_NO_MIRROR=1`): Skip the hfrog artifact mirror. The default config mirrors every pack to hfrog (network); sandboxed / automated runs should pass this.
 
-#### JSON Output (--json)
+#### JSON Output (--json) — envelope `data`
 
 ```json
 {
@@ -91,11 +93,16 @@ mj_atlas pack <INPUT_DIR> [OPTIONS]
 
 `cached_atlases` counts atlases reused from cache. `skipped: true` means no atlas was rewritten (every atlas was a cache hit). `from_cache: true` on a file means its bytes are unchanged on disk.
 
+`artifacts` lists atlas PNG(s), metadata, `<output>.manifest.json` and `<output>.log` with sha256.
+
 #### Error Output (--json)
 
 ```json
-{"status": "error", "error": "No images found in: ./empty_dir"}
+{"contract": 1, "ok": false, "tool": "mj_atlas", "command": "pack", "data": null, "artifacts": [],
+ "error": {"code": "input", "kind": "input", "message": "No images found in: ./empty_dir"}}
 ```
+
+Exit 3 (`input`): missing/undecodable inputs or manifest; exit 2 (`usage`): bad flags.
 
 ### inspect (v0.3+)
 
@@ -123,7 +130,7 @@ mj_atlas diff <A> <B> [--json]
 
 ### verify (v0.3+)
 
-Rehash on-disk atlas PNGs and (optionally) sprite source files; non-zero exit on mismatch.
+Rehash on-disk atlas PNGs and (optionally) sprite source files. On mismatch: exit 3, `error.code = "verify_failed"`, issue list in `data`.
 
 ```
 mj_atlas verify <ATLAS_OR_MANIFEST> [--check-sources] [--json]
@@ -379,3 +386,13 @@ The GUI does not currently persist `incremental`, `polygon_shape`, or `max_verti
 
 - 0: Success
 - 1: Error (message on stderr, or JSON on stderr with --json)
+
+## Machine Call Contract (r_lit CLI contract v1)
+
+- spec: docs/cli-contract.md (repo root); implementation: crates/rlit_cli
+- json: `--json` is global; stdout carries exactly one JSON envelope, also on failure; logs go to stderr
+- envelope: {"contract":1, "ok", "tool":"mj_atlas", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
+- schema: `mj_atlas __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
+- non_interactive: never prompts
+- effects: pack=external (hfrog mirror; pure with --no-mirror), formats/inspect/diff/verify=read-only, tag=local-write (edits manifest in place unless --list)

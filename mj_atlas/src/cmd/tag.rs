@@ -44,13 +44,13 @@ impl TagOps {
 pub fn run(input: &Path, sprite: Option<&str>, ops: TagOps, json: bool) -> Result<()> {
     let manifest_path = manifest::resolve_manifest_path(input)?;
     let mut m = Manifest::try_load(&manifest_path)?
-        .ok_or_else(|| AppError::Custom(format!("{} not loadable", manifest_path.display())))?;
+        .ok_or_else(|| AppError::Input(format!("{} not loadable", manifest_path.display())))?;
 
     // Resolve which sprites we're operating on.
     let target_names: Vec<String> = match sprite {
         Some(name) => {
             if !m.sprites.contains_key(name) {
-                return Err(AppError::Custom(format!(
+                return Err(AppError::Input(format!(
                     "no sprite named '{}' in manifest (run `mj_atlas inspect` to see the list)",
                     name
                 )));
@@ -81,10 +81,7 @@ pub fn run(input: &Path, sprite: Option<&str>, ops: TagOps, json: bool) -> Resul
     m.save(&manifest_path)?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&summary.to_json(&manifest_path))?
-        );
+        rlit_cli::set_data(summary.to_json(&manifest_path));
     } else {
         summary.print_human(&manifest_path);
     }
@@ -253,10 +250,7 @@ fn print_list_json(m: &Manifest, names: &[String]) -> Result<()> {
             })
         })
         .collect();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({"sprites": entries}))?
-    );
+    rlit_cli::set_data(serde_json::json!({"sprites": entries}));
     Ok(())
 }
 

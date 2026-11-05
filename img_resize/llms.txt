@@ -1,7 +1,7 @@
 # img_resize — Image Resize & Compress CLI
 
 - purpose: Resize and compress images (PNG/JPG/WebP/BMP/GIF/TIFF). Pure Rust, no network deps.
-- version: 0.2.0
+- version: 0.3.0
 - language: Rust
 - type: CLI binary
 - supported-formats: PNG, JPEG, WebP, BMP, GIF, TIFF (input); PNG, JPEG (output)
@@ -9,18 +9,19 @@
 ## Command Syntax
 
 ```
-img_resize [--json] r_resize <PATH> [OPTIONS]
+img_resize r_resize <PATH> [-o <DIR>] [OPTIONS] [--json]
 ```
 
 ## Arguments
 
 - `<PATH>`: Image file or directory path (required, positional)
+- `-o, --out-dir <DIR>`: Write results into DIR instead of overwriting inputs (directory inputs flattened by file name). Not allowed with -c
 - `-m, --max-pixel <SIZE>`: Max pixel on longest side, proportional scale (preserves aspect ratio)
 - `--rw <WIDTH>`: Exact resize width (must pair with --rh)
 - `--rh <HEIGHT>`: Exact resize height (must pair with --rw)
-- `-c, --config <FILE>`: YAML config for batch multi-size output
-- `-j`: Force convert output to JPG
-- `--json`: Structured JSON output (global flag)
+- `-c, --resize-config <FILE>`: YAML config for batch multi-size output (always PNG; paths from the YAML)
+- `-j, --force-jpg`: Convert to JPG (quality 100) instead of resizing
+- `--json`: One JSON envelope on stdout (global flag, any position)
 
 ## Resize Modes (mutually exclusive)
 
@@ -43,8 +44,8 @@ base_f: "/output/base/path"
 ## Examples
 
 ```bash
-# Proportional scale, single file
-img_resize r_resize -m 800 image.jpg
+# Proportional scale, single file, written to out/
+img_resize r_resize -m 800 image.jpg -o out/
 
 # Exact resize
 img_resize r_resize --rw 1920 --rh 1080 image.jpg
@@ -65,12 +66,24 @@ img_resize r_resize -c sizes.yaml image.png
 ## Notes
 
 - Directory processing: recursively finds all image files, skips hidden dirs
-- Output: overwrites original by default (proportional/exact mode)
-- `tinyfy` subcommand disabled (OpenSSL/musl incompatibility)
-- Exit codes: 0 success, 1 error
+- Output: overwrites original by default (proportional/exact mode); pass `-o/--out-dir` to keep inputs untouched
+- With -m, images already within the limit are left unchanged (status "unchanged"; copied when -o is given)
+- `tinyfy` subcommand disabled and hidden (OpenSSL/musl incompatibility)
+- JSON data: {total, failed, results:[{file, output, status: success|unchanged|converted|skipped|failed, original_size, new_size, error}]}
+- Exit codes: see Machine Call Contract (5 = some files failed)
 
 ## Build
 
 ```bash
 cd img_resize && cargo build --release
 ```
+
+## Machine Call Contract (r_lit CLI contract v1)
+
+- spec: docs/cli-contract.md (repo root); implementation: crates/rlit_cli
+- json: `--json` is global; stdout carries exactly one JSON envelope, also on failure; logs go to stderr
+- envelope: {"contract":1, "ok", "tool":"img_resize", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
+- schema: `img_resize __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
+- non_interactive: never prompts
+- effects: r_resize=pure (only writes declared outputs; in-place unless --out-dir)

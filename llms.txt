@@ -20,6 +20,14 @@
 - video-generator/ — Video generation tools
 - crates/murmur/ — P2P collaboration library (iroh-net + Automerge CRDT)
 
+## Machine Call Contract
+
+- spec: docs/cli-contract.md; shared crate: crates/rlit_cli
+- adopted_by: mj_atlas, img_resize, ui-trim, textexture, bulk_upload
+- json: `--json` → exactly one envelope {contract, ok, tool, version, command, data, artifacts, error} on stdout
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial
+- schema: `<tool> __schema` → JSON Schema per subcommand + x-cli / x-effects / x-env / x-stdin
+
 ## Build
 
 ```bash

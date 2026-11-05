@@ -1,7 +1,7 @@
 # textexture — Stylized Text Image Generator
 
 - purpose: Generate PNG images with decorative text effects (shadow, outline, gradient, glow, neon)
-- version: 0.1.0
+- version: 0.2.0
 - language: Rust
 - rendering: tiny-skia (vector rasterizer) + cosmic-text (text shaping)
 - max-canvas: 1920x1920px
@@ -11,6 +11,7 @@
 
 ```
 textexture [--json] render <TEXT> [OPTIONS]
+textexture [--json] bmfont <CHARS> [OPTIONS]
 textexture [--json] list-effects
 textexture [--json] list-fonts [--search <QUERY>]
 ```
@@ -28,7 +29,7 @@ textexture [--json] list-fonts [--search <QUERY>]
 - `-H, --height <PX>`: Image height, max 1920 (auto if omitted)
 - `--padding <PX>`: Padding around text (default: 40)
 - `-e, --effect <SPEC>`: Effect, repeatable. Format: name:key=val,key=val
-- `--json`: JSON output
+- `--json`: One JSON envelope on stdout; render data = {output, width, height}
 
 ## Background Modes
 
@@ -45,6 +46,18 @@ textexture [--json] list-fonts [--search <QUERY>]
 - gradient (Fill phase): Gradient text fill. Params: start(#ff0000), end(#0000ff), angle(0)
 - glow (Post phase): Outer glow, Screen blend. Params: color(#00ffff), radius(15)
 - neon (Post phase): 3-layer neon (outer+inner+core). Params: color(#ff00ff), radius(20)
+- grain: Film/print grain on text. Params: amount, seed, scale
+- Authoritative list: `textexture list-effects --json`
+
+## BMFont Subcommand
+
+```
+textexture bmfont <CHARS> [-o <BASENAME>] [-f <FONT>] [-s <PX>] [-c <CSS>] [--padding <PX>] [-e <SPEC>]... [--json]
+```
+
+- Writes `<BASENAME>.fnt` (BMFont text format) + `<BASENAME>.png` atlas. Default basename: textexture_font
+- `<CHARS>`: characters to bake (deduplicated); `--padding` per glyph cell (default 12) leaves room for effect bleed
+- JSON data: {fnt, atlas, atlas_size:[w,h], glyphs, line_height, base}
 
 ## Effect Pipeline Order
 
@@ -70,3 +83,15 @@ textexture list-fonts --search "Helvetica"
 
 - 0: Success
 - 1: Runtime error
+- 2: Usage (bad color, unknown effect, bad effect param)
+- 3: Input (font not found / not loadable, bad background image)
+
+## Machine Call Contract (r_lit CLI contract v1)
+
+- spec: docs/cli-contract.md (repo root); implementation: crates/rlit_cli
+- json: `--json` is global; stdout carries exactly one JSON envelope, also on failure; logs go to stderr
+- envelope: {"contract":1, "ok", "tool":"textexture", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
+- schema: `textexture __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
+- non_interactive: never prompts
+- effects: render/bmfont=local-write (reproducible when --font is a .ttf/.otf path; family names depend on installed fonts), list-effects/list-fonts=read-only

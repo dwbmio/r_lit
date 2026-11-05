@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "mj_atlas"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "clap",
  "crunch",
@@ -2300,6 +2300,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "rlit_cli",
  "serde",
  "serde_json",
  "sha2",
@@ -3364,6 +3365,16 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rlit_cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

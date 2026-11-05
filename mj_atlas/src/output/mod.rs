@@ -33,18 +33,21 @@ pub fn write_output(atlas: &AtlasResult, format: Format, opts: &PackOptions) -> 
             let path = atlas.data_path.with_extension("json");
             let content = json::to_json_hash(atlas, opts)?;
             std::fs::write(&path, content)?;
+            rlit_cli::add_artifact(&path, "metadata");
             log::info!("Saved JSON (hash): {}", path.display());
         }
         Format::JsonArray => {
             let path = atlas.data_path.with_extension("json");
             let content = json::to_json_array(atlas, opts)?;
             std::fs::write(&path, content)?;
+            rlit_cli::add_artifact(&path, "metadata");
             log::info!("Saved JSON (array): {}", path.display());
         }
         Format::GodotTpsheet => {
             let path = atlas.data_path.with_extension("tpsheet");
             let content = godot::to_tpsheet(atlas, opts)?;
             std::fs::write(&path, content)?;
+            rlit_cli::add_artifact(&path, "metadata");
             log::info!("Saved Godot .tpsheet: {}", path.display());
         }
         Format::GodotTres => {

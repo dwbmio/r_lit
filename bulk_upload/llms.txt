@@ -6,15 +6,15 @@
 ## Command Syntax
 
 ```
-bulk_upload jq <JSON_TEXT_OR_STDIN> --s3 <CONFIG_PATH> [--prefix <S3_PREFIX>] [--concurrency <N>]
+bulk_upload jq [JSON_TEXT | @FILE | -] [--s3 <CONFIG_PATH>] [--prefix <S3_PREFIX>] [--concurrency <N>] [--json]
 ```
 
 ### Arguments
-- `<JSON_TEXT_OR_STDIN>`: JSON string or `-` for stdin. All HTTP/HTTPS URLs are extracted recursively from the JSON structure.
-- `--s3 <path>`: Path to S3 credential file (dotenv format, see Config Format below)
+- `JSON_TEXT`: JSON string, `@path/to/file.json`, or `-`/omitted for stdin (stdin must be piped). All HTTP/HTTPS URLs are extracted recursively.
+- `--s3 <path>`: S3 credential file (dotenv format). Optional: when omitted, the same S3_* keys are read from environment variables
 - `--prefix <prefix>`: S3 key prefix for uploaded files (default: empty)
-- `--concurrency <N>`: Number of parallel download/upload workers (default: 5)
-- `--json`: Output results in JSON format for programmatic parsing
+- `--concurrency <N>`: Files per concurrent batch, 1-100 (default: 10)
+- `--json`: One JSON envelope on stdout; data = {bucket, total_urls, total_success, total_failed, batches, files:[{source_url, s3_key, status, error}]}
 
 ### Examples
 
@@ -62,9 +62,11 @@ S3_REGION=auto
 
 ## Exit Codes
 
-- `0`: All files processed successfully
-- `1`: One or more files failed to download or upload
-- `2`: Configuration error (missing S3 config, invalid JSON, etc.)
+- `0`: All files processed successfully (also when no URL was found; see `warnings`)
+- `2`: Usage error (bad flags, no input and stdin is a terminal)
+- `3`: Input error (invalid JSON, missing/incomplete S3 config)
+- `4`: External failure (every URL failed to download or upload)
+- `5`: Partial (some URLs failed; per-URL results in data.files)
 
 ## Installation
 
@@ -109,3 +111,13 @@ cargo build --release
 - GitHub Releases: https://github.com/dwbmio/r_lit/releases?q=bulk_upload-
 - Repository: https://github.com/dwbmio/r_lit/tree/main/bulk_upload
 - For humans: see README.md in the same directory
+
+## Machine Call Contract (r_lit CLI contract v1)
+
+- spec: docs/cli-contract.md (repo root); implementation: crates/rlit_cli
+- json: `--json` is global; stdout carries exactly one JSON envelope, also on failure; logs go to stderr
+- envelope: {"contract":1, "ok", "tool":"bulk_upload", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
+- schema: `bulk_upload __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
+- non_interactive: never prompts
+- effects: jq=external; x-env: S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY, S3_ENDPOINT, S3_REGION; x-stdin: JSON document

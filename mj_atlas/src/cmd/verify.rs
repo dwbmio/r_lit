@@ -54,7 +54,7 @@ pub enum SpriteIssueKind {
 pub fn run(input: &Path, check_sources: bool, json: bool) -> Result<()> {
     let manifest_path = manifest::resolve_manifest_path(input)?;
     let m = Manifest::try_load(&manifest_path)?
-        .ok_or_else(|| AppError::Custom(format!("{} not loadable", manifest_path.display())))?;
+        .ok_or_else(|| AppError::Input(format!("{} not loadable", manifest_path.display())))?;
 
     let manifest_dir = manifest_path.parent().unwrap_or(Path::new("."));
     let mut report = VerifyReport::default();
@@ -142,13 +142,23 @@ pub fn run(input: &Path, check_sources: bool, json: bool) -> Result<()> {
     let any_issues = !report.atlas_issues.is_empty() || !report.sprite_issues.is_empty();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&report.to_json(any_issues))?);
+        rlit_cli::set_data(report.to_json(any_issues));
     } else {
         report.print_human(&manifest_path, any_issues);
     }
 
     if any_issues {
-        std::process::exit(1);
+        // Exit 3 (input): the on-disk artifacts disagree with the manifest.
+        // The full issue list stays in `data`.
+        rlit_cli::set_failure_code(
+            rlit_cli::ErrorKind::Input,
+            "verify_failed",
+            format!(
+                "{} atlas issue(s), {} sprite issue(s)",
+                report.atlas_issues.len(),
+                report.sprite_issues.len()
+            ),
+        );
     }
     Ok(())
 }

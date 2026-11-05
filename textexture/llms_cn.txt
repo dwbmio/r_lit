@@ -1,7 +1,7 @@
 # textexture — 艺术字图片生成器
 
 - 用途: 生成带视觉效果的 PNG 艺术字（阴影、描边、渐变、发光、霓虹）
-- 版本: 0.1.0
+- 版本: 0.2.0
 - 语言: Rust
 - 渲染: tiny-skia（矢量光栅化）+ cosmic-text（文字排版）
 - 画布上限: 1920x1920px
@@ -11,6 +11,7 @@
 
 ```
 textexture [--json] render <文字> [选项]
+textexture [--json] bmfont <字符集> [选项]
 textexture [--json] list-effects
 textexture [--json] list-fonts [--search <关键词>]
 ```
@@ -52,6 +53,16 @@ textexture [--json] list-fonts [--search <关键词>]
 2. Fill（替代文字颜色）: gradient
 3. Post（文字前方）: outline, glow, neon
 
+## BMFont 子命令
+
+```
+textexture bmfont <字符集> [-o <基名>] [-f <字体>] [-s <PX>] [-c <CSS>] [--padding <PX>] [-e <SPEC>]... [--json]
+```
+
+- 写出 `<基名>.fnt`（BMFont 文本格式）+ `<基名>.png` 图集，默认基名 textexture_font
+- `<字符集>` 自动去重；`--padding` 为每字内边距（默认 12），给效果外溢留空间
+- JSON data: {fnt, atlas, atlas_size:[w,h], glyphs, line_height, base}
+
 ## 示例
 
 ```bash
@@ -70,3 +81,16 @@ textexture list-fonts --search "苹方"
 
 - 0: 成功
 - 1: 运行时错误
+- 2: 参数错误（颜色非法、未知效果、效果参数错误）
+- 3: 输入错误（字体找不到 / 无法加载、背景图无法读取）
+
+## 机器调用契约 (r_lit CLI contract v1)
+
+- 规范: 仓库根 docs/cli-contract.md；实现: crates/rlit_cli
+- JSON: `--json` 为全局参数；stdout 只输出一个 JSON envelope（失败也是）；日志走 stderr
+- envelope: {"contract":1, "ok", "tool":"textexture", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- 退出码: 0 成功, 1 运行时错误, 2 参数错误, 3 输入错误, 4 外部服务失败, 5 部分失败（ok=false，data 仍完整）
+- schema: `textexture __schema` 输出每个子命令的 JSON Schema (draft 2020-12)，含 x-cli（argv 还原、io 角色）、x-effects、x-env、x-stdin、x-note
+- 非交互: 不会弹任何提示
+- 效果列表以 `textexture list-effects --json` 为准（含 grain: amount, seed, scale）
+- 副作用: render/bmfont=local-write（--font 给 .ttf/.otf 路径时可复现；字体名依赖本机已装字体），list-effects/list-fonts=read-only

@@ -57,7 +57,13 @@ impl Log for DualLogger {
             // Errors / warnings on stderr would be cleaner, but that breaks
             // existing CI consumers that grep stdout for log markers. Keep
             // the stdout-only behavior we shipped in v0.1.
-            println!("{}", line);
+            // Under --json stdout is reserved for the single result envelope
+            // (r_lit CLI contract), so the console echo moves to stderr.
+            if rlit_cli::json_mode() {
+                eprintln!("{}", line);
+            } else {
+                println!("{}", line);
+            }
         }
     }
 

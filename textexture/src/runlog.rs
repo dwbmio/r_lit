@@ -57,7 +57,13 @@ impl Log for DualLogger {
 
         // Stdout shows INFO+ in release, DEBUG+ in dev.
         if record.level() <= self.stdout_level {
-            println!("{}", line);
+            // Under --json stdout is reserved for the single result envelope
+            // (r_lit CLI contract), so the console echo moves to stderr.
+            if rlit_cli::json_mode() {
+                eprintln!("{}", line);
+            } else {
+                println!("{}", line);
+            }
         }
     }
 

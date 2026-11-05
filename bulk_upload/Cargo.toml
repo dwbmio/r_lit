@@ -1,9 +1,10 @@
 [package]
 name = "bulk_upload"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 thiserror = "2"

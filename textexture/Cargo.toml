@@ -1,12 +1,13 @@
 [package]
 name = "textexture"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Generate stylized text images with visual effects (shadow, outline, gradient, glow, neon)"
 license = "MIT"
 repository = "https://github.com/nicholasgasior/r_lit"
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "^4", features = ["cargo", "derive"] }
 thiserror = "^2"
 log = "0.4"

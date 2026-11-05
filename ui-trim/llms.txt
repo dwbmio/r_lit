@@ -17,7 +17,7 @@
   - clear background alpha and optionally feather nearby foreground alpha
   - compute alpha bbox, expand by padding, crop, encode PNG
 - cli_example: ui-trim --input raw.png --output clean.png --padding 6 --feather 2 --remove-red-guides --json
-- json_output: ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings
+- json_output: envelope.data = {ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings}
 - json_options_fields: padding_px, alpha_threshold, feather_px, max_bg_distance, remove_red_guides, implementation, acceleration
 - json_timings_ms_fields: decode, sample_matte, flood_fill, morphology, alpha_cleanup, bbox_crop, encode, total
 - default_padding: 6
@@ -51,3 +51,14 @@
 - test: cargo test
 - smoke_example: cargo run --example smoke
 - benchmark_example: cargo run --release --example benchmark
+
+## Machine Call Contract (r_lit CLI contract v1)
+
+- spec: docs/cli-contract.md (repo root); implementation: crates/rlit_cli
+- json: `--json` is global; stdout carries exactly one JSON envelope, also on failure; logs go to stderr
+- envelope: {"contract":1, "ok", "tool":"ui-trim", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
+- schema: `ui-trim __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
+- non_interactive: never prompts
+- effects: pure (one PNG in, one PNG out); io: --input=input-file, --output=output-file
+- errors: unreadable/undecodable input PNG = exit 3

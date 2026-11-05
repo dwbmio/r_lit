@@ -136,7 +136,7 @@ Once you've packed with `--incremental`, the manifest sidecar (`<output>.manifes
 |---|---|
 | `mj_atlas inspect <atlas_or_manifest>` | Pretty-print the manifest: per-atlas stats, occupancy, free-rect count, tag aggregation, sprite list |
 | `mj_atlas diff <a> <b>` | Compare two manifests — added / removed / pixel-changed / resized / **moved** (UV-stability break) / tag changes |
-| `mj_atlas verify <atlas>` | Re-hash atlas PNGs (and optionally sprite sources with `--check-sources`) against the manifest; non-zero exit on mismatch |
+| `mj_atlas verify <atlas>` | Re-hash atlas PNGs (and optionally sprite sources with `--check-sources`) against the manifest; exit 3 on mismatch |
 | `mj_atlas tag <atlas> <sprite> --add ui,icon --set-attribution "CC0"` | Read or write per-sprite metadata: tags, attribution, source URL — preserved across repacks |
 
 All four accept the manifest path, the atlas PNG, the sidecar metadata, or the directory containing them — paths are auto-resolved (multi-bin `_<N>` suffixes are also handled).
@@ -211,7 +211,7 @@ mj_atlas gui                   # interactive GUI (--features gui)
 mj_atlas preview <ATLAS_FILE>  # preview a packed atlas (--features gui)
 ```
 
-Run `mj_atlas <subcommand> --help` for the full option list. All commands accept `--json` for machine-readable output (errors go to stderr as JSON).
+Run `mj_atlas <subcommand> --help` for the full option list. All commands accept `--json`: stdout then carries exactly one JSON envelope (failures included); exit codes and `mj_atlas __schema` are described in [docs/cli-contract.md](../docs/cli-contract.md).
 
 For LLM / agent integration, [`llms.txt`](llms.txt) provides the same information in a token-efficient structured format.
 

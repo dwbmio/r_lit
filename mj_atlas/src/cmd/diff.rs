@@ -21,14 +21,14 @@ pub fn run(a: &Path, b: &Path, json: bool) -> Result<()> {
     let path_a = manifest::resolve_manifest_path(a)?;
     let path_b = manifest::resolve_manifest_path(b)?;
     let manifest_a = Manifest::try_load(&path_a)?
-        .ok_or_else(|| crate::error::AppError::Custom(format!("{} not loadable", path_a.display())))?;
+        .ok_or_else(|| crate::error::AppError::Input(format!("{} not loadable", path_a.display())))?;
     let manifest_b = Manifest::try_load(&path_b)?
-        .ok_or_else(|| crate::error::AppError::Custom(format!("{} not loadable", path_b.display())))?;
+        .ok_or_else(|| crate::error::AppError::Input(format!("{} not loadable", path_b.display())))?;
 
     let report = compute(&manifest_a, &manifest_b);
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+        rlit_cli::set_data(report.to_json());
     } else {
         report.print_human(&path_a, &path_b);
     }

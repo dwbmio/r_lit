@@ -20,6 +20,14 @@
 - video-generator/ — 视频工具集
 - crates/murmur/ — P2P 协作库 (iroh-net + Automerge CRDT)
 
+## 机器调用契约
+
+- 规范: docs/cli-contract.md；共享 crate: crates/rlit_cli
+- 已接入: mj_atlas, img_resize, ui-trim, textexture, bulk_upload
+- JSON: `--json` → stdout 只输出一个 envelope {contract, ok, tool, version, command, data, artifacts, error}
+- 退出码: 0 成功, 1 运行时, 2 参数, 3 输入, 4 外部服务, 5 部分失败
+- schema: `<工具> __schema` → 每个子命令的 JSON Schema + x-cli / x-effects / x-env / x-stdin
+
 ## 构建
 
 ```bash
