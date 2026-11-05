@@ -59,10 +59,9 @@ fn default_runtime() -> String {
 }
 
 /// Pre-populated endpoint for our internal hfrog deployment. New users get
-/// this filled in, but `enabled = false` keeps the mirror opt-in — flipping
-/// the checkbox in the GUI (or the toml field) is what actually starts
-/// pushing artifacts. Set to empty by changing the config; the value is
-/// just a convenience default, not a requirement.
+/// this filled in and the mirror is enabled by default; turn it off with
+/// `enabled = false` in the toml, the GUI checkbox, or per run with
+/// `mj_atlas pack --no-mirror` / `MJ_ATLAS_NO_MIRROR=1`.
 fn default_endpoint() -> String {
     "https://hfrog.gamesci-lite.com".to_string()
 }
@@ -148,8 +147,8 @@ mod tests {
         let path = tmp("missing");
         let _ = std::fs::remove_file(&path);
         let cfg = Config::load_from(&path).expect("missing file is not an error");
-        // enabled stays opt-in; endpoint is pre-populated for convenience.
-        assert!(!cfg.hfrog.enabled);
+        // Mirror is on by default since 067f5f7; endpoint is pre-populated.
+        assert!(cfg.hfrog.enabled);
         assert_eq!(cfg.hfrog.endpoint, "https://hfrog.gamesci-lite.com");
         assert_eq!(cfg.hfrog.default_runtime, "asset-pack");
     }

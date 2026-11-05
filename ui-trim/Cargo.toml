@@ -1,10 +1,11 @@
 [package]
 name = "ui-trim"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Trim pseudo-transparent UI asset backgrounds into tight PNGs"
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }

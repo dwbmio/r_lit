@@ -155,20 +155,18 @@ pub fn execute(opts: &BmfontOpts) -> Result<()> {
     }
     fnt.push_str("kernings count=0\n");
     std::fs::write(&fnt_path, &fnt)?;
+    rlit_cli::add_artifact(&fnt_path, "bmfont-fnt");
+    rlit_cli::add_artifact(&png_path, "bmfont-atlas");
 
     if opts.json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "ok",
-                "fnt": fnt_path,
-                "atlas": png_path,
-                "atlas_size": [atlas_w, atlas_h],
-                "glyphs": cells.len(),
-                "line_height": line_height,
-                "base": ascent
-            })
-        );
+        rlit_cli::set_data(serde_json::json!({
+            "fnt": fnt_path,
+            "atlas": png_path,
+            "atlas_size": [atlas_w, atlas_h],
+            "glyphs": cells.len(),
+            "line_height": line_height,
+            "base": ascent
+        }));
     } else {
         info!(
             "Written {} + {} ({} glyphs, atlas {}x{}, lineHeight={} base={})",

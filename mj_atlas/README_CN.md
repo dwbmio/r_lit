@@ -136,7 +136,7 @@ mj_atlas pack ./sprites -o atlas --trim --pot \
 |---|---|
 | `mj_atlas inspect <atlas_or_manifest>` | 漂亮打印 manifest：每个 atlas 的尺寸/占用率/空闲矩形数、tag 聚合、sprite 列表 |
 | `mj_atlas diff <a> <b>` | 两个 manifest 之间的差异——added / removed / pixel-changed / resized / **moved**（UV 稳定性破坏）/ tag 变化 |
-| `mj_atlas verify <atlas>` | 重新计算 atlas PNG 哈希（`--check-sources` 还会校验 sprite 源文件），不一致时退出码非 0 |
+| `mj_atlas verify <atlas>` | 重新计算 atlas PNG 哈希（`--check-sources` 还会校验 sprite 源文件），不一致时退出码 3 |
 | `mj_atlas tag <atlas> <sprite> --add ui,icon --set-attribution "CC0"` | 读写 sprite 元数据：tags、attribution、source_url，跨重打保留 |
 
 四个子命令都接受 manifest 本体、atlas PNG、sidecar metadata、或它们所在的目录路径——自动解析（包括多 bin 的 `_<N>` 后缀）。
@@ -211,7 +211,7 @@ mj_atlas gui                   # GUI（需 --features gui）
 mj_atlas preview <ATLAS_FILE>  # 预览已打包的 atlas（需 --features gui）
 ```
 
-完整选项见 `mj_atlas <subcommand> --help`。所有命令都接受 `--json` 输出机器可读结构（错误以 JSON 写到 stderr）。
+完整选项见 `mj_atlas <subcommand> --help`。所有命令都接受 `--json`：stdout 只输出一个 JSON envelope（失败也是），退出码与 `mj_atlas __schema` 见 [docs/cli-contract.md](../docs/cli-contract.md)。
 
 LLM / Agent 集成场景下推荐读 [`llms_cn.txt`](llms_cn.txt)，是 token 友好的结构化版本。
 

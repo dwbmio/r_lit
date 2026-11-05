@@ -14,7 +14,7 @@ pub fn run(input: &Path, json: bool) -> Result<()> {
     let m = match Manifest::try_load(&manifest_path)? {
         Some(m) => m,
         None => {
-            return Err(crate::error::AppError::Custom(format!(
+            return Err(crate::error::AppError::Input(format!(
                 "manifest at {} is empty or version-mismatched",
                 manifest_path.display()
             )));
@@ -186,7 +186,7 @@ fn print_json(path: &Path, m: &Manifest) -> Result<()> {
         "summary": summary,
         "manifest": m,
     });
-    println!("{}", serde_json::to_string_pretty(&combined)?);
+    rlit_cli::set_data(combined);
     Ok(())
 }
 

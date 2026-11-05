@@ -115,6 +115,7 @@ margin = Rect2({mx}, {my}, {mw}, {mh})
         );
 
         std::fs::write(&tres_path, tres_content)?;
+        rlit_cli::add_artifact(&tres_path, "godot-atlas-texture");
         created_files.push(tres_path.display().to_string());
     }
 
@@ -180,6 +181,7 @@ margin = Rect2({mx}, {my}, {mw}, {mh})
         sf.push_str("]\n}]\n");
 
         std::fs::write(&sf_path, sf)?;
+        rlit_cli::add_artifact(&sf_path, "godot-sprite-frames");
         created_files.push(sf_path.display().to_string());
     }
 

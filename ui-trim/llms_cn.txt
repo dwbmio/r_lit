@@ -17,7 +17,7 @@
   - 清零背景 alpha，并可选 soft feather 邻近前景 alpha
   - 计算 alpha bbox，按 padding 外扩，裁切并编码 PNG
 - CLI 示例: ui-trim --input raw.png --output clean.png --padding 6 --feather 2 --remove-red-guides --json
-- JSON 输出: ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings
+- JSON 输出: envelope.data = {ok, input_width, input_height, output_width, output_height, trim_bbox, padding_px, removed_pixels, alpha_ratio, throughput_mp_s, options, timings_ms, warnings}
 - JSON options 字段: padding_px, alpha_threshold, feather_px, max_bg_distance, remove_red_guides, implementation, acceleration
 - JSON timings_ms 字段: decode, sample_matte, flood_fill, morphology, alpha_cleanup, bbox_crop, encode, total
 - 默认 padding: 6
@@ -51,3 +51,14 @@
 - 测试: cargo test
 - smoke 示例: cargo run --example smoke
 - benchmark 示例: cargo run --release --example benchmark
+
+## 机器调用契约 (r_lit CLI contract v1)
+
+- 规范: 仓库根 docs/cli-contract.md；实现: crates/rlit_cli
+- JSON: `--json` 为全局参数；stdout 只输出一个 JSON envelope（失败也是）；日志走 stderr
+- envelope: {"contract":1, "ok", "tool":"ui-trim", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- 退出码: 0 成功, 1 运行时错误, 2 参数错误, 3 输入错误, 4 外部服务失败, 5 部分失败（ok=false，data 仍完整）
+- schema: `ui-trim __schema` 输出每个子命令的 JSON Schema (draft 2020-12)，含 x-cli（argv 还原、io 角色）、x-effects、x-env、x-stdin、x-note
+- 非交互: 不会弹任何提示
+- 副作用: pure（一张 PNG 进，一张 PNG 出）；io: --input=input-file，--output=output-file
+- 错误: 输入 PNG 不可读 / 无法解码 = 退出码 3

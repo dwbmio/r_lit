@@ -20,6 +20,14 @@ pub enum ReError {
     #[error("{0}")]
     JsonError(#[from] serde_json::Error),
 
+    /// Missing / unreadable input path or config (exit 3).
+    #[error("{0}")]
+    Input(String),
+
+    /// Bad flag combination (exit 2).
+    #[error("{0}")]
+    Usage(String),
+
     #[error("{0}")]
     CustomError(String),
 }

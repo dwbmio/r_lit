@@ -1,7 +1,7 @@
 # mj_atlas — 游戏级纹理图集打包工具
 
 - 用途: 将精灵散图打包为优化的纹理图集，输出供游戏引擎使用的元数据；manifest 是一等公民，可 inspect / diff / verify / tag
-- 版本: 0.3.0
+- 版本: 0.6.0
 - 语言: Rust
 - 二进制名: mj_atlas
 - 许可证: MIT（imagequant/quantize 功能为 GPL-3.0）
@@ -22,7 +22,7 @@ cd mj_atlas && cargo build --release --features gui  # CLI + GUI
 
 ## 全局参数
 
-- `--json`: 所有子命令以机器可读 JSON 格式输出到 stdout
+- `--json`: 所有子命令在 stdout 输出一个 JSON envelope（失败也是），见「机器调用契约」
 
 ## 子命令
 
@@ -92,11 +92,19 @@ mj_atlas pack <输入目录> [选项]
 `cached_atlases` 是命中缓存的 atlas 数量；`skipped: true` 表示本次完全没有写盘（所有 atlas 都从缓存返回）。
 `from_cache: true` 表示该 atlas 文件未被重写（manifest 与磁盘内容均未变）。
 
+上面是 envelope 的 `data` 部分；`artifacts` 列出 atlas PNG、元数据、`<output>.manifest.json`、`<output>.log` 及其 sha256。
+
+`--recursive <BOOL>`：是否扫描子目录（默认 true），`--recursive false` 只读顶层。
+`--no-mirror`（环境变量 `MJ_ATLAS_NO_MIRROR=1`）：跳过 hfrog 镜像上传。默认配置每次 pack 都会上传 hfrog（走网络），沙箱 / 自动化调用应带上。
+
 #### 错误输出 (--json)
 
 ```json
-{"status": "error", "error": "No images found in: ./empty_dir"}
+{"contract": 1, "ok": false, "tool": "mj_atlas", "command": "pack", "data": null, "artifacts": [],
+ "error": {"code": "input", "kind": "input", "message": "No images found in: ./empty_dir"}}
 ```
+
+退出码 3（input）：输入或 manifest 缺失 / 无法解码；退出码 2（usage）：参数错误。
 
 ### inspect（v0.3+）
 
@@ -124,7 +132,7 @@ mj_atlas diff <A> <B> [--json]
 
 ### verify（v0.3+）
 
-重新计算磁盘上的 atlas PNG 哈希（可选 `--check-sources` 还会校验 sprite 源文件），不一致则退出码非 0。
+重新计算磁盘上的 atlas PNG 哈希（可选 `--check-sources` 还会校验 sprite 源文件）。不一致时退出码 3，`error.code = "verify_failed"`，问题清单在 `data` 里。
 
 ```
 mj_atlas verify <ATLAS_OR_MANIFEST> [--check-sources] [--json]
@@ -360,3 +368,13 @@ GUI 当前不直接持久化 incremental / polygon-shape / max-vertices 设置�
 
 - 0: 成功
 - 1: 错误（stderr 输出消息，或 --json 时 stderr 输出 JSON）
+
+## 机器调用契约 (r_lit CLI contract v1)
+
+- 规范: 仓库根 docs/cli-contract.md；实现: crates/rlit_cli
+- JSON: `--json` 为全局参数；stdout 只输出一个 JSON envelope（失败也是）；日志走 stderr
+- envelope: {"contract":1, "ok", "tool":"mj_atlas", "version", "command", "data", "artifacts":[{"path","role","bytes","sha256"}], "error":null|{"code","kind","message"}, "warnings"?}
+- 退出码: 0 成功, 1 运行时错误, 2 参数错误, 3 输入错误, 4 外部服务失败, 5 部分失败（ok=false，data 仍完整）
+- schema: `mj_atlas __schema` 输出每个子命令的 JSON Schema (draft 2020-12)，含 x-cli（argv 还原、io 角色）、x-effects、x-env、x-stdin、x-note
+- 非交互: 不会弹任何提示
+- 副作用: pack=external（hfrog 镜像；加 --no-mirror 为 pure），formats/inspect/diff/verify=read-only，tag=local-write（除 --list 外原地改 manifest）

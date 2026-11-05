@@ -10,12 +10,42 @@ mod pack;
 mod preview;
 mod runlog;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Subcommand, ValueEnum};
+use rlit_cli::{CommandSpec, Contract, Effects, Io};
 use pack::PolygonShape;
 use error::Result;
 use std::path::PathBuf;
 
-#[derive(Parser)]
+/// Machine-call annotations for `__schema` (see `docs/cli-contract.md`).
+static CONTRACT: Contract = Contract {
+    tool: env!("CARGO_PKG_NAME"),
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("pack", Effects::External)
+            .io(&[("input", Io::InputDir), ("output", Io::OutputStem), ("output_dir", Io::OutputDir)])
+            .env(&["MJ_ATLAS_NO_MIRROR"])
+            .note("Writes <output>.png + metadata + <output>.manifest.json + <output>.log into --output-dir (default: INPUT_DIR); deterministic for the same inputs/options. By default also mirrors the atlas to hfrog (network); pass --no-mirror for a purely local run."),
+        CommandSpec::new("formats", Effects::ReadOnly),
+        CommandSpec::new("inspect", Effects::ReadOnly).io(&[("input", Io::InputPath)]),
+        CommandSpec::new("diff", Effects::ReadOnly).io(&[("a", Io::InputPath), ("b", Io::InputPath)]),
+        CommandSpec::new("verify", Effects::ReadOnly)
+            .io(&[("input", Io::InputPath)])
+            .note("Exit 3 with error.code=verify_failed when artifacts drift from the manifest; the issue list is in data."),
+        CommandSpec::new("tag", Effects::LocalWrite)
+            .io(&[("input", Io::InputPath)])
+            .note("Edits <output>.manifest.json in place unless --list. Omitting SPRITE targets every sprite."),
+        // GUI-only builds (`--features gui`): interactive windows, not for agents.
+        CommandSpec::new("gui", Effects::LocalWrite)
+            .feature_gated()
+            .note("Opens an interactive window; never call from automation."),
+        CommandSpec::new("preview", Effects::ReadOnly)
+            .feature_gated()
+            .io(&[("file", Io::InputFile)])
+            .note("Opens an interactive window; never call from automation."),
+    ],
+};
+
+#[derive(clap::Parser)]
 #[command(
     name = "mj_atlas",
     version,
@@ -46,14 +76,18 @@ use std::path::PathBuf;
         mj_atlas gui                    # interactive GUI (--features gui)\n  \
         mj_atlas preview atlas.json     # preview atlas (--features gui)\n  \
         mj_atlas formats --json         # list formats as JSON",
-    after_help = "Machine-readable output:\n  \
-        All subcommands support --json for structured JSON output on stdout.\n  \
-        Errors output JSON on stderr: {\"status\": \"error\", \"error\": \"...\"}\n\n\
+    after_help = "Machine-readable output (r_lit CLI contract v1):\n  \
+        --json works on every subcommand. stdout then carries exactly one JSON envelope:\n    \
+        {\"ok\": true, \"tool\": \"mj_atlas\", \"version\": \"..\", \"command\": \"pack\",\n     \
+        \"data\": {..}, \"artifacts\": [{\"path\",\"role\",\"bytes\",\"sha256\"}], \"error\": null}\n  \
+        On failure ok=false and error={\"code\",\"kind\",\"message\"}; logs go to stderr.\n  \
+        Exit codes: 0 ok, 1 runtime, 2 usage, 3 input (incl. verify mismatch), 4 external, 5 partial.\n  \
+        `mj_atlas __schema` prints a JSON Schema for every subcommand's arguments.\n\n\
         For AI/LLM integration, see llms.txt in the project root."
 )]
 struct Cli {
-    /// Output machine-readable JSON to stdout (works with all subcommands).
-    /// Errors go to stderr as JSON: {"status": "error", "error": "..."}
+    /// Print one machine-readable JSON envelope to stdout (works with all
+    /// subcommands, including failures); human logs move to stderr.
     #[arg(long, global = true)]
     json: bool,
 
@@ -146,8 +180,9 @@ enum Commands {
         #[arg(long, value_enum, default_value = "json", value_name = "FORMAT")]
         format: OutputFormat,
 
-        /// Scan subdirectories recursively for images.
-        #[arg(long, default_value = "true")]
+        /// Scan subdirectories recursively for images (default true).
+        /// Pass `--recursive false` to only read INPUT_DIR's top level.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set, value_name = "BOOL")]
         recursive: bool,
 
         /// Enable incremental packing. Reads `<output>.manifest.json` next to
@@ -215,6 +250,12 @@ enum Commands {
         /// per-frame draw call budgets on mobile/web.
         #[arg(long, default_value = "0", value_name = "N")]
         max_vertices: u32,
+
+        /// Skip the hfrog artifact mirror for this run, even when
+        /// ~/.config/mj_atlas/config.toml enables it (the default config does).
+        /// Use for sandboxed / automated runs that must not touch the network.
+        #[arg(long, env = "MJ_ATLAS_NO_MIRROR")]
+        no_mirror: bool,
     },
 
     /// Launch the interactive GUI application.
@@ -363,7 +404,7 @@ enum OutputFormat {
 #[tokio::main]
 async fn main() {
     runlog::init();
-    let cli = Cli::parse();
+    let cli: Cli = CONTRACT.parse();
 
     // Header is written at the top of the log file via `flush(... &header)`;
     // we don't push it through the logger so it doesn't duplicate.
@@ -385,15 +426,20 @@ async fn main() {
     let log_path = compute_log_path(&cli)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("mj_atlas.log"));
     runlog::flush(&log_path, &header);
+    rlit_cli::add_artifact(&log_path, "log");
 
-    if let Err(e) = result {
-        if cli.json {
-            eprintln!(
-                "{}",
-                serde_json::json!({"status": "error", "error": e.to_string()})
-            );
-        }
-        std::process::exit(1);
+    rlit_cli::finish(result, error_kind);
+}
+
+/// Map errors onto the contract's exit-code classes.
+fn error_kind(e: &error::AppError) -> rlit_cli::ErrorKind {
+    use error::AppError as E;
+    use rlit_cli::ErrorKind as K;
+    match e {
+        E::Io(io) => rlit_cli::io_error_kind(io),
+        E::Image(_) | E::Json(_) | E::WalkDir(_) | E::NoImages(_) | E::Input(_) => K::Input,
+        E::InvalidParam(_) => K::Usage,
+        E::PackingFailed(_) | E::Custom(_) => K::Runtime,
     }
 }
 
@@ -611,6 +657,7 @@ fn run(cli: &Cli) -> Result<()> {
             polygon_shape,
             max_vertices,
             force,
+            no_mirror,
         } => {
             let out_dir = output_dir.clone().unwrap_or_else(|| input.clone());
 
@@ -660,6 +707,7 @@ fn run(cli: &Cli) -> Result<()> {
             // Loaded lazily so a malformed config can't kill an otherwise
             // healthy pack — we just log and move on.
             match config::Config::load() {
+                Ok(_) if *no_mirror => log::debug!("hfrog: mirror skipped (--no-mirror)"),
                 Ok(cfg) if cfg.hfrog.is_active() => {
                     let ver = mirror_version_for(&results);
                     hfrog::mirror_pack_artifacts(
@@ -675,6 +723,11 @@ fn run(cli: &Cli) -> Result<()> {
                 Ok(_) => {}
                 Err(e) => log::warn!("hfrog: skipping mirror — config load failed: {}", e),
             }
+
+            for r in &results {
+                rlit_cli::add_artifact(&r.image_path, "atlas-image");
+            }
+            rlit_cli::add_artifact(pack::manifest::Manifest::path_for(&opts), "manifest");
 
             if cli.json {
                 let total_dups: usize = results.iter().map(|r| r.duplicates_removed).sum();
@@ -696,7 +749,7 @@ fn run(cli: &Cli) -> Result<()> {
                         })
                     }).collect::<Vec<_>>(),
                 });
-                println!("{}", serde_json::to_string_pretty(&summary)?);
+                rlit_cli::set_data(summary);
             } else {
                 for r in &results {
                     log::info!(
@@ -725,8 +778,7 @@ fn run(cli: &Cli) -> Result<()> {
 
         Commands::Formats => {
             if cli.json {
-                println!(
-                    "{}",
+                rlit_cli::set_data(
                     serde_json::json!({
                         "formats": [
                             {
@@ -766,7 +818,7 @@ fn run(cli: &Cli) -> Result<()> {
                                 "needs_plugin": false
                             }
                         ]
-                    })
+                    }),
                 );
             } else {
                 println!("Supported output formats:\n");
@@ -811,5 +863,18 @@ fn run(cli: &Cli) -> Result<()> {
             };
             cmd::tag::run(input, sprite.as_deref(), ops, cli.json)
         }
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every subcommand/arg must carry help text and a machine-call spec.
+    #[test]
+    fn cli_contract_is_complete() {
+        let problems = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(problems.is_empty(), "contract problems:\n{}", problems.join("\n"));
     }
 }

@@ -23,6 +23,11 @@ pub enum AppError {
     #[error("Invalid parameter: {0}")]
     InvalidParam(String),
 
+    /// A user-supplied input (manifest, sprite name, path) is missing or
+    /// unusable. Maps to exit code 3 under the r_lit CLI contract.
+    #[error("{0}")]
+    Input(String),
+
     #[error("{0}")]
     Custom(String),
 }

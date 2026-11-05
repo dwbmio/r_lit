@@ -16,6 +16,9 @@ pub enum ActionType {
 struct ProcessResult {
     file: String,
     status: String,
+    /// Where the result was written (absent for skipped / failed files).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     original_size: Option<(u32, u32)>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,7 +49,7 @@ fn convert_tp(
     tp: &PathBuf,
     convert_type: ImageFormat,
     out: Option<PathBuf>,
-) -> Result<(), ReError> {
+) -> Result<PathBuf, ReError> {
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
     // Output directory:
@@ -74,7 +77,7 @@ fn convert_tp(
     let f_j_path = out_i.join(f_name).with_extension(convert_ext);
     let fo = &mut std::fs::File::create(&f_j_path)?;
     im.write_to(fo, ImageOutputFormat::Jpeg(100))?;
-    Ok(())
+    Ok(f_j_path)
 }
 
 fn re_tp(
@@ -84,7 +87,7 @@ fn re_tp(
     is_thumb: bool,
     mine_type: &str,
     json_output: bool,
-) -> Result<(u32, u32, u32, u32), ReError> {
+) -> Result<((u32, u32, u32, u32), PathBuf), ReError> {
     // Same "where do bytes land?" precedence as `convert_tp`:
     // explicit `out` → input's parent dir (in-place overwrite) →
     // cwd. The previous unconditional cwd default landed output
@@ -92,20 +95,30 @@ fn re_tp(
     // batch scripts passing absolute paths essentially silent
     // no-ops (input remained untouched, output written to a
     // forgotten directory).
+    let explicit_out = out.is_some();
     let out_i = out.unwrap_or_else(|| {
         tp.parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::current_dir().expect("current dir get failed!")
-            })
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     });
     let im = image::open(tp)?;
     let orig_size = im.dimensions();
 
     if is_thumb {
         if size.0 >= im.width() && size.1 >= im.height() {
-            return Ok((orig_size.0, orig_size.1, orig_size.0, orig_size.1));
+            // Already small enough. With an explicit output dir, still place
+            // a copy there so the output set is complete.
+            let dest = match (explicit_out, tp.file_name()) {
+                (true, Some(name)) => {
+                    fs::create_dir_all(&out_i)?;
+                    let dest = out_i.join(name);
+                    fs::copy(tp, &dest)?;
+                    dest
+                }
+                _ => tp.clone(),
+            };
+            return Ok(((orig_size.0, orig_size.1, orig_size.0, orig_size.1), dest));
         }
     }
 
@@ -141,7 +154,7 @@ fn re_tp(
         log::info!("output fmt={:?} → {:?}", out, f_path);
     }
     im_r.write_to(fo, out)?;
-    Ok((orig_size.0, orig_size.1, new_size.0, new_size.1))
+    Ok(((orig_size.0, orig_size.1, new_size.0, new_size.1), f_path))
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +183,7 @@ impl RtpExecutor {
                 return Ok(ProcessResult {
                     file: path.display().to_string(),
                     status: "skipped".to_string(),
+                    output: None,
                     original_size: None,
                     new_size: None,
                     error: Some("not an image file".to_string()),
@@ -193,9 +207,10 @@ impl RtpExecutor {
                         k.mime_type(),
                         self.json_output,
                     ) {
-                        Ok((ow, oh, nw, nh)) => Ok(ProcessResult {
+                        Ok(((ow, oh, nw, nh), written)) => Ok(ProcessResult {
                             file: path.display().to_string(),
-                            status: "success".to_string(),
+                            status: if (ow, oh) == (nw, nh) { "unchanged" } else { "success" }.to_string(),
+                            output: Some(written.display().to_string()),
                             original_size: Some((ow, oh)),
                             new_size: Some((nw, nh)),
                             error: None,
@@ -203,6 +218,7 @@ impl RtpExecutor {
                         Err(e) => Ok(ProcessResult {
                             file: path.display().to_string(),
                             status: "failed".to_string(),
+                            output: None,
                             original_size: None,
                             new_size: None,
                             error: Some(e.to_string()),
@@ -210,9 +226,10 @@ impl RtpExecutor {
                     }
                 }
                 ActionType::Convert => match convert_tp(path, ImageFormat::Jpeg, out.clone()) {
-                    Ok(_) => Ok(ProcessResult {
+                    Ok(written) => Ok(ProcessResult {
                         file: path.display().to_string(),
                         status: "converted".to_string(),
+                        output: Some(written.display().to_string()),
                         original_size: None,
                         new_size: None,
                         error: None,
@@ -220,6 +237,7 @@ impl RtpExecutor {
                     Err(e) => Ok(ProcessResult {
                         file: path.display().to_string(),
                         status: "failed".to_string(),
+                        output: None,
                         original_size: None,
                         new_size: None,
                         error: Some(e.to_string()),
@@ -228,6 +246,7 @@ impl RtpExecutor {
                 ActionType::None => Ok(ProcessResult {
                     file: path.display().to_string(),
                     status: "skipped".to_string(),
+                    output: None,
                     original_size: None,
                     new_size: None,
                     error: Some("no action specified".to_string()),
@@ -240,6 +259,7 @@ impl RtpExecutor {
             Ok(ProcessResult {
                 file: path.display().to_string(),
                 status: "skipped".to_string(),
+                output: None,
                 original_size: None,
                 new_size: None,
                 error: Some("unknown file type".to_string()),
@@ -283,7 +303,7 @@ impl RtpExecutor {
 
     pub async fn exec_resize(&self) -> Result<(), ReError> {
         if !self.tp.exists() {
-            return Err(ReError::CustomError("path not exists!".to_string()));
+            return Err(ReError::Input(format!("path does not exist: {}", self.tp.display())));
         }
 
         if !self.json_output {
@@ -295,61 +315,81 @@ impl RtpExecutor {
             false => self.walk(&self.tp, self.out.to_owned()).await?,
         };
 
-        if self.json_output {
-            let summary = serde_json::json!({
-                "total": results.len(),
-                "results": results
-            });
-            println!("{}", serde_json::to_string(&summary)?);
+        for r in &results {
+            if let Some(out) = &r.output {
+                rlit_cli::add_artifact(out, "image");
+            }
         }
+        let failed = results.iter().filter(|r| r.status == "failed").count();
+        if failed > 0 {
+            for r in results.iter().filter(|r| r.status == "failed") {
+                log::warn!("failed: {} ({})", r.file, r.error.as_deref().unwrap_or(""));
+            }
+            rlit_cli::set_failure(
+                rlit_cli::ErrorKind::Partial,
+                format!("{} of {} file(s) failed", failed, results.len()),
+            );
+        }
+        rlit_cli::set_data(serde_json::json!({
+            "total": results.len(),
+            "failed": failed,
+            "results": results
+        }));
 
         Ok(())
     }
 }
 
 fn exec_from_config(img_tp: PathBuf, pp: PathBuf) -> Result<(), ReError> {
-    let c = fs::read_to_string(pp).expect("Load config failed!Create the config first");
-    let out = YamlLoader::load_from_str(c.as_str()).expect("Load config failed!Not in yaml fmt");
-    let c = &out[0].to_owned();
-    let o_s = c["vec_size"].as_vec().expect("`vec_size` is not vec!");
-    let o_f = c["vec_f"].as_vec().expect("`vec_f` is not vec!");
-    let is = c["base_f"].is_badvalue();
-    let mut base_f = "";
-    if !is {
-        base_f = c["base_f"].as_str().expect("`base_f` not set to  string!");
+    let bad = |what: &str| ReError::Input(format!("resize config {}: {}", pp.display(), what));
+    let c = fs::read_to_string(&pp)
+        .map_err(|e| ReError::Input(format!("cannot read resize config {}: {}", pp.display(), e)))?;
+    let docs = YamlLoader::load_from_str(c.as_str()).map_err(|e| bad(&format!("not valid YAML ({})", e)))?;
+    let c = docs.first().ok_or_else(|| bad("empty document"))?;
+    let o_s = c["vec_size"].as_vec().ok_or_else(|| bad("`vec_size` must be a list of [w, h]"))?;
+    let o_f = c["vec_f"].as_vec().ok_or_else(|| bad("`vec_f` must be a list of output paths"))?;
+    if o_s.len() != o_f.len() {
+        return Err(bad("`vec_size` and `vec_f` must have the same length"));
     }
-    let im = image::open(&img_tp)
-        .expect(format!("`image open filed!=>>{:?}`", &img_tp.display()).as_str());
-    let mut idx = 0;
-    for o in o_s {
-        let f = o_f.get(idx).unwrap().as_str().unwrap();
-        let f_p = &std::path::Path::new(base_f)
-            .join(f.replace("/", std::path::MAIN_SEPARATOR.to_string().as_str()));
+    let base_f = if c["base_f"].is_badvalue() {
+        ""
+    } else {
+        c["base_f"].as_str().ok_or_else(|| bad("`base_f` must be a string"))?
+    };
+    let im = image::open(&img_tp)?;
+    let mut results = Vec::new();
+    for (o, f) in o_s.iter().zip(o_f) {
+        let f = f.as_str().ok_or_else(|| bad("`vec_f` entries must be strings"))?;
+        let f_p = std::path::Path::new(base_f)
+            .join(f.replace('/', std::path::MAIN_SEPARATOR.to_string().as_str()));
         if let Some(f_pp) = f_p.parent() {
-            if !f_pp.is_dir() {
-                let _ = fs::create_dir_all(f_pp);
+            if !f_pp.as_os_str().is_empty() {
+                fs::create_dir_all(f_pp)?;
             }
         }
-        let fo = &mut fs::File::create(f_p).unwrap();
-        let fo_size = (
-            o[0].as_i64()
-                .expect(format!("conver from :{:?} to u32 failed", o[0]).as_str())
-                as u32,
-            o[1].as_i64()
-                .expect(format!("conver from :{:?} to u32 failed", o[1]).as_str())
-                as u32,
-        );
-        log::info!(
-            "output file:{} <size->w={}, h={}>",
-            f_p.as_path().to_str().unwrap(),
-            fo_size.0,
-            fo_size.1
-        );
+        let dim = |i: usize| {
+            o[i].as_i64()
+                .filter(|v| *v > 0)
+                .map(|v| v as u32)
+                .ok_or_else(|| bad(&format!("size entry {:?} must be [w, h] positive integers", o)))
+        };
+        let fo_size = (dim(0)?, dim(1)?);
+        log::info!("output file:{} <size->w={}, h={}>", f_p.display(), fo_size.0, fo_size.1);
         let im_r = im.thumbnail(fo_size.0, fo_size.1);
-        let _ = im_r.write_to(fo, ImageFormat::Png);
-        idx += 1;
+        let fo = &mut fs::File::create(&f_p)?;
+        im_r.write_to(fo, ImageFormat::Png)?;
+        rlit_cli::add_artifact(&f_p, "image");
+        results.push(serde_json::json!({
+            "output": f_p.display().to_string(),
+            "box": [fo_size.0, fo_size.1],
+            "new_size": [im_r.width(), im_r.height()],
+        }));
     }
-
+    rlit_cli::set_data(serde_json::json!({
+        "file": img_tp.display().to_string(),
+        "total": results.len(),
+        "results": results,
+    }));
     Ok(())
 }
 
@@ -360,6 +400,7 @@ pub async fn exec(
     resize_width: Option<u32>,
     resize_height: Option<u32>,
     force_jpg: bool,
+    out_dir: Option<&PathBuf>,
     json_output: bool,
 ) -> Result<(), ReError> {
     if let Some(config) = resize_config {
@@ -372,8 +413,8 @@ pub async fn exec(
     } else if max_pixel.is_some() || (resize_width.is_some() && resize_height.is_some()) {
         ActionType::Resize
     } else {
-        return Err(ReError::CustomError(
-            "必须指定 --max_pixel 或 --rw/--rh 或 --force_jpg".to_string(),
+        return Err(ReError::Usage(
+            "one of --max-pixel, --rw/--rh, --force-jpg or --resize-config is required / 必须指定其中之一".to_string(),
         ));
     };
 
@@ -383,7 +424,7 @@ pub async fn exec(
         width: resize_width.unwrap_or(0),
         force_jpg,
         tp: path.clone(),
-        out: None,
+        out: out_dir.cloned(),
         action,
         json_output,
     };
