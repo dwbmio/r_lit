@@ -254,7 +254,8 @@ enum Commands {
         /// Skip the hfrog artifact mirror for this run, even when
         /// ~/.config/mj_atlas/config.toml enables it (the default config does).
         /// Use for sandboxed / automated runs that must not touch the network.
-        #[arg(long, env = "MJ_ATLAS_NO_MIRROR")]
+        /// Env accepts 1/0, true/false, yes/no, on/off.
+        #[arg(long, env = "MJ_ATLAS_NO_MIRROR", value_parser = clap::builder::BoolishValueParser::new())]
         no_mirror: bool,
     },
 
@@ -869,7 +870,21 @@ fn run(cli: &Cli) -> Result<()> {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
+
+    /// `MJ_ATLAS_NO_MIRROR=1` (as documented) must be accepted, not only `true`.
+    #[test]
+    fn no_mirror_env_accepts_boolish_values() {
+        for (val, want) in [("1", true), ("yes", true), ("true", true), ("0", false), ("off", false)] {
+            std::env::set_var("MJ_ATLAS_NO_MIRROR", val);
+            let cli = Cli::try_parse_from(["mj_atlas", "pack", "in"]).expect(val);
+            std::env::remove_var("MJ_ATLAS_NO_MIRROR");
+            match cli.command {
+                Commands::Pack { no_mirror, .. } => assert_eq!(no_mirror, want, "{}", val),
+                _ => unreachable!(),
+            }
+        }
+    }
 
     /// Every subcommand/arg must carry help text and a machine-call spec.
     #[test]

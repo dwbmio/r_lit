@@ -1,7 +1,7 @@
 # mj_atlas — Game-Ready Texture Atlas Packer
 
 - purpose: Pack sprite images into optimized texture atlases with metadata for game engines; manifest is a first-class artifact you can inspect / diff / verify / tag
-- version: 0.6.0
+- version: 0.6.1
 - language: Rust
 - binary: mj_atlas
 - license: MIT (imagequant/quantize feature is GPL-3.0)
