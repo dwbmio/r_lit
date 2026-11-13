@@ -208,6 +208,32 @@ def file_sha256(p: Path) -> str:
     return h.hexdigest()
 
 
+class ArchiveStorageError(RuntimeError):
+    def __init__(self, operation, exc):
+        response = getattr(exc, 'response', {})
+        code = str(response.get('Error', {}).get('Code', ''))
+        status = response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+        self.public = {'operation': operation, 'exception': type(exc).__name__}
+        if re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', code):
+            self.public['code'] = code
+        if type(status) is int:
+            self.public['http_status'] = status
+        super().__init__('Archive storage operation failed')
+
+
+def conditional_put(s3, **kwargs):
+    # R2 documents this SDK event for custom headers. Older botocore (1.34.46)
+    # lacks the IfNoneMatch model field; the same signed HTTP condition works.
+    def condition(params, **unused):
+        params['headers']['If-None-Match'] = '*'
+    event = 'before-call.s3.PutObject'
+    s3.meta.events.register(event, condition)
+    try:
+        return s3.put_object(**kwargs)
+    finally:
+        s3.meta.events.unregister(event, condition)
+
+
 def immutable_put(s3, bucket, path, key, content_type, cache_control):
     """Create only; a retry may reuse the same bytes but cannot replace them."""
     want = path.stat().st_size, file_sha256(path)
@@ -218,7 +244,7 @@ def immutable_put(s3, bucket, path, key, content_type, cache_control):
             code = getattr(exc, "response", {}).get("Error", {}).get("Code")
             if str(code) in ("404", "NoSuchKey", "NotFound"):
                 return None
-            raise RuntimeError("Archive storage read failed") from None
+            raise ArchiveStorageError('get', exc) from None
         h = hashlib.sha256()
         size = 0
         with response["Body"] as stream:
@@ -234,13 +260,13 @@ def immutable_put(s3, bucket, path, key, content_type, cache_control):
     if before is None:
         try:
             with path.open("rb") as body:
-                s3.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*",
+                conditional_put(s3, Bucket=bucket, Key=key, Body=body,
                               ContentType=content_type, CacheControl=cache_control,
                               Metadata={"sha256": want[1]})
         except Exception as exc:
             code = getattr(exc, "response", {}).get("Error", {}).get("Code")
             if str(code) not in ("412", "PreconditionFailed"):
-                raise RuntimeError("Archive conditional upload failed") from None
+                raise ArchiveStorageError('conditional-put', exc) from None
     if remote_hash() != want:
         raise ValueError("Archive storage byte verification failed: " + key)
     info("Archive object verified: " + key)
@@ -722,6 +748,8 @@ def main(argv: list[str] | None = None) -> int:
             raise
         # Client errors must never print credential-bearing URLs or process argv.
         err("Archive failed during " + getattr(args, "archive_phase", "validation") + ": " + type(exc).__name__)
+        if isinstance(exc, ArchiveStorageError):
+            err(json.dumps(exc.public, sort_keys=True))
         return 1
 
 

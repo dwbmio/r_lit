@@ -20,6 +20,24 @@ class StorageError(Exception):
         self.response = {'Error': {'Code': code}}
 
 
+class FakeS3:
+    def __init__(self, get, put):
+        self.get_object, self.put = get, put
+        self.handlers = []
+        self.meta = types.SimpleNamespace(events=types.SimpleNamespace(
+            register=lambda event, handler: self.handlers.append(handler),
+            unregister=lambda event, handler: self.handlers.remove(handler)))
+
+    def put_object(self, **kwargs):
+        params = {'headers': {}}
+        for handler in self.handlers: handler(params=params)
+        if params['headers'].get('If-None-Match') != '*':
+            raise AssertionError('Conditional HTTP header missing')
+        if 'IfNoneMatch' in kwargs:
+            raise AssertionError('Old SDK cannot accept this model parameter')
+        return self.put(IfNoneMatch=params['headers']['If-None-Match'], **kwargs)
+
+
 class ArchiveContracts(unittest.TestCase):
     def test_missing_version_is_distinct_from_business_errors(self):
         client = publisher.HfrogClient('https://api.invalid')
@@ -57,7 +75,7 @@ class ArchiveContracts(unittest.TestCase):
             def put(**kwargs):
                 puts.append(kwargs['IfNoneMatch'])
                 objects[kwargs['Key']] = kwargs['Body'].read()
-            store = types.SimpleNamespace(get_object=get, put_object=put)
+            store = FakeS3(get, put)
             for _ in range(2):
                 publisher.immutable_put(store, 'bucket', path, 'version/file.apk', 'binary', 'immutable')
             self.assertEqual(puts, ['*'])
@@ -79,7 +97,7 @@ class ArchiveContracts(unittest.TestCase):
             def put(**kwargs):
                 raise StorageError('PreconditionFailed')
             with self.assertRaises(ValueError):
-                publisher.immutable_put(types.SimpleNamespace(get_object=get, put_object=put),
+                publisher.immutable_put(FakeS3(get, put),
                                         'bucket', path, 'key', 'binary', 'immutable')
 
     def test_download_requires_the_actual_size_and_hash(self):
@@ -174,6 +192,20 @@ class ArchiveContracts(unittest.TestCase):
                 self.assertEqual(sync.call_args.kwargs['version'], 'v1.2.3')
                 gate.assert_not_called()
                 download.assert_not_called()
+
+    def test_sdk_header_is_scoped_and_cleaned_after_failure(self):
+        def fail(**kwargs): raise StorageError('AccessDenied')
+        store = FakeS3(None, fail)
+        with self.assertRaises(StorageError): publisher.conditional_put(store, Bucket='bucket', Key='key')
+        self.assertEqual(store.handlers, [])
+
+    def test_storage_denial_reports_only_safe_public_fields(self):
+        exc = StorageError('AccessDenied')
+        exc.args = ('secret-bearing-auth-argv',)
+        exc.response['ResponseMetadata'] = {'HTTPStatusCode': 403}
+        safe = publisher.ArchiveStorageError('get', exc)
+        self.assertEqual(safe.public, {'operation': 'get', 'exception': 'StorageError', 'code': 'AccessDenied', 'http_status': 403})
+        self.assertNotIn('secret-bearing', str(safe))
 
 
 if __name__ == '__main__':
