@@ -29,6 +29,12 @@ Three CLI entry points; pick the one that matches the caller's stage:
   ./hfrog_publisher.py mirror           # R2 upload only
   ./hfrog_publisher.py patch-meta       # SQL-level field refresh (no API)
 
+Internal CI uses publish --archive: is_latest=false, conditional immutable R2
+objects, a deterministic public manifest, HFrog readback and streamed download
+size/SHA256 gates. No stable install.sh is written in archive mode. --exact-version
+preserves existing game/template version spelling; --platform CODE=JSON supplies
+explicit non-Rust artifact types, including separate APK and AAB records.
+
 Run any of them with --help to see arguments. All paths and JSON values are read
 from CLI flags or env vars (R2_*, HFROG_API, POSTGRES_HFROG_*) — no hidden
 defaults that would silently change behaviour between callers.
@@ -48,13 +54,15 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Iterable
 
 # ─── shared constants ──────────────────────────────────────────────────────────
 
-DEFAULT_PLATFORM_DICT: dict[str, tuple[str, str, str]] = {
+DEFAULT_PLATFORM_DICT: dict[str, tuple[str | None, str | None, str]] = {
+    "artifact-manifest":        (None, None, "Archive manifest"),
     # target_triple → (os, arch, display_name)
     "x86_64-unknown-linux-gnu":  ("linux",   "x86_64",  "Linux x86_64"),
     "aarch64-unknown-linux-gnu": ("linux",   "aarch64", "Linux ARM64"),
@@ -88,6 +96,23 @@ def err(msg: str)  -> None: _log("err",  msg)
 class HfrogClient:
     def __init__(self, api_base: str):
         self.api = api_base.rstrip("/")
+
+    def get(self, endpoint: str, *, missing_ok: bool = False) -> dict | None:
+        req = urllib.request.Request(self.api + endpoint, headers={
+            "User-Agent": "hfrog_publisher/1.0 (+https://github.com/dwbmio/r_lit)",
+            "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if missing_ok and exc.code == 404:
+                return None
+            raise RuntimeError("HFrog read failed: HTTP " + str(exc.code)) from None
+        if missing_ok and data.get("code") == 1004:
+            return None
+        if data.get("code") != 0 or not isinstance(data.get("data"), dict):
+            raise ValueError("HFrog readback has an invalid business result")
+        return data["data"]
 
     def post(self, endpoint: str, payload: dict[str, Any]) -> tuple[bool, str]:
         url = f"{self.api}{endpoint}"
@@ -158,9 +183,13 @@ def _r2_client():
 
 def r2_put(local_path: Path, key: str, *,
            content_type: str = "application/octet-stream",
-           cache_control: str = "public, max-age=31536000, immutable") -> None:
+           cache_control: str = "public, max-age=31536000, immutable",
+           immutable: bool = False) -> None:
     s3 = _r2_client()
     bucket = os.environ["R2_BUCKET"]
+    if immutable:
+        immutable_put(s3, bucket, local_path, key, content_type, cache_control)
+        return
     s3.upload_file(
         str(local_path), bucket, key,
         ExtraArgs={"ContentType": content_type, "CacheControl": cache_control},
@@ -177,6 +206,79 @@ def file_sha256(p: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def immutable_put(s3, bucket, path, key, content_type, cache_control):
+    """Create only; a retry may reuse the same bytes but cannot replace them."""
+    want = path.stat().st_size, file_sha256(path)
+    def remote_hash():
+        try:
+            response = s3.get_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+            if str(code) in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise RuntimeError("Archive storage read failed") from None
+        h = hashlib.sha256()
+        size = 0
+        with response["Body"] as stream:
+            for block in iter(lambda: stream.read(1048576), b""):
+                h.update(block)
+                size += len(block)
+        if size != response["ContentLength"]:
+            raise ValueError("Archive storage response length mismatch")
+        return size, h.hexdigest()
+    before = remote_hash()
+    if before is not None and before != want:
+        raise ValueError("Immutable archive contains different bytes: " + key)
+    if before is None:
+        try:
+            with path.open("rb") as body:
+                s3.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*",
+                              ContentType=content_type, CacheControl=cache_control,
+                              Metadata={"sha256": want[1]})
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+            if str(code) not in ("412", "PreconditionFailed"):
+                raise RuntimeError("Archive conditional upload failed") from None
+    if remote_hash() != want:
+        raise ValueError("Archive storage byte verification failed: " + key)
+    info("Archive object verified: " + key)
+
+
+def verify_download(url, size, sha):
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Archive download must be an unsigned HTTPS URL")
+    req = urllib.request.Request(url, headers={"User-Agent": "hfrog_publisher/1.0"})
+    h = hashlib.sha256()
+    count = 0
+    with urllib.request.urlopen(req, timeout=120) as response:
+        if response.status != 200:
+            raise ValueError("Archive download did not return HTTP 200")
+        for block in iter(lambda: response.read(1048576), b""):
+            count += len(block)
+            if count > size:
+                raise ValueError("Archive download exceeds the pinned size")
+            h.update(block)
+    if (count, h.hexdigest()) != (size, sha):
+        raise ValueError("Archive download size/SHA256 mismatch")
+
+
+def archive_record_gate(record, assets, *, complete):
+    if record is None:
+        if complete:
+            raise ValueError("HFrog archive version missing after publish")
+        return
+    if record.get("is_latest") is not False:
+        raise ValueError("Ordinary archive cannot modify a promoted version")
+    for target, _, url, size, sha in assets:
+        rows = [x for x in record.get("platforms", []) if x.get("platform_code") == target]
+        if not rows and not complete:
+            continue
+        if len(rows) != 1 or any(rows[0].get(k) != v for k, v in
+                {"download_url": url, "file_size": size, "checksum_sha256": sha}.items()):
+            raise ValueError("HFrog archive URL/size/SHA256 conflict: " + target)
 
 
 def parse_assets(values: list[str]) -> list[tuple[str, Path]]:
@@ -257,6 +359,7 @@ def sync_hfrog_records(client: HfrogClient, *,
                         release_notes: str, created_by: str,
                         assets_with_checksum: list[tuple[str, Path, str, int, str]],
                         git_commit: str = "", jenkins_url: str = "",
+                        is_latest: bool = True, platform_specs: dict | None = None,
                         ) -> bool:
     """Push the four hfrog API records. Returns True on full success."""
     ok = True
@@ -273,7 +376,7 @@ def sync_hfrog_records(client: HfrogClient, *,
         if target in seen_targets:
             continue
         seen_targets.add(target)
-        spec = DEFAULT_PLATFORM_DICT.get(target)
+        spec = (platform_specs or {}).get(target) or DEFAULT_PLATFORM_DICT.get(target)
         if not spec:
             warn(f"unknown target {target!r}, sending generic platform record")
             os_, arch, display = "unknown", "unknown", target
@@ -286,7 +389,7 @@ def sync_hfrog_records(client: HfrogClient, *,
     ok &= client.post("/api/release/versions", {
         "software_name": tool,
         "version": version,
-        "is_latest": True,
+        "is_latest": is_latest,
         "release_notes": release_notes,
         "created_by": created_by,
         **({"git_commit": git_commit} if git_commit else {}),
@@ -355,8 +458,16 @@ def cmd_publish(args) -> int:
 
     version_no_v = args.version.lstrip("v")
     version_v    = "v" + version_no_v
+    version = args.version if args.exact_version else version_v
     prefix       = args.r2_prefix.rstrip("/")
     version_dir  = f"{prefix}/v{version_no_v}"
+    platform_specs = {}
+    for value in args.platform:
+        target, encoded = value.split("=", 1)
+        spec = json.loads(encoded)
+        if set(spec) != {"os", "arch", "display_name"}:
+            raise ValueError("Platform metadata must specify os, arch and display_name")
+        platform_specs[target] = spec["os"], spec["arch"], spec["display_name"]
 
     # 1. compute size + sha256 for every asset
     enriched: list[tuple[str, Path, str, int, str]] = []
@@ -372,19 +483,64 @@ def cmd_publish(args) -> int:
                   .replace("{filename}", path.name))
         else:
             dl = f"https://{args.r2_public_domain}/{version_dir}/{path.name}"
+        if args.archive:
+            parsed = urllib.parse.urlsplit(dl)
+            if parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("Archive download must be an unsigned HTTPS URL")
+            if (parsed.netloc != args.r2_public_domain or ".." in parsed.path.split("/")
+                    or not parsed.path.startswith("/" + version_dir + "/")):
+                raise ValueError("Archive URL must identify its immutable R2 version prefix")
         enriched.append((target, path, dl, size, sha))
         info(f"  {target:36s}  {size:>12,d} bytes  sha256={sha[:16]}…  → {dl}")
 
+    client = HfrogClient(args.hfrog_api)
+    endpoint = "/api/release/releases/" + urllib.parse.quote(args.tool, safe="") + "/" + urllib.parse.quote(version, safe="")
+    if args.archive:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.tool) or not re.fullmatch(
+                r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version):
+            raise ValueError("Archive application/version must be explicit and versioned")
+        if any(x in ("", ".", "..", "latest") for x in prefix.split("/")):
+            raise ValueError("Archive prefix cannot contain mutable or unsafe segments")
+        targets = [x[0] for x in enriched]
+        if len(targets) != len(set(targets)) or "artifact-manifest" in targets:
+            raise ValueError("Each archive artifact requires a distinct platform/type")
+        for target in targets:
+            if target not in platform_specs and target not in DEFAULT_PLATFORM_DICT:
+                raise ValueError("Archive requires explicit platform metadata: " + target)
+        # This manifest has no timestamps, workspace paths or archive-job identity.
+        # Retrying the same producer version therefore produces the same bytes.
+        manifest = {"schema": 1, "application": args.tool, "kind": args.artifact_kind,
+                    "version": version, "is_latest": False, "git_commit": args.git_commit,
+                    "jenkins_url": args.jenkins_url,
+                    "artifacts": [{"platform_code": t, "filename": p.name, "download_url": u,
+                                   "file_size": n, "checksum_sha256": h}
+                                  for t, p, u, n, h in sorted(enriched)]}
+        output = args.manifest_out or Path("hfrog-archive") / args.tool / version / "manifest.json"
+        if output.is_symlink():
+            raise ValueError("Archive manifest cannot be a symlink")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(manifest, sort_keys=True, indent=2) + chr(10))
+        url = f"https://{args.r2_public_domain}/{version_dir}/manifest.json"
+        enriched.append(("artifact-manifest", output, url, output.stat().st_size, file_sha256(output)))
+        assets.append(("artifact-manifest", output))
+        args.archive_phase = "HFrog preflight"
+        archive_record_gate(client.get(endpoint, missing_ok=True), enriched, complete=False)
+
     # 2. mirror to R2 (binaries + install.sh) — optional, but typically wanted
     if args.upload_r2:
+        args.archive_phase = "R2 immutable upload"
         info("═══ R2 upload ═══")
         for target, path in assets:
-            r2_put(path, f"{version_dir}/{path.name}")
-        if args.sha256sums and args.sha256sums.is_file():
+            name = "manifest.json" if target == "artifact-manifest" else path.name
+            key = (urllib.parse.urlsplit(next(x[2] for x in enriched if x[0] == target)).path.lstrip("/")
+                   if args.archive else f"{version_dir}/{name}")
+            r2_put(path, key, immutable=args.archive,
+                   content_type="application/json" if target == "artifact-manifest" else "application/octet-stream")
+        if args.sha256sums and args.sha256sums.is_file() and not args.archive:
             r2_put(args.sha256sums, f"{version_dir}/SHA256SUMS",
                    content_type="text/plain; charset=utf-8",
                    cache_control="public, max-age=300")
-        if args.install_template:
+        if args.install_template and not args.archive:
             text = render_install_sh(
                 args.install_template, tool=args.tool, version=version_no_v,
                 github_repo=args.github_repo)
@@ -401,11 +557,15 @@ def cmd_publish(args) -> int:
             tmp_l.unlink(); tmp_v.unlink()
 
     # 3. push hfrog records
+    if args.archive and not args.upload_r2:
+        args.archive_phase = "existing public byte verification"
+        for _, _, url, size, sha in enriched:
+            verify_download(url, size, sha)
+    args.archive_phase = "HFrog registration"
     info("═══ HFrog sync ═══")
-    client = HfrogClient(args.hfrog_api)
     ok = sync_hfrog_records(
         client,
-        tool=args.tool, version=version_v, description=args.description,
+        tool=args.tool, version=version, description=args.description,
         install_command=args.install_command,
         install_script_url=args.install_script_url,
         source_type=args.source_type,
@@ -413,7 +573,17 @@ def cmd_publish(args) -> int:
         created_by=args.created_by,
         assets_with_checksum=enriched,
         git_commit=args.git_commit, jenkins_url=args.jenkins_url,
+        is_latest=not args.archive, platform_specs=platform_specs,
     )
+
+    if args.archive:
+        if not ok:
+            raise ValueError("Archive registration failed")
+        args.archive_phase = "HFrog readback"
+        archive_record_gate(client.get(endpoint), enriched, complete=True)
+        args.archive_phase = "public byte verification"
+        for _, _, url, size, sha in enriched:
+            verify_download(url, size, sha)
 
     # 4. SQL patch (optional, e.g. category_id, llms_txt, readme_url)
     if args.postgres_url:
@@ -429,7 +599,7 @@ def cmd_publish(args) -> int:
             patch_software_meta(args.postgres_url, args.tool,
                                 fields=fields, category_code=args.category)
         except Exception as e:
-            warn(f"SQL patch failed: {e}")
+            warn("SQL patch failed: " + type(e).__name__)
             ok = False
 
     if not ok:
@@ -509,6 +679,13 @@ def main(argv: list[str] | None = None) -> int:
                     "https://hfrog.gamesci-lite.com"))
     pp.add_argument("--upload-r2", action="store_true",
                     help="also mirror assets + install.sh to R2 (requires R2_* env)")
+    pp.add_argument("--archive", action="store_true",
+                    help="immutable ordinary archive, latest=false, manifest and strict readback/download gates")
+    pp.add_argument("--exact-version", action="store_true", help="preserve the supplied HFrog version spelling")
+    pp.add_argument("--artifact-kind", default="binary", help="public artifact type in the archive manifest")
+    pp.add_argument("--platform", action="append", default=[], metavar="CODE=JSON",
+                    help="explicit custom platform metadata: os, arch, display_name")
+    pp.add_argument("--manifest-out", type=Path, help="public archive manifest output path")
     pp.add_argument("--release-notes", default="", help="rb_versions.release_notes")
     pp.add_argument("--created-by", default="hfrog_publisher", help="rb_versions.created_by")
     pp.add_argument("--postgres-url", default=os.environ.get("HFROG_PG_URL"),
@@ -531,7 +708,14 @@ def main(argv: list[str] | None = None) -> int:
     pm.set_defaults(func=cmd_patch_meta)
 
     args = ap.parse_args(argv)
-    return int(args.func(args) or 0)
+    try:
+        return int(args.func(args) or 0)
+    except Exception as exc:
+        if not getattr(args, "archive", False):
+            raise
+        # Client errors must never print credential-bearing URLs or process argv.
+        err("Archive failed during " + getattr(args, "archive_phase", "validation") + ": " + type(exc).__name__)
+        return 1
 
 
 if __name__ == "__main__":
