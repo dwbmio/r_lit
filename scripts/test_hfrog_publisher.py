@@ -179,6 +179,44 @@ class ArchiveContracts(unittest.TestCase):
                     '--platform', 'android-apk={"os":"android","arch":"arm64","display_name":"APK"}']), 1)
                 put.assert_not_called()
 
+    def test_archive_rejects_different_same_basename_bytes_before_any_mutation(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as folder:
+            root = Path(folder)
+            first, second = root / 'one' / 'same.bin', root / 'two' / 'same.bin'
+            first.parent.mkdir(); second.parent.mkdir()
+            first.write_bytes(b'one'); second.write_bytes(b'two')
+            for template in ([], ['--download-url-template',
+                    'https://r2.gamesci-lite.com/ci-archives/game/v{version_no_v}/{target}/{filename}']):
+                with self.subTest(template=template), patch.object(publisher, 'HfrogClient') as client, \
+                        patch.object(publisher, 'r2_put') as put:
+                    self.assertEqual(publisher.main(['publish', '--archive', '--tool', 'game',
+                        '--version', '1.2.3', '--r2-prefix', 'ci-archives/game', '--upload-r2',
+                        '--asset', 'x86_64-unknown-linux-gnu=' + str(first),
+                        '--asset', 'aarch64-unknown-linux-gnu=' + str(second), *template]), 1)
+                    client.return_value.get.assert_not_called()
+                    client.return_value.post.assert_not_called()
+                    put.assert_not_called()
+            self.assertEqual(first.read_bytes(), b'one')
+            self.assertEqual(second.read_bytes(), b'two')
+
+    def test_archive_manifest_name_and_output_cannot_replace_assets(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as folder:
+            root = Path(folder)
+            for name, output in (('manifest.json', root / 'out.json'), ('input.bin', root / 'input.bin')):
+                path = root / name
+                path.write_bytes(b'keep')
+                with self.subTest(name=name), patch.object(publisher, 'HfrogClient') as client, \
+                        patch.object(publisher, 'r2_put') as put:
+                    self.assertEqual(publisher.main(['publish', '--archive', '--tool', 'game',
+                        '--version', '1.2.3', '--r2-prefix', 'ci-archives/game', '--upload-r2',
+                        '--asset', 'x86_64-unknown-linux-gnu=' + str(path), '--manifest-out', str(output),
+                        '--download-url-template',
+                        'https://r2.gamesci-lite.com/ci-archives/game/v{version_no_v}/{target}/{filename}']), 1)
+                    client.return_value.get.assert_not_called()
+                    client.return_value.post.assert_not_called()
+                    put.assert_not_called()
+                    self.assertEqual(path.read_bytes(), b'keep')
+
     def test_explicit_publish_keeps_latest_and_does_not_use_archive_gates(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as folder:
             path = Path(folder) / 'binary'

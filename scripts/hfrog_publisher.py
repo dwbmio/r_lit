@@ -234,6 +234,41 @@ def conditional_put(s3, **kwargs):
         s3.meta.events.unregister(event, condition)
 
 
+def cmd_archive_sdk_check(args):
+    """Exercise the installed SDK's signed conditional PUT without any network."""
+    import boto3
+    import botocore
+    from botocore.config import Config
+    # Public dummy values prevent credential discovery. They never leave memory.
+    s3 = boto3.client('s3', endpoint_url='https://archive-sdk-probe.invalid',
+        aws_access_key_id='public-archive-probe', aws_secret_access_key='public-archive-probe',
+        region_name='auto', config=Config(signature_version='s3v4', retries={'max_attempts': 0}))
+    class Checked(Exception):
+        pass
+    def reject_network(*unused, **kwargs):
+        raise ValueError('Archive SDK probe attempted network')
+    def check_request(request, **unused):
+        if request.headers.get('If-None-Match') not in ('*', b'*'):
+            raise ValueError('Conditional PUT header missing')
+        signed = request.headers.get('Authorization', b'')
+        if isinstance(signed, bytes):
+            signed = signed.decode('ascii')
+        if not re.search(r'SignedHeaders=[^ ]*\bif-none-match\b', signed):
+            raise ValueError('Conditional PUT header was not signed')
+        raise Checked
+    s3._endpoint.http_session.send = reject_network
+    s3.meta.events.register('before-send.s3.PutObject', check_request)
+    try:
+        conditional_put(s3, Bucket='archive-probe', Key='probe', Body=b'')
+    except Checked:
+        info('Archive SDK conditional PUT verified offline: boto3=' + boto3.__version__
+             + ' botocore=' + botocore.__version__ + ' signed If-None-Match=*')
+        return 0
+    finally:
+        s3.close()
+    raise ValueError('Archive SDK conditional PUT was not checked')
+
+
 def immutable_put(s3, bucket, path, key, content_type, cache_control):
     """Create only; a retry may reuse the same bytes but cannot replace them."""
     want = path.stat().st_size, file_sha256(path)
@@ -533,6 +568,9 @@ def cmd_publish(args) -> int:
         targets = [x[0] for x in enriched]
         if len(targets) != len(set(targets)) or "artifact-manifest" in targets:
             raise ValueError("Each archive artifact requires a distinct platform/type")
+        names = [p.name for _, p in assets]
+        if len(names) != len(set(names)) or 'manifest.json' in names:
+            raise ValueError('Archive basenames must be distinct and cannot reserve manifest.json')
         keys = [urllib.parse.unquote(urllib.parse.urlsplit(x[2]).path) for x in enriched]
         if (len(keys) != len(set(keys)) or any(".." in key.split("/") for key in keys)
                 or "/" + version_dir + "/manifest.json" in keys):
@@ -551,6 +589,8 @@ def cmd_publish(args) -> int:
         output = args.manifest_out or Path("hfrog-archive") / args.tool / version / "manifest.json"
         if output.is_symlink() or any(p.is_symlink() for p in output.parents):
             raise ValueError("Archive manifest cannot be a symlink")
+        if any(output.resolve() == path for _, path in assets):
+            raise ValueError('Archive manifest cannot replace an input artifact')
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(manifest, sort_keys=True, indent=2) + chr(10))
         url = f"https://{args.r2_public_domain}/{version_dir}/manifest.json"
@@ -704,6 +744,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Single source of truth: publish artifacts to hfrog + R2.",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sdk = sub.add_parser('archive-sdk-check', help='offline signed conditional PUT capability check')
+    sdk.set_defaults(func=cmd_archive_sdk_check, archive=True, archive_phase='SDK capability check')
 
     # publish (the workhorse)
     pp = sub.add_parser("publish", help="full sync: optional R2 mirror + hfrog API + SQL patch")
