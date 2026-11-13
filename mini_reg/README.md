@@ -44,6 +44,7 @@ mini_reg init batch.toml
 # Edit company, task IDs, names, descriptions and app kinds in batch.toml.
 mini_reg import batch.toml
 mini_reg list --json
+mini_reg next --json
 ```
 
 Use `kind = "mini_program"` or `kind = "mini_game"` explicitly. The template
@@ -70,6 +71,11 @@ cookies, passwords and authentication token stores are not read or exported.
 If corporate identity cannot be verified, browser operations stop.
 
 ## Per-app handoff
+
+`mini_reg next --open` resumes the first unconfirmed task in stable batch/task-ID
+order. It opens a portal only if the task has no saved tab. Completed tasks are
+skipped; interrupted tasks remain visible for review. Use `open TASK` explicitly
+if a saved tab was closed. `next --batch ID` limits selection to one batch.
 
 ```bash
 mini_reg open wechat-demo

@@ -35,6 +35,14 @@ pub enum Commands {
         #[arg(long)]
         batch: Option<String>,
     },
+    /// Resume the next unconfirmed task / 继续下一个未确认任务
+    Next {
+        #[arg(long)]
+        batch: Option<String>,
+        /// Open a portal only when this task has no saved tab / 没有页面记录时打开官方后台
+        #[arg(long)]
+        open: bool,
+    },
     /// Show a task and its official portal / 查看任务与官方入口
     Show { id: String },
     /// Open the official portal in the bound enterprise Chrome / 打开企业浏览器中的官方后台
@@ -112,6 +120,7 @@ fn main() {
         Commands::Init { .. } => "init",
         Commands::Import { .. } => "import",
         Commands::List { .. } => "list",
+        Commands::Next { .. } => "next",
         Commands::Show { .. } => "show",
         Commands::Open { .. } => "open",
         Commands::Fill { .. } => "fill",

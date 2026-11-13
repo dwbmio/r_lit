@@ -11,12 +11,18 @@ pub enum RegError {
     #[error("HTTP / 本地浏览器连接: {0}")]
     Http(#[from] reqwest::Error),
     #[error("WebSocket / 浏览器协议连接失败")]
-    WebSocket(#[from] tungstenite::Error),
+    WebSocket(#[from] Box<tungstenite::Error>),
     #[error("{0}")]
     Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, RegError>;
+
+impl From<tungstenite::Error> for RegError {
+    fn from(error: tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(error))
+    }
+}
 
 pub fn invalid(message: impl Into<String>) -> RegError {
     RegError::Invalid(message.into())

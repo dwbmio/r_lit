@@ -6,7 +6,8 @@
 - runtime: native Rust executable; existing dedicated enterprise Chrome required for browser commands
 - dependencies: no Python, Node.js, Playwright, external database or daemon; OS standard libraries required
 - storage: bundled SQLite; transactional imports; WAL; FULL synchronization; OS app-data directory or --db
-- commands: init, import, list, show, open, fill, confirm, export, browser bind, browser tabs, selectors
+- commands: init, import, list, next, show, open, fill, confirm, export, browser bind, browser tabs, selectors
+- batch_resume: next --open; stable batch/task-ID order; confirmed tasks skipped; existing tab not reopened
 - browser: native loopback HTTP/WebSocket CDP; gamesci-lite.com corporate metadata and process fingerprint required
 - form: visible unique name/summary inputs; exact labels or persistent CSS selectors
 - default_fill: dry run; --apply required for text writes

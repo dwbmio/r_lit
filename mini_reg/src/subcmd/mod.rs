@@ -34,6 +34,25 @@ pub fn execute(command: &Commands, db: &Path) -> Result<Value> {
             store.import(&Batch::read(manifest)?)?,
         )?),
         Commands::List { batch } => Ok(serde_json::to_value(store.list(batch.as_deref())?)?),
+        Commands::Next { batch, open } => {
+            let jobs = store.list(batch.as_deref())?;
+            let count = jobs.len();
+            let next = jobs.into_iter().find(|job| job.phase != "confirmed");
+            let Some(mut job) = next else {
+                return Ok(
+                    json!({"all_user_confirmed": count > 0, "tasks_total": count, "task": null, "platform_verified": false}),
+                );
+            };
+            if *open && job.tab_id.is_none() {
+                let browser = Browser::connect(store.setting("browser")?)?;
+                let tab = browser.open(job.app.platform)?;
+                store.transition(&job.app.id, "opened", Some(&tab))?;
+                job = store.job(&job.app.id)?;
+            }
+            Ok(
+                json!({"all_user_confirmed": false, "portal": job.app.platform.portal(), "task": job}),
+            )
+        }
         Commands::Show { id } => {
             let job = store.job(id)?;
             Ok(json!({"portal": job.app.platform.portal(), "task": job}))

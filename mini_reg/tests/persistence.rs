@@ -210,6 +210,15 @@ fn cli_restart_and_export_keep_stdout_machine_readable() -> TestResult {
     };
     run(&["import", manifest.to_str().ok_or("non-UTF8 test path")?])?;
     run(&["confirm", "qq-demo", "--app-id", "1234567890"])?;
+    assert_eq!(
+        run(&["next"])?["result"]["task"]["app"]["id"],
+        "alipay-demo"
+    );
+    run(&["confirm", "alipay-demo", "--app-id", "2026000000000001"])?;
+    assert_eq!(
+        run(&["next"])?["result"]["task"]["app"]["id"],
+        "douyin-demo"
+    );
     let list = run(&["list"])?;
     assert_eq!(
         list["result"]

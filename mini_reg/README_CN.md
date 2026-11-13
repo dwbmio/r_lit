@@ -39,6 +39,7 @@ mini_reg init batch.toml
 # 修改清单中的公司、任务编号、名称、简介和应用类型。
 mini_reg import batch.toml
 mini_reg list --json
+mini_reg next --json
 ```
 
 应用类型明确填写 `kind = "mini_program"` 或 `kind = "mini_game"`。
@@ -61,6 +62,10 @@ mini_reg browser tabs --json
 Cookie、密码和认证令牌库。无法核实企业身份时停止。
 
 ## 单个应用的人工接手点
+
+`mini_reg next --open` 按批次、任务编号顺序继续首个未确认任务。
+仅在没有页面记录时打开官方入口。已确认任务自动跳过，中断任务保留待检查。
+原页面已关闭时，用 `open 任务编号` 明确重开。`next --batch 编号` 可限定一个批次。
 
 ```bash
 mini_reg open wechat-demo
