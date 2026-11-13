@@ -9,6 +9,7 @@
 ## Directory
 
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
+- mini_reg/ — Native Rust mini-app registration helper; persistent batches; verified enterprise Chrome; human confirmations
 - img_resize/ — Image resizing and compression
 - ui-trim/ — Clean AI-generated UI asset PNGs into tight transparent PNGs
 - textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)

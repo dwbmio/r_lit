@@ -14,6 +14,7 @@ Pre-built binaries are hosted on [snappywatt.com](https://www.snappywatt.com/) a
 | Directory | Description |
 |-----------|-------------|
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |
+| [mini_reg](mini_reg/) | Persistent native-Rust helper for company-owned mini-app registration; enterprise-browser text filling and human handoff |
 | [img_resize](img_resize/) | Image resizing and compression |
 | [ui-trim](ui-trim/) | Clean AI-generated UI asset PNGs into tight transparent PNGs |
 | [textexture](textexture/) | Art-text image generation (shadow / stroke / gradient / glow / neon) |

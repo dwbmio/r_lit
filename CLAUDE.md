@@ -9,6 +9,7 @@ R_LIT 是一个 Rust **短时运行 CLI 工具**集合仓库。每个子目录�
 | 目录 | 说明 |
 |------|------|
 | `bulk_upload/` | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
+| `mini_reg/` | 自家小程序半自动注册辅助；企业 Chrome、SQLite 续办、原生 HTTP/WebSocket |
 | `img_resize/` | 图片缩放与压缩 |
 | `ui-trim/` | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | `textexture/` | 艺术字图片生成（阴影/描边/渐变/发光/霓虹） |

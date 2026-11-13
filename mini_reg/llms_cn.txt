@@ -1,0 +1,20 @@
+# mini_reg
+- 用途: 自家公司小程序半自动注册辅助
+- 版本: 0.1.0
+- 平台: 微信、抖音、QQ、支付宝
+- 应用类型: 每项明确填写 mini_program 或 mini_game
+- 运行: Rust 原生可执行文件；浏览器命令需要既有独立企业 Chrome
+- 依赖: 无需 Python、Node.js、Playwright、外置数据库或守护进程；需要系统基础库
+- 存储: 内置 SQLite；事务导入；WAL；FULL 同步；系统应用数据目录或 --db
+- 命令: init、import、list、show、open、fill、confirm、export、browser bind、browser tabs、selectors
+- 浏览器: 原生本机 HTTP/WebSocket CDP；核对 gamesci-lite.com 企业元信息与进程指纹
+- 填表: 可见且唯一的名称、简介框；明确标签或持久 CSS 选择器
+- 默认行为: 只预览；文本写入需明确指定 --apply
+- 人工步骤: 应用类型、图标资质、类目、实名、协议、付费、提交
+- 确认来源: 人工登记应用编号；platform_verified=false
+- 中断: 写入前持久保存 needs_review；不重试最终注册
+- 输出: --json 标准输出单个结果；标准错误日志；每次覆盖同名 .log
+- 导出: 仅任务资料；不含浏览器绑定和登录资料
+- 验收状态: 尚未进行真实平台表单验收
+- 构建分发: 专用 Jenkins worker；沿用 r_lit 的 R2/HFrog 链路
+- 示例: mini_reg init batch.toml; mini_reg import batch.toml; mini_reg list --json

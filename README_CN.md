@@ -14,6 +14,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 | 目录 | 说明 |
 |------|------|
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
+| [mini_reg](mini_reg/) | 自家小程序半自动注册辅助；Rust 原生连接企业浏览器、持久续办与人工确认 |
 | [img_resize](img_resize/) | 图片缩放与压缩 |
 | [ui-trim](ui-trim/) | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | [textexture](textexture/) | 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹） |
