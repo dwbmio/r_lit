@@ -353,7 +353,8 @@ impl Cdp {
             TcpStream::connect_timeout(&SocketAddr::new(host, port), Duration::from_secs(8))?;
         stream.set_read_timeout(Some(Duration::from_secs(8)))?;
         stream.set_write_timeout(Some(Duration::from_secs(8)))?;
-        let (socket, _) = tungstenite::client(url.as_str(), stream)?;
+        let (socket, _) = tungstenite::client(url.as_str(), stream)
+            .map_err(|_| invalid("CDP handshake failed / 浏览器协议握手失败"))?;
         Ok(Self { socket, next_id: 0 })
     }
 
@@ -383,5 +384,55 @@ impl Cdp {
             }
         }
         Err(invalid("CDP response limit reached / 浏览器响应超限"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_cdp_handshake_and_response_correlation(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        let server = std::thread::spawn(move || -> std::result::Result<(), String> {
+            let (stream, _) = listener.accept().map_err(|e| e.to_string())?;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|e| e.to_string())?;
+            let mut socket = tungstenite::accept(stream).map_err(|e| e.to_string())?;
+            let request = socket.read().map_err(|e| e.to_string())?;
+            let request: Value =
+                serde_json::from_str(request.to_text().map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let id = request
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or("missing request id")?;
+            socket
+                .send(Message::Text(
+                    json!({"method":"Runtime.event","params":{}}).to_string(),
+                ))
+                .map_err(|e| e.to_string())?;
+            socket
+                .send(Message::Text(
+                    json!({"id":id+1,"result":{"accepted":false}}).to_string(),
+                ))
+                .map_err(|e| e.to_string())?;
+            socket
+                .send(Message::Text(
+                    json!({"id":id,"result":{"accepted":true}}).to_string(),
+                ))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        });
+        let mut client = Cdp::connect(&format!("ws://127.0.0.1:{port}/devtools/page/test"), port)?;
+        let reply = client.call("Runtime.evaluate", json!({"expression":"fixture"}))?;
+        assert_eq!(reply["accepted"], true);
+        server
+            .join()
+            .map_err(|_| std::io::Error::other("mock CDP thread panicked"))??;
+        Ok(())
     }
 }
