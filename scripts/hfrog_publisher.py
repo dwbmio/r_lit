@@ -465,7 +465,10 @@ def cmd_publish(args) -> int:
     for value in args.platform:
         target, encoded = value.split("=", 1)
         spec = json.loads(encoded)
-        if set(spec) != {"os", "arch", "display_name"}:
+        if (not re.fullmatch(r"[A-Za-z0-9_.-]+", target) or target in platform_specs
+                or set(spec) != {"os", "arch", "display_name"}
+                or any(v is not None and not isinstance(v, str) for v in spec.values())
+                or not isinstance(spec["display_name"], str) or not spec["display_name"]):
             raise ValueError("Platform metadata must specify os, arch and display_name")
         platform_specs[target] = spec["os"], spec["arch"], spec["display_name"]
 
@@ -504,6 +507,10 @@ def cmd_publish(args) -> int:
         targets = [x[0] for x in enriched]
         if len(targets) != len(set(targets)) or "artifact-manifest" in targets:
             raise ValueError("Each archive artifact requires a distinct platform/type")
+        keys = [urllib.parse.unquote(urllib.parse.urlsplit(x[2]).path) for x in enriched]
+        if (len(keys) != len(set(keys)) or any(".." in key.split("/") for key in keys)
+                or "/" + version_dir + "/manifest.json" in keys):
+            raise ValueError("Archive artifacts require distinct safe object keys")
         for target in targets:
             if target not in platform_specs and target not in DEFAULT_PLATFORM_DICT:
                 raise ValueError("Archive requires explicit platform metadata: " + target)
@@ -516,7 +523,7 @@ def cmd_publish(args) -> int:
                                    "file_size": n, "checksum_sha256": h}
                                   for t, p, u, n, h in sorted(enriched)]}
         output = args.manifest_out or Path("hfrog-archive") / args.tool / version / "manifest.json"
-        if output.is_symlink():
+        if output.is_symlink() or any(p.is_symlink() for p in output.parents):
             raise ValueError("Archive manifest cannot be a symlink")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(manifest, sort_keys=True, indent=2) + chr(10))
