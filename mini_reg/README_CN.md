@@ -30,6 +30,7 @@
 沿用现有 r_lit Jenkins worker 构建、R2 与 HFrog 分发链路，工具名为 `mini_reg`。
 下载地址须等正式发布成功后才有效。新增源码不等于已经发布。
 SQLite 从随包源码静态链接；HTTP 使用 rustls，不依赖 OpenSSL。
+Windows 发布包关闭 PDB 生成，沿用静态 CRT 链接。
 仍需要系统基础库和企业 Chrome。
 
 ## 快速使用

@@ -35,6 +35,7 @@ The release path is the existing r_lit Jenkins worker pipeline, followed by R2
 and HFrog. The tool is registered as `mini_reg`. A download URL is valid only
 after a successful publication; this source change alone does not publish it.
 SQLite is linked from its bundled source. HTTP uses rustls rather than OpenSSL.
+Windows release builds omit PDB generation and retain static CRT linkage.
 Standard OS libraries and the enterprise Chrome installation remain prerequisites.
 
 ## Quick start
