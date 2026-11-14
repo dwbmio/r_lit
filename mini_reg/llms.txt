@@ -1,0 +1,21 @@
+# mini_reg
+- purpose: Semi-automatic registration assistance for company-owned mini apps
+- version: 0.1.0
+- platforms: wechat, douyin, qq, alipay
+- app_kinds: mini_program, mini_game; explicit per task
+- runtime: native Rust executable; existing dedicated enterprise Chrome required for browser commands
+- dependencies: no Python, Node.js, Playwright, external database or daemon; OS standard libraries required
+- storage: bundled SQLite; transactional imports; WAL; FULL synchronization; OS app-data directory or --db
+- commands: init, import, list, next, show, open, fill, confirm, export, browser bind, browser tabs, selectors
+- batch_resume: next --open; stable batch/task-ID order; confirmed tasks skipped; existing tab not reopened
+- browser: native loopback HTTP/WebSocket CDP; gamesci-lite.com corporate metadata and process fingerprint required
+- form: visible unique name/summary inputs; exact labels or persistent CSS selectors
+- default_fill: dry run; --apply required for text writes
+- manual: app kind selection, icons/documents, categories, identity, consent, payment, submission
+- confirmation: human-reported AppID; platform_verified=false
+- interrupted_write: needs_review committed before write; no final registration retries
+- output: --json single stdout envelope; stderr logs; overwritten per-run .log sidecar
+- export: task metadata only; excludes browser binding and login data
+- validation_status: live platform forms not acceptance-tested
+- build_release: dedicated Jenkins workers; existing r_lit R2/HFrog pipeline
+- usage_example: mini_reg init batch.toml; mini_reg import batch.toml; mini_reg list --json

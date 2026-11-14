@@ -9,6 +9,7 @@
 ## 目录
 
 - bulk_upload/ — 从 JSON 批量提取 URL 并上传至 S3 兼容存储
+- mini_reg/ — Rust 原生小程序注册辅助；批次与断点持久保存；核实企业浏览器；人工确认
 - img_resize/ — 图片缩放与压缩
 - mailctl/ — 多邮箱 IMAP/SMTP 分发器（按邮箱身份收发、白名单、发前确认、审计；`mailctl capabilities --json` 输出能力清单）
 - ui-trim/ — 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG
