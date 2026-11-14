@@ -1,0 +1,16 @@
+# 腾讯企业邮（示例，改完去掉 .example 后缀即生效）
+[account]
+provider = "exmail"                      # imap.exmail.qq.com:993 / smtp.exmail.qq.com:465
+address = "your.name@your-corp.com"
+display_name = "段文彬（运维）"
+auth.keychain_service = "mail-work-exmail"
+sent_folder = "Sent Messages"
+allow_recipients = ["your-corp.com", "apple.com"]
+
+# 也可以用文件放签名（相对本文件所在目录）
+# signature_file = "sig-work.txt"
+signature = """
+段文彬 / Duan Wenbin
+运维负责人 · Head of Operations
+某某科技有限公司
+"""

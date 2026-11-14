@@ -1,0 +1,48 @@
+# mailctl
+
+- purpose: Multi-account IMAP/SMTP dispatcher with guard rails (allowlist, confirm-before-send, audit)
+- binary: mailctl (Rust, single file, rustls; no OpenSSL, no interpreter)
+- contract: `mailctl capabilities --json` emits the machine-readable capability manifest (same source as README)
+- config: one file per mailbox at ~/.config/hermes-mail/accounts/<account>.toml; filename = account name; *.toml active, *.toml.example ignored
+- credentials: macOS keychain via auth.keychain_service (never in config files)
+- isolation: address / credential ref / allow_recipients / sent_folder / signature are all per-account
+
+## Commands
+
+- accounts [--json] — list mailboxes (endpoints, credential source, source file, signature first line); no network
+- folders -a <acc> — list IMAP folders (modified-UTF-7 decoded); read-only
+- verify -a <acc> — IMAP+SMTP login test; sends nothing
+- scan -a <acc> [--limit N|0] [--unseen] [--folder INBOX|'Sent Messages'] [--criteria '<IMAP search>'] [--match 'a|b'] [--json] — header-only, read-only (EXAMINE + BODY.PEEK)
+- read -a <acc> --uid <UID> [--chars N] [--raw] — decode body (GBK/GB18030/UTF-8, nested multipart)
+- draft -a <acc> --to <addr> --subject <s> --body-file <f> [--cc] [--out] [--no-signature] — writes .eml only
+- reply -a <acc> --uid <UID> --body-file <f> [--out] [--no-signature] — threaded draft (inherits In-Reply-To/References); writes .eml only
+- send -a <acc> --eml <f> --yes [--append-sent] — real send; needs --yes, allowlist match, From == account address
+- selftest -a <acc> [--wait 90] — send to self and read back from INBOX; never contacts third parties
+- capabilities [--json] — emit this manifest
+
+## Guards
+
+- allow_recipients: per-account allowlist; mismatch = exit 1; no CLI bypass; self-address always allowed
+- confirm_before_send (default true): send without --yes = exit 3
+- identity: .eml From must equal account address
+- plaintext security only for 127.0.0.1/localhost
+- read-only scans: never marks as read, never deletes
+
+## Providers
+
+- qq: imap.qq.com:993 / smtp.qq.com:465 (Sent Messages; rewrites Message-ID on delivery)
+- exmail: imap.exmail.qq.com:993 / smtp.exmail.qq.com:465
+- aliyun-enterprise: imap.mxhichina.com:993 / smtp.mxhichina.com:465
+- aliyun: imap.aliyun.com:993 / smtp.aliyun.com:465
+- gmail: imap.gmail.com:993 / smtp.gmail.com:587 (starttls)
+- outlook: outlook.office365.com:993 / smtp.office365.com:587 (starttls)
+- custom: specify imap_host/port/security + smtp_*
+
+## Exit codes
+
+- 0 ok | 1 runtime error (connect/auth/allowlist/identity) | 2 missing credential | 3 send refused without --yes
+
+## Not implemented
+
+- attachments, HTML body, IMAP IDLE (poll with `scan --unseen`)
+- POP3 receive (IMAP only: folders, UID addressing, Sent read-back)

@@ -1,0 +1,41 @@
+# mailctl
+
+- 用途：多邮箱 IMAP/SMTP 分发器，带白名单 / 发前确认 / 审计
+- 形态：Rust 单二进制（rustls），不依赖 OpenSSL 与解释器
+- 契约：`mailctl capabilities --json` 输出机器可读能力清单（与 README 同源）
+- 配置：一个邮箱一个文件 `~/.config/hermes-mail/accounts/<账号名>.toml`；文件名即账号名；`*.toml` 生效，`*.toml.example` 不生效
+- 凭证：macOS 钥匙串（auth.keychain_service），配置文件不含密码
+- 隔离：地址 / 凭证引用 / 白名单 / 已发送目录 / 签名，全部按账号隔离
+
+## 命令
+
+- `accounts [--json]` — 列账号；不联网
+- `folders -a <账号>` — 列目录（UTF-7 解码中文）；只读
+- `verify -a <账号>` — IMAP+SMTP 登录自测；不发信
+- `scan -a <账号> [--limit N|0] [--unseen] [--folder 'Sent Messages'] [--criteria '<检索>'] [--match 'a|b'] [--json]` — 只读扫邮件头
+- `read -a <账号> --uid <UID> [--chars N] [--raw]` — 读正文（GBK/GB18030/UTF-8、嵌套 multipart）
+- `draft -a <账号> --to <地址> --subject <主题> --body-file <文件> [--no-signature]` — 只写 .eml
+- `reply -a <账号> --uid <UID> --body-file <文件> [--no-signature]` — 线程内草稿（继承 In-Reply-To/References），只写 .eml
+- `send -a <账号> --eml <文件> --yes [--append-sent]` — 真发；需 --yes + 白名单放行 + From 与账号一致
+- `selftest -a <账号> [--wait 90]` — 自发自收回读，不碰第三方
+- `capabilities [--json]` — 输出本清单
+
+## 闸门
+
+- 白名单按账号隔离，不匹配 exit 1，无命令行绕过；自发自收放行
+- `send` 不带 `--yes` → exit 3
+- `.eml` From 必须等于账号地址
+- 明文仅允许 127.0.0.1/localhost
+- 扫描全程只读，不标已读、不删信
+
+## 服务商
+
+qq / exmail / aliyun-enterprise / aliyun / gmail / outlook / custom（端点见 README）
+
+## 退出码
+
+0 成功 | 1 运行错误 | 2 缺凭证 | 3 未带 --yes
+
+## 未实现
+
+附件、HTML 正文、IMAP IDLE（轮询用 `scan --unseen`）、POP3 收信

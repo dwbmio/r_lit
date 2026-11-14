@@ -1,0 +1,25 @@
+# 个人 QQ 邮箱 —— 一个文件 = 一个发信身份
+# 凭证：钥匙串 service=mail-qq-personal（security add-generic-password -U -a 416646744@qq.com -s mail-qq-personal -w '<授权码>'）
+
+[default]
+account = "qq-personal"          # 仅在你想改默认账号时改这一行（多文件里第一个生效）
+confirm_before_send = true
+audit_log = "~/.local/state/hermes-mail/audit.log"
+
+[account]
+provider = "qq"                  # imap.qq.com:993 / smtp.qq.com:465
+address = "416646744@qq.com"
+display_name = "段文彬 | Mujin Technology"
+auth.keychain_service = "mail-qq-personal"
+sent_folder = "Sent Messages"
+
+# 只能发给这些目标（自己发给自己永远放行）。空数组 = 不限，不建议
+allow_recipients = ["apple.com", "*.apple.com"]
+
+# 本账号专属签名（多行）。换行直接用 TOML 三引号
+signature = """
+段文彬 / Duan Wenbin
+运维负责人 · Head of Operations
+Mujin Technology Co., Ltd.（Gamesci · Picboo）
+416646744@qq.com
+"""

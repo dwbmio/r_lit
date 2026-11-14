@@ -15,6 +15,7 @@ Rust 独立**短时运行** CLI 工具与库的集合仓库。每个子目录是
 |------|------|
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [img_resize](img_resize/) | 图片缩放与压缩 |
+| [mailctl](mailctl/) | 多邮箱 IMAP/SMTP 分发器：按邮箱身份收发、白名单、发前确认、审计 |
 | [ui-trim](ui-trim/) | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | [textexture](textexture/) | 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹） |
 | [mj_atlas](mj_atlas/) | 精灵图集 / 打包工具，支持增量构建 |

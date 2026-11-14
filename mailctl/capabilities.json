@@ -1,0 +1,60 @@
+{
+  "schema": "mailctl.capabilities/1",
+  "binary": "mailctl",
+  "version": "0.1.0",
+  "summary": "多邮箱 IMAP/SMTP 分发器：按账号表挑身份收发信，带白名单 / 发前确认 / 审计。",
+  "invoke": "mailctl [--config <path>] <command> [args]",
+  "config": {
+    "one_file_per_account": true,
+    "dir": "~/.config/hermes-mail/accounts/",
+    "file_rule": "*.toml 生效；文件名即账号名（qq-personal.toml → -a qq-personal）；*.toml.example 不生效",
+    "env_override": ["MAILCTL_CONFIG", "MAILCTL_AUDIT"],
+    "audit_default": "~/.local/state/hermes-mail/audit.log",
+    "credential_sources_in_order": ["--password", "auth.keychain_service(钥匙串)", "auth.env(环境变量)", "--prompt-password"],
+    "never_store": ["授权码/应用密码不进配置文件、不进记忆、不进日志"]
+  },
+  "guards": [
+    {"name": "confirm_before_send", "default": true, "effect": "send 必须带 --yes，否则 exit 3"},
+    {"name": "allow_recipients", "scope": "per-account", "effect": "不匹配则拒发 exit 1；不提供命令行绕过；自发自收自动放行"},
+    {"name": "identity_match", "effect": ".eml 的 From 必须等于账号地址，否则拒发 exit 1"},
+    {"name": "plaintext_loopback_only", "effect": "security=plain 仅允许 127.0.0.1/localhost，否则拒绝加载"},
+    {"name": "readonly_scan", "effect": "scan/read 用 EXAMINE + BODY.PEEK，不标已读、不删信"}
+  ],
+  "exit_codes": {
+    "0": "成功",
+    "1": "运行错误（连接/认证/白名单拦截/身份不符等）",
+    "2": "缺少凭证",
+    "3": "write-guard: 未带 --yes 拒绝发送"
+  },
+  "commands": [
+    {"name": "accounts", "purpose": "列出账号（端点/凭证来源/来源文件/签名首行）", "args": {"--json": "机器可读输出"}, "network": false, "side_effects": "none"},
+    {"name": "folders", "purpose": "列出邮箱目录（IMAP modified-UTF-7 已解码为中文）", "args": {"-a": "账号名", "--password": "测试用", "--prompt-password": "交互输入"}, "network": "imap", "side_effects": "none"},
+    {"name": "verify", "purpose": "登录自测 IMAP+SMTP，不发信", "args": {"-a": "账号名"}, "network": "imap+smtp", "side_effects": "none"},
+    {"name": "scan", "purpose": "只读扫描某目录的邮件头", "args": {"-a": "账号名", "--limit": "条数，0=全部", "--unseen": "只看未读", "--folder": "INBOX 或 Sent Messages", "--criteria": "原始 IMAP 检索，如 SUBJECT \"x\"", "--match": "From+Subject 子串过滤，| 分隔", "--json": "JSON 数组输出"}, "network": "imap", "side_effects": "none"},
+    {"name": "read", "purpose": "读取某封正文（多字符集 + 嵌套 multipart）", "args": {"-a": "账号名", "--uid": "邮件 UID", "--chars": "截断字符数", "--raw": "打印原始报文"}, "network": "imap", "side_effects": "none"},
+    {"name": "draft", "purpose": "新建草稿（自动追加该账号签名），不发送", "args": {"-a": "账号名", "--to": "收件人", "--subject": "主题", "--body-file": "正文文件", "--cc": "抄送", "--out": "输出 .eml", "--no-signature": "不加签名"}, "network": false, "side_effects": "写 .eml"},
+    {"name": "reply", "purpose": "按收件箱某封生成线程内回复草稿（In-Reply-To/References 自动继承），不发送", "args": {"-a": "账号名", "--uid": "原邮件 UID", "--body-file": "正文文件", "--out": "输出 .eml", "--no-signature": "不加签名"}, "network": "imap", "side_effects": "写 .eml"},
+    {"name": "send", "purpose": "真正发送 .eml", "args": {"-a": "账号名", "--eml": "草稿路径", "--yes": "确认发送（必需）", "--append-sent": "同时写入已发送目录"}, "network": "smtp(+imap)", "side_effects": "外发邮件 + 审计行", "requires": ["--yes", "allow_recipients 放行", "From 与账号一致"]},
+    {"name": "selftest", "purpose": "闭环自测：给自己发一封并回读收件箱，不外发第三方", "args": {"-a": "账号名", "--wait": "回读等待秒数，0=不等"}, "network": "imap+smtp", "side_effects": "自发一封 + 审计 kind=selftest"},
+    {"name": "capabilities", "purpose": "输出本能力清单（function calling 用）", "args": {"--json": "机器可读"}, "network": false, "side_effects": "none"}
+  ],
+  "providers": {
+    "qq": {"imap": "imap.qq.com:993", "smtp": "smtp.qq.com:465", "sent_folder": "Sent Messages", "note": "授权码需在邮箱设置开启 IMAP/SMTP；投递会改写 Message-ID"},
+    "exmail": {"imap": "imap.exmail.qq.com:993", "smtp": "smtp.exmail.qq.com:465", "sent_folder": "Sent Messages", "note": "腾讯企业邮，需客户端专用密码"},
+    "aliyun-enterprise": {"imap": "imap.mxhichina.com:993", "smtp": "smtp.mxhichina.com:465", "sent_folder": "已发送"},
+    "aliyun": {"imap": "imap.aliyun.com:993", "smtp": "smtp.aliyun.com:465", "sent_folder": "已发送"},
+    "gmail": {"imap": "imap.gmail.com:993", "smtp": "smtp.gmail.com:587", "smtp_security": "starttls", "sent_folder": "[Gmail]/Sent Mail"},
+    "outlook": {"imap": "outlook.office365.com:993", "smtp": "smtp.office365.com:587", "smtp_security": "starttls", "sent_folder": "Sent Items"},
+    "custom": {"note": "必须手写 imap_host/port/security + smtp_*"}
+  },
+  "workflows": [
+    {"name": "首次接入邮箱", "steps": ["write accounts/<name>.toml", "security add-generic-password -s mail-<name>", "mailctl verify -a <name>", "mailctl selftest -a <name> --wait 90"]},
+    {"name": "回复某封邮件", "steps": ["mailctl scan -a <name> --match <关键词> --json", "mailctl read -a <name> --uid <UID>", "mailctl reply -a <name> --uid <UID> --body-file <body> --out /tmp/r.eml", "人工确认", "mailctl send -a <name> --eml /tmp/r.eml --yes --append-sent", "mailctl scan -a <name> --folder 'Sent Messages' --limit 5"]},
+    {"name": "新邮件主动通知", "steps": ["mailctl scan -a <name> --unseen --json", "有新 UID 才推送，不刷屏"]}
+  ],
+  "artifacts": {
+    "ci": "Jenkins r_lit pipeline (ci-all-in-one/task/ci/pipeline/r_lit/Jenkinsfile.binary-build)",
+    "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "aarch64-apple-darwin", "x86_64-pc-windows-gnu"],
+    "install": "curl -fsSL https://r2.gamesci-lite.com/r_lit/mailctl/install.sh | bash"
+  }
+}
