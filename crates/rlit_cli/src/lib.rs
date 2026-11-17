@@ -29,6 +29,7 @@
 //! }
 //! ```
 
+pub mod runlog;
 mod schema;
 
 use serde::Serialize;

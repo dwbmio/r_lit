@@ -14,8 +14,11 @@ exclude = [
     "group_vibe_workbench",
     "img_resize",
     "looplog",
+    "mailctl",
     "maquette",
+    "mini_reg",
     "mj_atlas",
+    "phone_haul",
     "textexture",
     "ui-trim",
 ]

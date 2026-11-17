@@ -1,9 +1,8 @@
 use clap::Subcommand;
-use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
+use rlit_cli::{runlog, CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::path::PathBuf;
 
 mod error;
-mod runlog;
 mod subcmd;
 
 /// Machine-call annotations for `__schema` (see `docs/cli-contract.md`).

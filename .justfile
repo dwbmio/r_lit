@@ -2,26 +2,39 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 set dotenv-load
 
-# ===============
-# ===Variables===
-PY_SHEBANG := if os() == "windows"{"python"} else {"/usr/bin/env python"}
-# ===Variables===
-# ===============
-
-
-# =============
-# ===Private===
 [private]
 default:
     just --list
 
-# ===Private===
-# =============
-
-# 构建指定子项目 (e.g. just build img_resize)
+# Build a subproject (e.g. just build img_resize release)
 build tar method="release":
-    cd {{tar}} && just __cargo_build {{method}}
+    cd {{tar}} && cargo build {{ if method == "release" { "--release" } else { "" } }}
 
-# 本地安装指定子项目
+# Locally install a subproject binary (e.g. just install_loc img_resize)
 install_loc tar method="release":
-    cd {{tar}} && just install_loc {{method}}
+    cd {{tar}} && if [ -f .justfile ]; then just install_loc {{method}}; else cargo install --path . {{ if method == "release" { "" } else { "--debug" } }}; fi
+
+# Validate repository documentation, Cargo workspace excludes, and shared abstractions
+check-repo:
+    python3 scripts/check_repo.py
+
+# Run unit tests for core CLI crates and shared libraries
+test-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for crate in crates/rlit_cli bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
+      echo "==> cargo test ($crate)"
+      (cd "$crate" && cargo test)
+    done
+
+# Run clippy & rustfmt checks across core CLI crates and shared libraries
+lint-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for crate in crates/rlit_cli bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
+      echo "==> clippy ($crate)"
+      (cd "$crate" && cargo clippy --all-targets -- -D warnings)
+    done
+
+# Run all repository verification gates
+check: check-repo test-cli lint-cli

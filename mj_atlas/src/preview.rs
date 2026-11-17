@@ -2030,7 +2030,7 @@ impl MJAtlasApp {
             std::thread::spawn(move || {
                 // Header captures the GUI-resolved options so the sidecar
                 // is self-contained when the user shares it for debugging.
-                let mut header = crate::runlog::standard_header();
+                let mut header = rlit_cli::runlog::standard_header();
                 header.push("subcommand: gui pack".to_string());
                 header.push(format!("input_dir:  {}", opts.input_dir.display()));
                 header.push(format!(
@@ -2090,7 +2090,7 @@ impl MJAtlasApp {
                 };
                 // Always flush the log — a successful pack tells the user
                 // what was packed; a failed one tells them what went wrong.
-                crate::runlog::flush(&log_path, &header);
+                rlit_cli::runlog::flush(&log_path, &header);
                 let _ = tx.send(result);
                 ctx_clone.request_repaint();
             });

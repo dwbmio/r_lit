@@ -4,10 +4,9 @@ mod effect;
 mod error;
 mod font;
 mod render;
-mod runlog;
 
 use clap::Subcommand;
-use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
+use rlit_cli::{runlog, CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::path::PathBuf;
 
 /// Machine-call annotations for `__schema` (see `docs/cli-contract.md`).

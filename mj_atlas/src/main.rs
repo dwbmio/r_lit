@@ -8,10 +8,9 @@ mod output;
 mod pack;
 #[cfg(feature = "gui")]
 mod preview;
-mod runlog;
 
 use clap::{Subcommand, ValueEnum};
-use rlit_cli::{CommandSpec, Contract, Effects, Io};
+use rlit_cli::{runlog, CommandSpec, Contract, Effects, Io};
 use pack::PolygonShape;
 use error::Result;
 use std::path::PathBuf;

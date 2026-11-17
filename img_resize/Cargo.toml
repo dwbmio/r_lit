@@ -18,7 +18,6 @@ yaml-rust = "0.4.5"
 log = "0.4.27"
 # tinify-rs = { version = "1.4.2", features = ["async"] }  # Temporarily disabled for musl builds
 tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread"] }
-humantime = "2.2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
