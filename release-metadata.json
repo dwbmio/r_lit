@@ -21,6 +21,10 @@
     ]
   },
   "tools": {
+    "mini_reg": {
+      "description": "Persistent native-Rust helper for company-owned mini-app registration, enterprise Chrome and human confirmation.",
+      "category": "cli"
+    },
     "bulk_upload": {
       "description": "High-speed batch file upload/download CLI for S3-compatible storage (AWS S3, Cloudflare R2, Aliyun OSS, iDrive E2). Multi-threaded parallel transfers, resume capability, checksum verification.",
       "category": "cli"

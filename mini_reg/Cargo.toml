@@ -1,0 +1,28 @@
+[package]
+name = "mini_reg"
+version = "0.1.0"
+edition = "2021"
+description = "Persistent, native-Rust registration assistant for company-owned mini apps"
+license = "MIT"
+
+[workspace]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+humantime = "2"
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+url = "2"
+
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"
