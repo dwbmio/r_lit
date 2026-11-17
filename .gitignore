@@ -1,17 +1,42 @@
+# OS / editor-local files
 .DS_Store
 .cursor/
-**/target/
-**/out/
 .secrets/
+
+# Rust intermediates: safe to delete; never use target/ as the release store
+**/target/
+
+# Generated output. Keep intentionally retained local binaries in
+# <tool>/out/<target-triple>/<binary>; publish release artifacts via Jenkins/R2.
+**/out/
+
+# Python tooling and caches
+**/.venv/
+**/__pycache__/
+*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Browser automation sessions, screenshots, and console logs
+**/.playwright-mcp/
+
+# Documentation policy
 *.md
 !README.md
 !README_CN.md
 !CLAUDE.md
 !docs/**/*.md
+!**/docs/**/*.md
 !_ai/**/*.md
+
+# Runtime data / local backups
 **/workbench_data_*/
 crates/murmur/data/
+chat.ctx
+prompt_context.txt
 *.bak
 *.bak2
-# generated test-output media (e.g. video-generator/**/tests/**/output2.mp4)
+
+# Generated test-output media
 **/tests/**/output*.mp4

@@ -18,9 +18,13 @@
 .DS_Store
 Thumbs.db
 
+# Runtime test files
+prompt_context.txt
+
 # Markdown files (except essential ones)
 *.md
 !README.md
+!README_CN.md
 !CLAUDE.md
 !docs/**/*.md
 !src/**/README.md
