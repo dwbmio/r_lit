@@ -117,7 +117,7 @@ fn jobs_file_loads_classroom_json() {
     assert_eq!(jf.install_dir, Some("classroom/classroom/audio".to_string()));
     assert!(jf.style.is_some(), "must have style baseline");
     assert!(jf.voice_id.is_some(), "must have default voice_id");
-    assert_eq!(jf.jobs.len(), 10, "10 standard items");
+    assert_eq!(jf.jobs.len(), 12, "10 standard items + 2 flac variants");
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn jobs_kind_distribution() {
             JobKind::Procedural => proc += 1,
         }
     }
-    assert_eq!(music, 7, "7 music (bgm_lobby, bgm_main, sfx_correct/wrong/fail/success, sfx_finish)");
+    assert_eq!(music, 9, "9 music (bgm_lobby/main + flac variants, sfx_correct/wrong/fail/success, sfx_finish)");
     assert_eq!(voice, 1, "1 voice (voice_hint)");
     assert_eq!(proc, 2, "2 procedural (sfx_click, sfx_chain)");
 }
@@ -237,8 +237,8 @@ fn racing_jobs_file_loads() {
     let jf = JobsFile::load(&racing_jobs_path()).unwrap();
     assert_eq!(jf.game, "racing");
     assert_eq!(jf.install_dir.as_deref(), Some("racing/racing/audio"));
-    // racing 清单含 BGM × 3 + voice × 3 + procedural × 5 = 11。
-    assert_eq!(jf.jobs.len(), 11);
+    // racing 清单含 BGM × 6 (含 flac) + voice × 3 + procedural × 5 = 14。
+    assert_eq!(jf.jobs.len(), 14);
     let mut music = 0;
     let mut voice = 0;
     let mut proc = 0;
@@ -249,7 +249,7 @@ fn racing_jobs_file_loads() {
             JobKind::Procedural => proc += 1,
         }
     }
-    assert_eq!(music, 3, "bgm_menu/race/victory");
+    assert_eq!(music, 6, "bgm_menu/race/victory + flac variants");
     assert_eq!(voice, 3, "voice_countdown/finish/newrecord");
     assert_eq!(proc, 5, "engine/accel/skid/crash/explode");
 }

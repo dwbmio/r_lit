@@ -10,36 +10,148 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build (Linux only)
+  repo-hygiene:
+    name: Docs, layout & publisher tests
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
+      - name: Check repository docs, excludes, and shared abstractions
+        run: python3 scripts/check_repo.py
 
-      - name: Install build dependencies
+      - name: Run hfrog_publisher unit tests
+        run: python3 -m unittest scripts/test_hfrog_publisher.py
+
+  cli-crates:
+    name: Test CLI (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: crates/rlit_cli
+            strict_clippy: true
+            has_bin: false
+          - crate: bulk_upload
+            strict_clippy: false
+            has_bin: true
+            contract: true
+          - crate: img_resize
+            strict_clippy: false
+            has_bin: true
+            contract: true
+          - crate: textexture
+            strict_clippy: false
+            has_bin: true
+            contract: true
+          - crate: ui-trim
+            strict_clippy: false
+            has_bin: true
+            contract: true
+          - crate: mj_atlas
+            strict_clippy: false
+            has_bin: true
+            contract: true
+          - crate: looplog
+            strict_clippy: false
+            has_bin: true
+            contract: false
+          - crate: mailctl
+            strict_clippy: false
+            has_bin: true
+            contract: false
+          - crate: mini_reg
+            strict_clippy: true
+            has_bin: true
+            contract: false
+          - crate: phone_haul
+            strict_clippy: false
+            has_bin: true
+            contract: false
+          - crate: audiogen
+            strict_clippy: false
+            has_bin: true
+            contract: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config libcurl4-openssl-dev
+          sudo apt-get install -y cmake pkg-config
 
-      - name: Build bulk_upload
-        run: |
-          cd bulk_upload
-          cargo build --release --verbose
+      - name: Run tests
+        working-directory: ${{ matrix.crate }}
+        run: cargo test
 
-      - name: Build img_resize
+      - name: Run clippy
+        working-directory: ${{ matrix.crate }}
         run: |
-          cd img_resize
-          cargo build --release --verbose
+          if [ "${{ matrix.strict_clippy }}" = "true" ]; then
+            cargo clippy --all-targets -- -D warnings
+          else
+            cargo clippy --all-targets
+          fi
 
-      - name: Test binaries
+      - name: Smoke check CLI & contract schema
+        if: matrix.has_bin
+        working-directory: ${{ matrix.crate }}
         run: |
-          ./bulk_upload/target/release/bulk_upload --help
-          ./img_resize/target/release/img_resize --help
+          cargo run -- --help >/dev/null
+          if [ "${{ matrix.contract }}" = "true" ]; then
+            cargo run -- __schema | python3 -m json.tool >/dev/null
+          fi
+
+  gui-and-lib-check:
+    name: Check GUI & P2P crates (Linux)
+    runs-on: ubuntu-latest
+    # Note: gamereel requires FFmpeg 7.x dev libs (ubuntu-latest ships 6.x) and
+    # builds on the dedicated GPU Jenkins agent.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            maquette
+            mj_atlas
+            crates/murmur
+
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake pkg-config \
+            libwayland-dev libxkbcommon-dev libudev-dev \
+            libx11-dev libxcursor-dev libxi-dev libasound2-dev \
+            libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+
+      - name: Check deskpet
+        run: cargo check -p deskpet --features os-notify
+
+      - name: Check mj_atlas (gui feature)
+        working-directory: mj_atlas
+        run: cargo check --features gui
+
+      - name: Check maquette (gui feature)
+        working-directory: maquette
+        run: cargo check --features gui
+
+      - name: Check crates/murmur
+        working-directory: crates/murmur
+        run: cargo check --tests
