@@ -17,7 +17,7 @@ clap CLI -> command dispatcher -> embedded SQLite (jobs, events, settings)
 | browser | Corporate-profile/process checks, localhost transport, portal-origin checks |
 | form.js | Compiled-in CDP payload; exact field matching, dry run, non-overwriting text writes |
 | subcmd | Command workflow, pre-write checkpoint, metadata-only export |
-| runlog | Per-run sidecar and stderr logging; clean JSON stdout |
+| `rlit_cli::runlog` | Shared stderr + per-run `.log` sidecar logging; clean `--json` stdout envelope |
 | build.rs | MSVC release-only linker configuration; no PDB lookup; static CRT remains enabled |
 
 No verified self-owned creation API is currently wired. Public service-provider

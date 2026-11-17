@@ -14,7 +14,7 @@
 - manual: app kind selection, icons/documents, categories, identity, consent, payment, submission
 - confirmation: human-reported AppID; platform_verified=false
 - interrupted_write: needs_review committed before write; no final registration retries
-- output: --json single stdout envelope; stderr logs; overwritten per-run .log sidecar
+- output: global --json single stdout envelope (`rlit_cli` contract); `__schema`; exit codes 0-4; stderr logs and overwritten `.log` sidecar via `rlit_cli::runlog`
 - export: task metadata only; excludes browser binding and login data
 - validation_status: live platform forms not acceptance-tested
 - build_release: dedicated Jenkins workers; existing r_lit R2/HFrog pipeline

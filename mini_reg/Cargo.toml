@@ -8,9 +8,9 @@ license = "MIT"
 [workspace]
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
-humantime = "2"
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

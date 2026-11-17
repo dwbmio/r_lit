@@ -13,10 +13,10 @@
 - 仅无头 CLI: `cd maquette && cargo build --no-default-features --bin maquette-cli --release`
 - 无头单测: `cd maquette && cargo test --no-default-features`
 
-## `maquette-cli` 子命令
+## `maquette-cli` 子命令（遵循 `rlit_cli` 契约：全局 `--json` envelope、`__schema`、退出码 0-4）
 
 - `export <input.maq> -o <out.glb|gltf> [--format glb|gltf] [--no-outline] [--outline-width 2.5] [--outline-color #000000]`
-- `info <input.maq> [--json]`
+- `info <input.maq>`
 - `validate <input.maq>`
 - `render <input.maq> -o <out.png> [--width 512] [--height 512] [--background #181a1e] [--ambient 0.35]`
 - `palette export <input.maq> -o <colors.json>`
@@ -24,9 +24,9 @@
 - `texture gen --prompt <text> -o <out.png> [--provider mock|rustyme] [--seed 0] [--width 128] [--height 128] [--no-cache]`
 - `texture revoke <task_id> [--admin-url <url>]`
 - `texture purge <queue> [--admin-url <url>]`
-- `block list [--source local|hfrog|all] [--json]`
-- `block get <id> [--source local|hfrog|all] [--json]`
-- `block sync [--base-url <url>] [--runtime maquette-block/v1] [--json]`
+- `block list [--source local|hfrog|all]`
+- `block get <id> [--source local|hfrog|all]`
+- `block sync [--base-url <url>] [--runtime maquette-block/v1]`
 
 ## 模块结构
 

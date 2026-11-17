@@ -3,6 +3,7 @@
 - 用途: 跨 Android（adb + 设备端静态 agent）与 iOS（纯 Rust AFC + Photos.sqlite 差量比对）的手机媒体迁移工具
 - 版本: 0.1.0
 - 二进制: phone_haul（Mac 主机端，默认 `host` feature）、phone_haul_agent（Android aarch64 静态端）
+- 契约: `phone_haul` 已接入 `rlit_cli`（全局 `--json` envelope、`phone_haul __schema`、退出码 0-5）
 - 构建主机端: cd phone_haul && cargo build --release --bin phone_haul
 - 构建手机端: cd phone_haul && cargo zigbuild --release --target aarch64-linux-android --bin phone_haul_agent
 

@@ -12,29 +12,65 @@
 //! ### Exit codes
 //!
 //! * `0` — success.
-//! * `1` — runtime failure (file missing, parse error, bad project,
-//!   I/O error during export).
-//! * `2` — usage error (clap handles this for us via its default
-//!   `ErrorKind::DisplayHelpOnError` etc. semantics).
+//! * `1` — runtime failure.
+//! * `2` — usage error (clap / invalid flags).
+//! * `3` — input error (missing or malformed project / palette / block id).
+//! * `4` — external service error (hfrog / Rustyme request failure).
 
+use std::fmt;
 use std::path::PathBuf;
-use std::process::ExitCode;
 
 use bevy::prelude::Color;
 use clap::{Parser, Subcommand, ValueEnum};
 use maquette::block_meta::{
     self,
     hfrog::{HfrogConfig, HfrogProvider},
-    BlockMetaProvider, LocalProvider,
+    BlockMetaError, BlockMetaProvider, LocalProvider,
 };
-use maquette::export::{self, ExportFormat, ExportOptions, OutlineConfig};
+use maquette::export::{self, ExportError, ExportFormat, ExportOptions, OutlineConfig};
 use maquette::grid::{Grid, Palette};
-use maquette::palette_io;
-use maquette::project;
-use maquette::render::{self, RenderOptions};
+use maquette::palette_io::{self, PaletteIoError};
+use maquette::project::{self, ProjectError};
+use maquette::render::{self, RenderError, RenderOptions};
 use maquette::texgen::{
-    self, MockProvider, TextureProvider, TextureRequest,
+    self, MockProvider, ProviderError, TextureProvider, TextureRequest,
     rustyme::{RustymeConfig, RustymeProvider},
+};
+use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
+use serde_json::json;
+
+static CONTRACT: Contract = Contract {
+    tool: "maquette-cli",
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("export", Effects::Pure)
+            .io(&[("input", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("info", Effects::ReadOnly)
+            .io(&[("input", Io::InputFile)]),
+        CommandSpec::new("validate", Effects::ReadOnly)
+            .io(&[("input", Io::InputFile)]),
+        CommandSpec::new("render", Effects::Pure)
+            .io(&[("input", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("palette export", Effects::Pure)
+            .io(&[("input", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("palette import", Effects::Pure)
+            .io(&[("input", Io::InputFile), ("from", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("texture gen", Effects::LocalWrite)
+            .io(&[("out", Io::OutputFile)])
+            .env(&["MAQUETTE_RUSTYME_REDIS_URL", "MAQUETTE_RUSTYME_MODEL"])
+            .note("Uses local texgen cache; --provider rustyme dispatches to sonargrid."),
+        CommandSpec::new("texture revoke", Effects::External)
+            .env(&["MAQUETTE_RUSTYME_ADMIN_URL"]),
+        CommandSpec::new("texture purge", Effects::External)
+            .env(&["MAQUETTE_RUSTYME_ADMIN_URL"]),
+        CommandSpec::new("block list", Effects::External)
+            .env(&["MAQUETTE_HFROG_BASE_URL", "MAQUETTE_HFROG_RUNTIME"])
+            .note("--source local or warm cache works offline; --source hfrog hits remote."),
+        CommandSpec::new("block get", Effects::External)
+            .env(&["MAQUETTE_HFROG_BASE_URL", "MAQUETTE_HFROG_RUNTIME"]),
+        CommandSpec::new("block sync", Effects::External)
+            .env(&["MAQUETTE_HFROG_BASE_URL", "MAQUETTE_HFROG_RUNTIME"]),
+    ],
 };
 
 #[derive(Parser, Debug)]
@@ -46,6 +82,9 @@ use maquette::texgen::{
                   Suitable for build pipelines and CI."
 )]
 struct Cli {
+    /// Emit machine-readable JSON envelope on stdout.
+    #[arg(long, global = true, default_value_t = false)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -106,10 +145,6 @@ struct BlockListArgs {
     /// id collisions. Defaults to `all`.
     #[arg(long, value_enum, default_value_t = BlockSource::All)]
     source: BlockSource,
-    /// Print as a JSON array (suitable for piping into `jq`).
-    /// Without this, formats as a human-readable table.
-    #[arg(long, default_value_t = false)]
-    json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -119,9 +154,6 @@ struct BlockGetArgs {
     /// Where to look. Same semantics as `block list`.
     #[arg(long, value_enum, default_value_t = BlockSource::All)]
     source: BlockSource,
-    /// Print the BlockMeta as JSON.
-    #[arg(long, default_value_t = false)]
-    json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -134,10 +166,6 @@ struct BlockSyncArgs {
     /// `MAQUETTE_HFROG_RUNTIME` (default `maquette-block/v1`).
     #[arg(long)]
     runtime: Option<String>,
-    /// Print the synced list as JSON; otherwise prints a one-line
-    /// `synced N blocks → <cache_dir>` summary.
-    #[arg(long, default_value_t = false)]
-    json: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -299,9 +327,6 @@ struct ExportArgs {
 struct InfoArgs {
     /// Input `.maq` project file.
     input: PathBuf,
-    /// Emit machine-readable JSON instead of the default text summary.
-    #[arg(long, default_value_t = false)]
-    json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -346,18 +371,113 @@ impl From<FormatArg> for ExportFormat {
     }
 }
 
-fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(1)
+#[derive(Debug)]
+enum CliError {
+    Usage(String),
+    External(String),
+    Project(ProjectError),
+    Export(ExportError),
+    Palette(PaletteIoError),
+    Render(RenderError),
+    BlockMeta(BlockMetaError),
+    Provider(ProviderError),
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Usage(msg) | Self::External(msg) => f.write_str(msg),
+            Self::Project(e) => fmt::Display::fmt(e, f),
+            Self::Export(e) => fmt::Display::fmt(e, f),
+            Self::Palette(e) => fmt::Display::fmt(e, f),
+            Self::Render(e) => fmt::Display::fmt(e, f),
+            Self::BlockMeta(e) => fmt::Display::fmt(e, f),
+            Self::Provider(e) => fmt::Display::fmt(e, f),
+            Self::Io(e) => fmt::Display::fmt(e, f),
+            Self::Json(e) => fmt::Display::fmt(e, f),
         }
     }
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+impl From<ProjectError> for CliError {
+    fn from(e: ProjectError) -> Self { Self::Project(e) }
+}
+impl From<ExportError> for CliError {
+    fn from(e: ExportError) -> Self { Self::Export(e) }
+}
+impl From<PaletteIoError> for CliError {
+    fn from(e: PaletteIoError) -> Self { Self::Palette(e) }
+}
+impl From<RenderError> for CliError {
+    fn from(e: RenderError) -> Self { Self::Render(e) }
+}
+impl From<BlockMetaError> for CliError {
+    fn from(e: BlockMetaError) -> Self { Self::BlockMeta(e) }
+}
+impl From<ProviderError> for CliError {
+    fn from(e: ProviderError) -> Self { Self::Provider(e) }
+}
+impl From<std::io::Error> for CliError {
+    fn from(e: std::io::Error) -> Self { Self::Io(e) }
+}
+impl From<serde_json::Error> for CliError {
+    fn from(e: serde_json::Error) -> Self { Self::Json(e) }
+}
+
+impl CliError {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Usage(_) => ErrorKind::Usage,
+            Self::External(_) => ErrorKind::External,
+            Self::Project(e) => match e {
+                ProjectError::Io(io) => rlit_cli::io_error_kind(io),
+                ProjectError::Json(_)
+                | ProjectError::UnsupportedVersion(_)
+                | ProjectError::InvalidCellCount { .. } => ErrorKind::Input,
+            },
+            Self::Export(e) => match e {
+                ExportError::Empty => ErrorKind::Input,
+                ExportError::Io(io) => rlit_cli::io_error_kind(io),
+                ExportError::Json(_) => ErrorKind::Runtime,
+            },
+            Self::Palette(e) => match e {
+                PaletteIoError::Io(io) => rlit_cli::io_error_kind(io),
+                PaletteIoError::Json(_)
+                | PaletteIoError::UnsupportedVersion { .. }
+                | PaletteIoError::TooManySlots { .. }
+                | PaletteIoError::BadColor { .. } => ErrorKind::Input,
+            },
+            Self::Render(e) => match e {
+                RenderError::InvalidSize { .. } => ErrorKind::Usage,
+                RenderError::Io(io) => rlit_cli::io_error_kind(io),
+                RenderError::Png(_) => ErrorKind::Runtime,
+            },
+            Self::BlockMeta(e) => match e {
+                BlockMetaError::NotFound(_) | BlockMetaError::Decode(_) => ErrorKind::Input,
+                BlockMetaError::Remote(_) => ErrorKind::External,
+                BlockMetaError::Io(io) => rlit_cli::io_error_kind(io),
+            },
+            Self::Provider(e) => match e {
+                ProviderError::UnknownModel(_) => ErrorKind::Usage,
+                ProviderError::Remote(_) => ErrorKind::External,
+                ProviderError::Io(io) => rlit_cli::io_error_kind(io),
+                ProviderError::PngEncode(_) => ErrorKind::Runtime,
+            },
+            Self::Io(io) => rlit_cli::io_error_kind(io),
+            Self::Json(_) => ErrorKind::Input,
+        }
+    }
+}
+
+fn main() -> ! {
+    let cli: Cli = CONTRACT.parse();
+    let result = run(cli);
+    rlit_cli::finish(result, CliError::kind);
+}
+
+fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Command::Export(args) => cmd_export(args),
         Command::Info(args) => cmd_info(args),
@@ -380,14 +500,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn cmd_texture_gen(args: TextureGenArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_texture_gen(args: TextureGenArgs) -> Result<(), CliError> {
     let provider: Box<dyn TextureProvider> = match args.provider {
         ProviderArg::Mock => Box::new(MockProvider),
         ProviderArg::Rustyme => {
-            let cfg = RustymeConfig::from_env().ok_or(
-                "rustyme provider selected but MAQUETTE_RUSTYME_REDIS_URL is not set. \
-                 See docs/texture/rustyme.md for the full env-var list.",
-            )?;
+            let cfg = RustymeConfig::from_env().ok_or_else(|| {
+                CliError::External(
+                    "rustyme provider selected but MAQUETTE_RUSTYME_REDIS_URL is not set. \
+                     See docs/texture/rustyme.md for the full env-var list."
+                        .into(),
+                )
+            })?;
             Box::new(RustymeProvider::new(cfg))
         }
     };
@@ -419,58 +542,85 @@ fn cmd_texture_gen(args: TextureGenArgs) -> Result<(), Box<dyn std::error::Error
         }
     }
     std::fs::write(&args.out, bytes.as_slice())?;
-    println!(
-        "wrote {} ({} bytes, provider={}, cache_key={})",
-        args.out.display(),
-        bytes.len(),
-        provider.name(),
-        request.cache_key(),
-    );
+    let cache_key = request.cache_key();
+    rlit_cli::add_artifact(&args.out, "texture");
+    rlit_cli::set_data(json!({
+        "out": args.out,
+        "bytes": bytes.len(),
+        "provider": provider.name(),
+        "cache_key": cache_key,
+    }));
+    if !rlit_cli::json_mode() {
+        println!(
+            "wrote {} ({} bytes, provider={}, cache_key={})",
+            args.out.display(),
+            bytes.len(),
+            provider.name(),
+            cache_key,
+        );
+    }
     Ok(())
 }
 
-fn resolve_admin_url(cli_arg: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+fn resolve_admin_url(cli_arg: Option<String>) -> Result<String, CliError> {
     cli_arg
         .or_else(|| std::env::var("MAQUETTE_RUSTYME_ADMIN_URL").ok())
         .ok_or_else(|| {
-            "Rustyme admin URL missing. Pass --admin-url or set \
-             MAQUETTE_RUSTYME_ADMIN_URL (e.g. http://localhost:12121)."
-                .into()
+            CliError::Usage(
+                "Rustyme admin URL missing. Pass --admin-url or set \
+                 MAQUETTE_RUSTYME_ADMIN_URL (e.g. http://localhost:12121)."
+                    .into(),
+            )
         })
 }
 
-fn cmd_texture_revoke(args: TextureRevokeArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_texture_revoke(args: TextureRevokeArgs) -> Result<(), CliError> {
     let admin = resolve_admin_url(args.admin_url)?;
     let body = texgen::rustyme::revoke(&admin, &args.task_id)?;
-    println!("revoked task {} — admin response: {body}", args.task_id);
+    rlit_cli::set_data(json!({
+        "task_id": args.task_id,
+        "response": body,
+    }));
+    if !rlit_cli::json_mode() {
+        println!("revoked task {} — admin response: {body}", args.task_id);
+    }
     Ok(())
 }
 
-fn cmd_texture_purge(args: TexturePurgeArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_texture_purge(args: TexturePurgeArgs) -> Result<(), CliError> {
     let admin = resolve_admin_url(args.admin_url)?;
     let body = texgen::rustyme::purge_queue(&admin, &args.queue)?;
-    println!("purged queue {} — admin response: {body}", args.queue);
+    rlit_cli::set_data(json!({
+        "queue": args.queue,
+        "response": body,
+    }));
+    if !rlit_cli::json_mode() {
+        println!("purged queue {} — admin response: {body}", args.queue);
+    }
     Ok(())
 }
 
-fn cmd_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_export(args: ExportArgs) -> Result<(), CliError> {
     let (grid, palette) = project::read_project(&args.input)?;
     let format = resolve_format(&args)?;
     let outline = OutlineConfig {
         enabled: !args.no_outline,
         width_pct: args.outline_width,
-        color: parse_hex_color(&args.outline_color)?,
+        color: parse_hex_color(&args.outline_color).map_err(CliError::Usage)?,
     };
+    let out_path = args.out;
     let opts = ExportOptions {
-        path: args.out,
+        path: out_path.clone(),
         format,
         outline,
     };
     export::write(&grid, &palette, &opts)?;
+    rlit_cli::add_artifact(&out_path, "model");
+    rlit_cli::set_data(json!({ "out": out_path }));
     Ok(())
 }
 
-fn resolve_format(args: &ExportArgs) -> Result<ExportFormat, Box<dyn std::error::Error>> {
+fn resolve_format(args: &ExportArgs) -> Result<ExportFormat, CliError> {
     if let Some(f) = args.format {
         return Ok(f.into());
     }
@@ -490,34 +640,39 @@ fn resolve_format(args: &ExportArgs) -> Result<ExportFormat, Box<dyn std::error:
     }
 }
 
-fn cmd_info(args: InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_info(args: InfoArgs) -> Result<(), CliError> {
     let (grid, palette) = project::read_project(&args.input)?;
     let summary = summarize(&grid, &palette);
-
-    if args.json {
-        println!("{}", summary.to_json());
-    } else {
+    rlit_cli::set_data(summary.to_json_value());
+    if !rlit_cli::json_mode() {
         summary.print_human(std::io::stdout().lock())?;
     }
     Ok(())
 }
 
-fn cmd_validate(args: ValidateArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_validate(args: ValidateArgs) -> Result<(), CliError> {
     let (_grid, _palette) = project::read_project(&args.input)?;
-    println!("ok: {} is a valid Maquette project", args.input.display());
+    rlit_cli::set_data(json!({ "valid": true, "input": args.input }));
+    if !rlit_cli::json_mode() {
+        println!("ok: {} is a valid Maquette project", args.input.display());
+    }
     Ok(())
 }
 
-fn cmd_palette_export(args: PaletteExportArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_palette_export(args: PaletteExportArgs) -> Result<(), CliError> {
     let (_grid, palette) = project::read_project(&args.input)?;
     palette_io::write_palette_json(&palette, &args.out)?;
+    rlit_cli::add_artifact(&args.out, "palette");
+    rlit_cli::set_data(json!({ "out": args.out }));
     Ok(())
 }
 
-fn cmd_palette_import(args: PaletteImportArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_palette_import(args: PaletteImportArgs) -> Result<(), CliError> {
     let (grid, mut palette) = project::read_project(&args.input)?;
     palette_io::import_palette_into(&mut palette, &args.from)?;
     project::write_project(&args.out, &grid, &palette)?;
+    rlit_cli::add_artifact(&args.out, "project");
+    rlit_cli::set_data(json!({ "out": args.out }));
     Ok(())
 }
 
@@ -526,12 +681,10 @@ fn cmd_palette_import(args: PaletteImportArgs) -> Result<(), Box<dyn std::error:
 // hfrog; that's an ops job using hfrog's own tooling).
 // ---------------------------------------------------------------------
 
-fn cmd_block_list(args: BlockListArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_block_list(args: BlockListArgs) -> Result<(), CliError> {
     let blocks = collect_blocks(args.source)?;
-    if args.json {
-        let json = serde_json::to_string_pretty(&blocks)?;
-        println!("{json}");
-    } else {
+    rlit_cli::set_data(&blocks);
+    if !rlit_cli::json_mode() {
         if blocks.is_empty() {
             println!("(no blocks — try `maquette-cli block sync` to fetch hfrog catalog)");
             return Ok(());
@@ -560,7 +713,7 @@ fn cmd_block_list(args: BlockListArgs) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn cmd_block_get(args: BlockGetArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_block_get(args: BlockGetArgs) -> Result<(), CliError> {
     let block = match args.source {
         BlockSource::Local => LocalProvider::new().get(&args.id)?,
         BlockSource::Hfrog => HfrogProvider::new(HfrogConfig::from_env()).get(&args.id)?,
@@ -569,9 +722,8 @@ fn cmd_block_get(args: BlockGetArgs) -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => HfrogProvider::new(HfrogConfig::from_env()).get(&args.id)?,
         },
     };
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&block)?);
-    } else {
+    rlit_cli::set_data(&block);
+    if !rlit_cli::json_mode() {
         println!("id:           {}", block.id);
         println!("name:         {}", block.name);
         println!("source:       {}", block.source.label());
@@ -594,7 +746,7 @@ fn cmd_block_get(args: BlockGetArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_block_sync(args: BlockSyncArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_block_sync(args: BlockSyncArgs) -> Result<(), CliError> {
     let mut cfg = HfrogConfig::from_env();
     if let Some(b) = args.base_url {
         cfg.base_url = b.trim_end_matches('/').to_string();
@@ -604,9 +756,8 @@ fn cmd_block_sync(args: BlockSyncArgs) -> Result<(), Box<dyn std::error::Error>>
     }
     let provider = HfrogProvider::new(cfg.clone());
     let blocks = provider.sync()?;
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&blocks)?);
-    } else {
+    rlit_cli::set_data(&blocks);
+    if !rlit_cli::json_mode() {
         let cache = block_meta::default_cache_dir()
             .map(|p| {
                 p.join("hfrog")
@@ -628,7 +779,7 @@ fn cmd_block_sync(args: BlockSyncArgs) -> Result<(), Box<dyn std::error::Error>>
 
 fn collect_blocks(
     source: BlockSource,
-) -> Result<Vec<maquette::block_meta::BlockMeta>, Box<dyn std::error::Error>> {
+) -> Result<Vec<maquette::block_meta::BlockMeta>, CliError> {
     use maquette::block_meta::BlockMeta;
     let mut out: Vec<BlockMeta> = match source {
         BlockSource::Local => LocalProvider::new().list()?,
@@ -676,9 +827,11 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn cmd_render(args: RenderArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_render(args: RenderArgs) -> Result<(), CliError> {
     let (grid, palette) = project::read_project(&args.input)?;
-    let bg = parse_hex_color(&args.background)?.to_srgba();
+    let bg = parse_hex_color(&args.background)
+        .map_err(CliError::Usage)?
+        .to_srgba();
     let opts = RenderOptions {
         width: args.width,
         height: args.height,
@@ -691,6 +844,12 @@ fn cmd_render(args: RenderArgs) -> Result<(), Box<dyn std::error::Error>> {
         ..RenderOptions::default()
     };
     render::write_png(&grid, &palette, &opts, &args.out)?;
+    rlit_cli::add_artifact(&args.out, "image");
+    rlit_cli::set_data(json!({
+        "out": args.out,
+        "width": opts.width,
+        "height": opts.height,
+    }));
     Ok(())
 }
 
@@ -767,21 +926,18 @@ impl ProjectSummary {
         Ok(())
     }
 
-    fn to_json(&self) -> String {
-        format!(
-            "{{\"canvas\":{{\"w\":{},\"h\":{}}},\"cells\":{{\"painted\":{},\"total\":{}}},\
-             \"max_height\":{},\"palette\":{{\"size\":{},\"live\":{},\"selected\":{}}},\
-             \"colors_used\":{:?}}}",
-            self.w,
-            self.h,
-            self.painted_cells,
-            self.total_cells,
-            self.max_height,
-            self.palette_size,
-            self.palette_live,
-            self.selected_color,
-            self.colors_used,
-        )
+    fn to_json_value(&self) -> serde_json::Value {
+        json!({
+            "canvas": { "w": self.w, "h": self.h },
+            "cells": { "painted": self.painted_cells, "total": self.total_cells },
+            "max_height": self.max_height,
+            "palette": {
+                "size": self.palette_size,
+                "live": self.palette_live,
+                "selected": self.selected_color,
+            },
+            "colors_used": self.colors_used,
+        })
     }
 }
 
@@ -867,5 +1023,12 @@ mod tests {
         assert_eq!(s.max_height, 3);
         assert_eq!(s.colors_used, vec![1u8, 3u8]);
         assert_eq!(s.total_cells, 16);
+    }
+
+    #[test]
+    fn cli_matches_rlit_contract() {
+        use clap::CommandFactory;
+        let issues = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(issues.is_empty(), "contract issues:\n{}", issues.join("\n"));
     }
 }

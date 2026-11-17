@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Pure-Rust game audio pipeline. Multi-format codec trait (encode-only in v1), MiniMax async submit/collect via SSH, procedural SFX synthesis."
 license = "MIT OR Apache-2.0"
+default-run = "audiogen"
 
 [lib]
 name = "audiogen"
@@ -19,6 +20,7 @@ path = "src/bin/dry_run.rs"
 
 [dependencies]
 # CLI
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "4.6", features = ["derive", "env"] }
 
 # Jobs file (JSON)

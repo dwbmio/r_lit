@@ -59,23 +59,23 @@ jobs:
           - crate: looplog
             strict_clippy: false
             has_bin: true
-            contract: false
+            contract: true
           - crate: mailctl
             strict_clippy: false
             has_bin: true
-            contract: false
+            contract: true
           - crate: mini_reg
             strict_clippy: true
             has_bin: true
-            contract: false
+            contract: true
           - crate: phone_haul
             strict_clippy: false
             has_bin: true
-            contract: false
+            contract: true
           - crate: audiogen
             strict_clippy: false
             has_bin: true
-            contract: false
+            contract: true
     steps:
       - uses: actions/checkout@v4
 
@@ -147,6 +147,13 @@ jobs:
       - name: Check mj_atlas (gui feature)
         working-directory: mj_atlas
         run: cargo check --features gui
+
+      - name: Test maquette headless CLI & contract schema
+        working-directory: maquette
+        run: |
+          cargo test --no-default-features
+          cargo run --no-default-features --bin maquette-cli -- --help >/dev/null
+          cargo run --no-default-features --bin maquette-cli -- __schema | python3 -m json.tool >/dev/null
 
       - name: Check maquette (gui feature)
         working-directory: maquette

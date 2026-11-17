@@ -57,7 +57,7 @@ mailctl reply -a qq-personal --uid 3016 --body-file b.txt --out /tmp/r.eml
 mailctl send -a qq-personal --eml /tmp/r.eml --yes --append-sent
 ```
 
-退出码：0 成功 / 1 运行错误 / 2 缺凭证 / 3 未带 `--yes`。
+退出码（遵循 `rlit_cli` 契约）：0 成功 / 1 运行错误 / 2 参数错误 / 3 输入错误（如未带 `--yes` 或缺输入文件）/ 4 外部服务错误（IMAP/SMTP/TLS）；支持全局 `--json` envelope 与 `mailctl __schema`。
 
 ## 边界
 

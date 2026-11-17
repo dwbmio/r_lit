@@ -3,6 +3,7 @@
 - purpose: Phone media migration across Android (adb + static on-device agent) and iOS (pure-Rust AFC + Photos.sqlite diff)
 - version: 0.1.0
 - binaries: phone_haul (host, feature `host`), phone_haul_agent (Android aarch64 static agent)
+- contract: `phone_haul` links `rlit_cli` (global `--json` envelope, `phone_haul __schema`, exit codes 0-5)
 - build_host: cd phone_haul && cargo build --release --bin phone_haul
 - build_agent: cd phone_haul && cargo zigbuild --release --target aarch64-linux-android --bin phone_haul_agent
 

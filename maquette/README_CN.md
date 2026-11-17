@@ -58,9 +58,10 @@ just build maquette release
 maquette-cli export scene.maq -o scene.glb
 maquette-cli export scene.maq -o scene.gltf --no-outline
 
-# 查看工程摘要与结构校验
+# 查看工程摘要与结构校验（遵循 rlit_cli 契约：支持全局 `--json` 与 `__schema`）
 maquette-cli info scene.maq --json
 maquette-cli validate scene.maq
+maquette-cli __schema
 
 # 纯 CPU 渲染等距视角 PNG 预览图
 maquette-cli render scene.maq -o preview.png --width 512 --height 512 --background '#181a1e'

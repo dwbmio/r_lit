@@ -26,8 +26,10 @@ test-cli:
       echo "==> cargo test ($crate)"
       (cd "$crate" && cargo test)
     done
+    echo "==> cargo test (maquette headless CLI)"
+    (cd maquette && cargo test --no-default-features)
 
-# Run clippy & rustfmt checks across core CLI crates and shared libraries
+# Run clippy checks across core CLI crates and shared libraries
 lint-cli:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -35,6 +37,8 @@ lint-cli:
       echo "==> clippy ($crate)"
       (cd "$crate" && cargo clippy --all-targets -- -D warnings)
     done
+    echo "==> clippy (maquette headless CLI)"
+    (cd maquette && cargo clippy --no-default-features --tests --bin maquette-cli -- -D warnings)
 
 # Run all repository verification gates
 check: check-repo test-cli lint-cli

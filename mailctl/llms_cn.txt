@@ -2,7 +2,7 @@
 
 - 用途：多邮箱 IMAP/SMTP 分发器，带白名单 / 发前确认 / 审计
 - 形态：Rust 单二进制（rustls），不依赖 OpenSSL 与解释器
-- 契约：`mailctl capabilities --json` 输出机器可读能力清单（与 README 同源）
+- 契约：支持全局 `--json`（`rlit_cli` envelope）与 `mailctl __schema`；`mailctl capabilities --json` 输出内嵌能力清单（与 README 同源）
 - 配置：一个邮箱一个文件 `~/.config/hermes-mail/accounts/<账号名>.toml`；文件名即账号名；`*.toml` 生效，`*.toml.example` 不生效
 - 凭证：macOS 钥匙串（auth.keychain_service），配置文件不含密码
 - 隔离：地址 / 凭证引用 / 白名单 / 已发送目录 / 签名，全部按账号隔离
@@ -34,7 +34,7 @@ qq / exmail / aliyun-enterprise / aliyun / gmail / outlook / custom（端点见 
 
 ## 退出码
 
-0 成功 | 1 运行错误 | 2 缺凭证 | 3 未带 --yes
+0 成功 | 1 运行错误 | 2 参数错误 | 3 输入错误（如 `send` 未带 `--yes`） | 4 外部服务错误（IMAP/SMTP/TLS）
 
 ## 未实现
 

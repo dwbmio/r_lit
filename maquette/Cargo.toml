@@ -66,6 +66,7 @@ log = "0.4"
 
 # CLI frontend.
 clap = { version = "4", features = ["derive"] }
+rlit_cli = { path = "../crates/rlit_cli" }
 
 # Pure-CPU rasterizer output. `png` is the de-facto Rust PNG codec
 # (used by `image`, `plotters`, etc). Small surface area — we only

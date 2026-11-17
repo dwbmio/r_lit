@@ -58,9 +58,10 @@ just build maquette release
 maquette-cli export scene.maq -o scene.glb
 maquette-cli export scene.maq -o scene.gltf --no-outline
 
-# Inspect and validate .maq files
+# Inspect and validate .maq files (`--json` is global per rlit_cli; `__schema` dumps JSON Schema)
 maquette-cli info scene.maq --json
 maquette-cli validate scene.maq
+maquette-cli __schema
 
 # Render pure-CPU isometric PNG thumbnail
 maquette-cli render scene.maq -o preview.png --width 512 --height 512 --background '#181a1e'

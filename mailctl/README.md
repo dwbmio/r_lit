@@ -79,9 +79,12 @@ mailctl scan  -a qq-personal --folder 'Sent Messages' --limit 5
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Runtime error (connect / auth / allowlist blocked / sender mismatch) |
-| 2 | Missing credential |
-| 3 | Refused to send without `--yes` |
+| 1 | Runtime error (auth / allowlist blocked / sender mismatch) |
+| 2 | Usage error (clap / invalid flags) |
+| 3 | Input error (refused to send without `--yes`, missing file) |
+| 4 | External service error (IMAP / SMTP / TLS failure) |
+
+Also supports global `--json` (standard `rlit_cli` envelope) and `mailctl __schema`.
 
 ## Build & Release
 

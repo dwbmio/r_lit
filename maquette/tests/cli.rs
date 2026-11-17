@@ -174,7 +174,9 @@ fn cli_info_text_and_json() {
     assert!(json.status.success());
     let j = String::from_utf8_lossy(&json.stdout);
     let parsed: serde_json::Value = serde_json::from_str(j.trim()).unwrap();
-    assert_eq!(parsed["cells"]["painted"], 4);
+    assert_eq!(parsed["contract"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["cells"]["painted"], 4);
 }
 
 #[test]
@@ -374,7 +376,7 @@ fn cli_rejects_missing_input() {
         .output()
         .unwrap();
     assert!(!out.status.success());
-    assert_eq!(out.status.code(), Some(1), "runtime error should exit 1");
+    assert_eq!(out.status.code(), Some(3), "missing input should exit 3");
 }
 
 fn run_ok<I>(args: I)
@@ -729,7 +731,9 @@ fn cli_block_list_local_json_is_valid() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("--json should emit valid JSON");
-    let arr = parsed.as_array().expect("expected an array");
+    assert_eq!(parsed["contract"], 1);
+    assert_eq!(parsed["ok"], true);
+    let arr = parsed["data"].as_array().expect("expected data array");
     assert_eq!(arr.len(), 12, "default local block count");
     // Every entry must carry the discriminator.
     for entry in arr {

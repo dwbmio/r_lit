@@ -5,7 +5,49 @@ use mailctl::imap::{extract_addr, header_unfolded, require, Imap};
 use mailctl::mime::{self, MessageSpec};
 use mailctl::smtp::Smtp;
 use mailctl::{audit, cred};
+use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::path::PathBuf;
+
+macro_rules! out_ln {
+    ($($arg:tt)*) => {{
+        if rlit_cli::json_mode() {
+            eprintln!($($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    }};
+}
+
+#[derive(Debug)]
+struct ConfirmRequired(String);
+
+impl std::fmt::Display for ConfirmRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfirmRequired {}
+
+static CONTRACT: Contract = Contract {
+    tool: env!("CARGO_PKG_NAME"),
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("capabilities", Effects::ReadOnly),
+        CommandSpec::new("accounts", Effects::ReadOnly).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("verify", Effects::External).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("read", Effects::External).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("folders", Effects::External).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("scan", Effects::External).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("draft", Effects::LocalWrite)
+            .io(&[("config", Io::InputFile), ("body_file", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("reply", Effects::External)
+            .io(&[("config", Io::InputFile), ("body_file", Io::InputFile), ("out", Io::OutputFile)]),
+        CommandSpec::new("selftest", Effects::External).io(&[("config", Io::InputFile)]),
+        CommandSpec::new("send", Effects::External)
+            .io(&[("config", Io::InputFile), ("eml", Io::InputFile)]),
+    ],
+};
 
 #[derive(Parser)]
 #[command(
@@ -14,6 +56,9 @@ use std::path::PathBuf;
     about = "多邮箱 IMAP/SMTP 分发器：账号表驱动，带白名单 / 发前确认 / 审计"
 )]
 struct Cli {
+    /// 以机器可读 JSON envelope 输出到 stdout
+    #[arg(long, global = true)]
+    json: bool,
     /// 账号表路径（默认 ~/.config/hermes-mail/accounts.toml，或 $MAILCTL_CONFIG）
     #[arg(long, global = true)]
     config: Option<PathBuf>,
@@ -24,56 +69,63 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// 输出能力清单（JSON，给 function calling / 自动化用）
-    Capabilities {
-        #[arg(long)]
-        json: bool,
-    },
+    Capabilities,
     /// 列出所有账号（端点 + 凭证来源）
-    Accounts {
-        /// 机器可读输出（给 bot / 自动化用）
-        #[arg(long)]
-        json: bool,
-    },
+    Accounts,
     /// 登录测试 IMAP + SMTP（不发信）
     Verify {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 授权码或密码（不建议命令行明文，推荐钥匙串/环境变量）
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
     },
     /// 读取某封邮件正文（只读，多字符集解码；用于判断这封到底是什么）
     Read {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 目标邮件 UID
         #[arg(long)]
         uid: u32,
+        /// 最多展示字符数
         #[arg(long, default_value_t = 2000)]
         chars: usize,
         /// 打印原始报文（诊断 MIME 用）
         #[arg(long)]
         raw: bool,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
     },
     /// 列出邮箱目录（含中文目录名解码）
     Folders {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
     },
     /// 只读扫描收件箱
     Scan {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
         /// 最多列多少封（0 = 全部）
@@ -91,22 +143,25 @@ enum Cmd {
         /// 大小写不敏感子串过滤（From+Subject），可用 | 分隔多个
         #[arg(long = "match")]
         pattern: Option<String>,
-        /// 机器可读输出（JSON 数组）
-        #[arg(long)]
-        json: bool,
     },
     /// 新建邮件草稿（不发送）
     Draft {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 收件人地址
         #[arg(long)]
         to: String,
+        /// 邮件主题
         #[arg(long)]
         subject: String,
+        /// 正文文本文件路径
         #[arg(long = "body-file")]
         body_file: PathBuf,
+        /// 抄送地址
         #[arg(long)]
         cc: Option<String>,
+        /// 输出 .eml 路径
         #[arg(long)]
         out: Option<PathBuf>,
         /// 不追加该账号的签名
@@ -115,32 +170,43 @@ enum Cmd {
     },
     /// 按收件箱某封生成线程内回复草稿（不发送）
     Reply {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 回复目标邮件 UID
         #[arg(long)]
         uid: u32,
+        /// 回复正文文件路径
         #[arg(long = "body-file")]
         body_file: PathBuf,
+        /// 覆盖回复主题
         #[arg(long)]
         subject: Option<String>,
+        /// 抄送地址
         #[arg(long)]
         cc: Option<String>,
+        /// 输出 .eml 路径
         #[arg(long)]
         out: Option<PathBuf>,
         /// 不追加该账号的签名
         #[arg(long)]
         no_signature: bool,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
     },
     /// 自测闭环：用本账号给自己发一封，再到收件箱回读（不发给任何第三方）
     Selftest {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
         /// 发完等多少秒回读收件箱（0 = 不等）
@@ -149,45 +215,61 @@ enum Cmd {
     },
     /// 真发 .eml（受 --yes 与白名单约束）
     Send {
+        /// 账号名（默认读取 default.account）
         #[arg(short = 'a', long)]
         account: Option<String>,
+        /// 待发送的 .eml 文件路径
         #[arg(long)]
         eml: PathBuf,
         /// 确认发送（confirm_before_send = true 时必需）
         #[arg(long)]
         yes: bool,
+        /// 发送成功后顺便 APPEND 到已发送目录
         #[arg(long = "append-sent")]
         append_sent: bool,
+        /// 授权码或密码
         #[arg(long)]
         password: Option<String>,
+        /// 从标准输入交互式读取密码
         #[arg(long)]
         prompt_password: bool,
     },
 }
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("错误：{e:#}");
-        std::process::exit(1);
+fn classify_error(err: &anyhow::Error) -> ErrorKind {
+    if err.downcast_ref::<ConfirmRequired>().is_some() {
+        return ErrorKind::Input;
     }
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        return rlit_cli::io_error_kind(io);
+    }
+    let msg = err.to_string().to_lowercase();
+    if msg.contains("imap") || msg.contains("smtp") || msg.contains("tls") {
+        return ErrorKind::External;
+    }
+    ErrorKind::Runtime
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
+fn main() {
+    let cli: Cli = CONTRACT.parse();
+    let result = run(cli);
+    rlit_cli::finish(result, classify_error);
+}
+
+fn run(cli: Cli) -> Result<()> {
     let cfg_path = cli.config.unwrap_or_else(config::default_config_path);
     let cfg = config::load(&cfg_path)?;
 
     match cli.cmd {
-        Cmd::Capabilities { json } => {
+        Cmd::Capabilities => {
             let v: serde_json::Value = serde_json::from_str(mailctl::CAPABILITIES)?;
-            if json {
-                println!("{}", serde_json::to_string(&v)?);
-            } else {
+            rlit_cli::set_data(&v);
+            if !rlit_cli::json_mode() {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             }
             Ok(())
         }
-        Cmd::Accounts { json } => cmd_accounts(&cfg, &cfg_path, json),
+        Cmd::Accounts => cmd_accounts(&cfg, &cfg_path),
         Cmd::Read { account, uid, chars, raw, password, prompt_password } => {
             let acc = config::resolve(&cfg, account.as_deref())?;
             cmd_read(&acc, uid, chars, raw, password, prompt_password)
@@ -200,10 +282,10 @@ fn run() -> Result<()> {
             let acc = config::resolve(&cfg, account.as_deref())?;
             cmd_verify(&acc, password, prompt_password)
         }
-        Cmd::Scan { account, password, prompt_password, limit, unseen, folder, criteria, pattern, json } => {
+        Cmd::Scan { account, password, prompt_password, limit, unseen, folder, criteria, pattern } => {
             let acc = config::resolve(&cfg, account.as_deref())?;
             cmd_scan(&acc, password, prompt_password, limit, unseen, &folder, criteria.as_deref(),
-                     pattern.as_deref(), json)
+                     pattern.as_deref())
         }
         Cmd::Draft { account, to, subject, body_file, cc, out, no_signature } => {
             let acc = config::resolve(&cfg, account.as_deref())?;
@@ -225,7 +307,7 @@ fn run() -> Result<()> {
     }
 }
 
-fn cmd_accounts(cfg: &config::Config, path: &std::path::Path, json: bool) -> Result<()> {
+fn cmd_accounts(cfg: &config::Config, path: &std::path::Path) -> Result<()> {
     if cfg.accounts.is_empty() {
         bail!("账号表里没有 [accounts.*] 条目");
     }
@@ -255,8 +337,8 @@ fn cmd_accounts(cfg: &config::Config, path: &std::path::Path, json: bool) -> Res
             "allow_recipients": r.allow_recipients,
         }));
     }
-    if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+    rlit_cli::set_data(&rows);
+    if rlit_cli::json_mode() {
         return Ok(());
     }
     println!("配置文件：{}", path.display());
@@ -386,7 +468,7 @@ fn match_any(blob: &str, pattern: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn cmd_scan(acc: &Resolved, password: Option<String>, prompt: bool, limit: usize, unseen: bool,
-            folder: &str, criteria: Option<&str>, pattern: Option<&str>, json: bool) -> Result<()> {
+            folder: &str, criteria: Option<&str>, pattern: Option<&str>) -> Result<()> {
     let pw = cred::password(acc, password, prompt)?;
     let mut imap = Imap::connect(acc)?;
     imap.login(&acc.address, &pw)?;
@@ -400,7 +482,7 @@ fn cmd_scan(acc: &Resolved, password: Option<String>, prompt: bool, limit: usize
     if limit > 0 && uids.len() > limit {
         uids = uids.split_off(uids.len() - limit);
     }
-    if !json {
+    if !rlit_cli::json_mode() {
         println!(
             "[{}] {} 共 {exists} 封，检查最近 {} 封（只读，不取正文、不标已读）{}",
             acc.name,
@@ -429,7 +511,7 @@ fn cmd_scan(acc: &Resolved, password: Option<String>, prompt: bool, limit: usize
             "message_id": header_unfolded(&raw, "Message-ID").unwrap_or_default(),
             "references": header_unfolded(&raw, "References").unwrap_or_default(),
         });
-        if !json {
+        if !rlit_cli::json_mode() {
             println!("{}", "-".repeat(78));
             println!("UID {}  |  {}", row["uid"], row["date"].as_str().unwrap_or(""));
             println!("  From: {}", row["from"].as_str().unwrap_or(""));
@@ -442,8 +524,8 @@ fn cmd_scan(acc: &Resolved, password: Option<String>, prompt: bool, limit: usize
         rows.push(row);
     }
     imap.logout();
-    if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+    rlit_cli::set_data(&rows);
+    if rlit_cli::json_mode() {
         return Ok(());
     }
     println!("{}", "-".repeat(78));
@@ -494,12 +576,20 @@ fn cmd_draft(acc: &Resolved, to: &str, subject: &str, body_file: &std::path::Pat
         std::fs::create_dir_all(dir).ok();
     }
     std::fs::write(&path, &built.raw)?;
-    println!("草稿（{}）：{}", acc.name, path.display());
-    println!("  From: {} <{}>", acc.display_name.clone().unwrap_or_default(), acc.address);
-    println!("  To: {to}");
-    println!("  Subject: {subject}");
-    println!("  Message-ID: {}", built.message_id);
-    println!("未发送。确认后：mailctl send -a {} --eml {} --yes", acc.name, path.display());
+    rlit_cli::add_artifact(&path, "eml");
+    rlit_cli::set_data(serde_json::json!({
+        "account": acc.name,
+        "path": path,
+        "to": to,
+        "subject": subject,
+        "message_id": built.message_id,
+    }));
+    out_ln!("草稿（{}）：{}", acc.name, path.display());
+    out_ln!("  From: {} <{}>", acc.display_name.clone().unwrap_or_default(), acc.address);
+    out_ln!("  To: {to}");
+    out_ln!("  Subject: {subject}");
+    out_ln!("  Message-ID: {}", built.message_id);
+    out_ln!("未发送。确认后：mailctl send -a {} --eml {} --yes", acc.name, path.display());
     Ok(())
 }
 
@@ -545,11 +635,20 @@ fn cmd_reply(acc: &Resolved, uid: u32, body_file: &std::path::Path, subject: Opt
         std::fs::create_dir_all(dir).ok();
     }
     std::fs::write(&path, &built.raw)?;
-    println!("草稿（{}）：{}", acc.name, path.display());
-    println!("  To: {to}");
-    println!("  Subject: {subject}");
-    println!("  In-Reply-To: {}", in_reply_to.unwrap_or_default());
-    println!("未发送。");
+    rlit_cli::add_artifact(&path, "eml");
+    rlit_cli::set_data(serde_json::json!({
+        "account": acc.name,
+        "path": path,
+        "to": to,
+        "subject": subject,
+        "in_reply_to": in_reply_to,
+        "message_id": built.message_id,
+    }));
+    out_ln!("草稿（{}）：{}", acc.name, path.display());
+    out_ln!("  To: {to}");
+    out_ln!("  Subject: {subject}");
+    out_ln!("  In-Reply-To: {}", in_reply_to.unwrap_or_default());
+    out_ln!("未发送。");
     Ok(())
 }
 
@@ -569,7 +668,10 @@ fn cmd_send(cfg: &config::Config, acc: &Resolved, eml: &std::path::Path, yes: bo
     if confirm && !yes {
         eprintln!("拒发：「{}」配置了 confirm_before_send=true。确认内容无误后加 --yes。", acc.name);
         eprintln!("  收件人：{to_hdr}\n  主题：{subject}");
-        std::process::exit(3);
+        return Err(anyhow::Error::new(ConfirmRequired(format!(
+            "「{}」配置了 confirm_before_send=true，请确认后加 --yes",
+            acc.name
+        ))));
     }
 
     let mut rcpts = mime::parse_recipients(&to_hdr);
@@ -586,18 +688,25 @@ fn cmd_send(cfg: &config::Config, acc: &Resolved, eml: &std::path::Path, yes: bo
     }
 
     let pw = cred::password(acc, password, prompt)?;
-    println!("[{}] 发送中 → {to_hdr} ｜ {subject}", acc.name);
+    out_ln!("[{}] 发送中 → {to_hdr} ｜ {subject}", acc.name);
     let mut smtp = Smtp::connect(acc)?;
     smtp.ehlo()?;
     smtp.auth(&acc.address, &pw)?;
     smtp.send(&acc.address, &rcpts, &raw)?;
     smtp.quit();
-    println!("SMTP 已接受（250）。");
+    out_ln!("SMTP 已接受（250）。");
 
     let audit_path = audit_path_for(cfg);
     audit::sent(&audit_path, &acc.name, &acc.address, &to_hdr, &cc_hdr, &subject,
                 &message_id, &in_reply_to, &acc.smtp_host)?;
-    println!("审计已记录：{}", audit_path.display());
+    out_ln!("审计已记录：{}", audit_path.display());
+    rlit_cli::add_artifact(&audit_path, "audit-log");
+    rlit_cli::set_data(serde_json::json!({
+        "account": acc.name,
+        "to": to_hdr,
+        "subject": subject,
+        "message_id": message_id,
+    }));
 
     if append_sent {
         let res = Imap::connect(acc).and_then(|mut i| {
@@ -748,5 +857,17 @@ fn shellexpand(p: &str) -> String {
         format!("{}/{}", config::home().display(), rest)
     } else {
         p.to_string()
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_matches_rlit_contract() {
+        let issues = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(issues.is_empty(), "contract issues: {issues:#?}");
     }
 }

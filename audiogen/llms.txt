@@ -3,6 +3,7 @@
 - purpose: Pure-Rust game audio asset pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax music/voice jobs over SSH/Redis)
 - version: 0.1.0
 - binary: audiogen (plus helper binary dry_run)
+- contract: `rlit_cli` (global `--json` envelope, `audiogen __schema`, exit codes 0-5)
 - build: cd audiogen && cargo build --release
 - input: JSON job manifest (`--jobs jobs/<game>.json`)
 - output: encoded audio files in `output_dir` (mp3/wav/flac) + pending state `.pending.json`

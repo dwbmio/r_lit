@@ -10,6 +10,7 @@ mod keys;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
@@ -21,9 +22,43 @@ const AGENT_REMOTE: &str = "/data/local/tmp/phone_haul_agent";
 const DB_FILE: &str = "phone_haul.redb";
 const TABLE: redb::TableDefinition<&str, &str> = redb::TableDefinition::new("b3_to_path");
 
+macro_rules! out_ln {
+    ($($arg:tt)*) => {{
+        if rlit_cli::json_mode() {
+            eprintln!($($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    }};
+}
+
+static CONTRACT: Contract = Contract {
+    tool: env!("CARGO_PKG_NAME"),
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("scan", Effects::External)
+            .io(&[("out", Io::OutputDir)])
+            .env(&["ADB"]),
+        CommandSpec::new("pull", Effects::External)
+            .io(&[("dest", Io::OutputDir), ("manifest", Io::InputFile)])
+            .env(&["ADB"]),
+        CommandSpec::new("ios-scan", Effects::External).io(&[("out", Io::OutputDir)]),
+        CommandSpec::new("diff", Effects::External)
+            .io(&[("archive", Io::InputDir), ("out", Io::OutputDir)]),
+        CommandSpec::new("push-ios", Effects::LocalWrite)
+            .io(&[("from", Io::InputDir), ("dest", Io::OutputDir)]),
+        CommandSpec::new("collect-lowconf", Effects::LocalWrite)
+            .io(&[("archive", Io::InputDir), ("out", Io::OutputDir)]),
+        CommandSpec::new("pull-screenshots", Effects::External).io(&[("out", Io::OutputDir)]),
+    ],
+};
+
 #[derive(Parser)]
-#[command(name = "phone_haul", about = "Parallel dedup-aware media migration over adb")]
+#[command(name = "phone_haul", version, about = "Parallel dedup-aware media migration over adb and iOS AFC")]
 struct Cli {
+    /// Emit one JSON envelope on stdout; send human logs to stderr.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
     /// adb executable (default: $ADB or "adb" on PATH)
@@ -44,6 +79,7 @@ enum Cmd {
     },
     /// Pull files: dedup, verify, place under dest/yyyy/MM/
     Pull {
+        /// Destination directory for archived media
         #[arg(long)]
         dest: PathBuf,
         /// manifest.json produced by `scan`
@@ -58,13 +94,16 @@ enum Cmd {
     },
     /// [iOS] pull Photos.sqlite over AFC and dump asset keys (iphone_keys.json)
     IosScan {
+        /// Output directory for iphone_keys.json and Photos.sqlite
         #[arg(long, default_value = ".")]
         out: PathBuf,
     },
     /// [iOS] diff a local archive vs the iPhone photo library; hardlink missing into --out
     Diff {
+        /// Local photo/video archive directory
         #[arg(long)]
         archive: PathBuf,
+        /// Output directory for hardlinked missing files and missing_report.json
         #[arg(long)]
         out: PathBuf,
     },
@@ -79,13 +118,16 @@ enum Cmd {
     },
     /// collect low-confidence files (no EXIF/mvhd key, e.g. PNG screenshots) for manual review
     CollectLowconf {
+        /// Local photo/video archive directory
         #[arg(long)]
         archive: PathBuf,
+        /// Output directory for collected low-confidence files
         #[arg(long)]
         out: PathBuf,
     },
     /// [iOS] pull every screenshot from the iPhone photo library into --out for review
     PullScreenshots {
+        /// Output directory for pulled screenshots
         #[arg(long)]
         out: PathBuf,
     },
@@ -153,15 +195,24 @@ fn cmd_scan(adb: &str, roots: &[String], out: &Path) -> Result<()> {
         }
     }
     let total: u64 = entries.iter().map(|e| e.size).sum();
-    println!("files: {}  total: {:.2} GiB", entries.len(), total as f64 / (1 << 30) as f64);
-    println!("on-device dups: {} files / {:.2} GiB (will transfer once)",
+    let manifest_path = out.join("manifest.json");
+    rlit_cli::add_artifact(&manifest_path, "manifest");
+    rlit_cli::set_data(serde_json::json!({
+        "files": entries.len(),
+        "total_bytes": total,
+        "on_device_dups": dup_cnt,
+        "dup_bytes": dup_bytes,
+        "manifest": manifest_path,
+    }));
+    out_ln!("files: {}  total: {:.2} GiB", entries.len(), total as f64 / (1 << 30) as f64);
+    out_ln!("on-device dups: {} files / {:.2} GiB (will transfer once)",
         dup_cnt, dup_bytes as f64 / (1 << 30) as f64);
     let mut kinds: Vec<_> = by_kind.into_iter().collect();
     kinds.sort_by_key(|(_, v)| std::cmp::Reverse(v.1));
     for (k, (n, b)) in kinds {
-        println!("  {k:6} {n:6} files  {:8.2} GiB", b as f64 / (1 << 30) as f64);
+        out_ln!("  {k:6} {n:6} files  {:8.2} GiB", b as f64 / (1 << 30) as f64);
     }
-    println!("manifest saved to {}", out.join("manifest.json").display());
+    out_ln!("manifest saved to {}", manifest_path.display());
     Ok(())
 }
 
@@ -364,7 +415,12 @@ fn cmd_pull(adb: &str, dest: &Path, manifest: &Path, jobs: usize, images_only: b
             ok += a;
             skipped += b;
         }
-        println!("done: {ok} transferred, {skipped} skipped (already in local db)");
+        out_ln!("done: {ok} transferred, {skipped} skipped (already in local db)");
+        rlit_cli::set_data(serde_json::json!({
+            "transferred": ok,
+            "skipped": skipped,
+            "dest": dest,
+        }));
         Ok(())
     })
 }
@@ -400,8 +456,11 @@ fn cmd_ios_scan(out: &Path) -> Result<()> {
         let db = ios::pull_photos_db(&mut afc, &out.join("ios_db")).await?;
         let ks = keys::iphone_keys(&db)?;
         std::fs::create_dir_all(out)?;
-        std::fs::write(out.join("iphone_keys.json"), serde_json::to_vec(&ks)?)?;
-        println!("iphone assets: {}", ks.len());
+        let keys_path = out.join("iphone_keys.json");
+        std::fs::write(&keys_path, serde_json::to_vec(&ks)?)?;
+        rlit_cli::add_artifact(&keys_path, "metadata");
+        rlit_cli::set_data(serde_json::json!({ "assets": ks.len(), "keys_file": keys_path }));
+        out_ln!("iphone assets: {}", ks.len());
         Ok(())
     })
 }
@@ -414,10 +473,10 @@ fn cmd_diff(archive: &Path, out: &Path) -> Result<()> {
         let db = ios::pull_photos_db(&mut afc, &dir).await?;
         keys::iphone_keys(&db)
     })?;
-    println!("iphone assets: {}", ik.len());
+    out_ln!("iphone assets: {}", ik.len());
 
     let (lk, low) = keys::local_keys(archive);
-    println!("local archive keyed: {}  (low-confidence skipped: {})", lk.len(), low.len());
+    out_ln!("local archive keyed: {}  (low-confidence skipped: {})", lk.len(), low.len());
 
     let iset: std::collections::HashSet<(i64, u32, u32)> =
         ik.iter().map(|e| (e.t, e.w, e.h)).collect();
@@ -438,8 +497,17 @@ fn cmd_diff(archive: &Path, out: &Path) -> Result<()> {
         }
     }
     let report = serde_json::json!({"missing": missing, "low_confidence": low});
-    std::fs::write(out.join("missing_report.json"), serde_json::to_vec_pretty(&report)?)?;
-    println!("missing on iphone: {} -> linked into {}", missing.len(), out.display());
+    let report_path = out.join("missing_report.json");
+    std::fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
+    rlit_cli::add_artifact(&report_path, "report");
+    rlit_cli::set_data(serde_json::json!({
+        "iphone_assets": ik.len(),
+        "local_keyed": lk.len(),
+        "missing": missing.len(),
+        "low_confidence": low.len(),
+        "report": report_path,
+    }));
+    out_ln!("missing on iphone: {} -> linked into {}", missing.len(), out.display());
     Ok(())
 }
 
@@ -466,13 +534,18 @@ fn cmd_push_ios(from: &Path, dest: &Path) -> Result<()> {
         let name = src.file_name().unwrap();
         link_into(src, &dest.join("_unknown").join(name))?;
     }
-    println!(
+    rlit_cli::set_data(serde_json::json!({
+        "keyed": keyed.len(),
+        "unknown": low.len(),
+        "dest": dest,
+    }));
+    out_ln!(
         "staged {} keyed (yyyy/MM albums) + {} unknown -> {}",
         keyed.len(),
         low.len(),
         dest.display()
     );
-    println!("next: Finder -> iPhone -> 照片 -> 同步自文件夹 [{}]", dest.display());
+    out_ln!("next: Finder -> iPhone -> 照片 -> 同步自文件夹 [{}]", dest.display());
     Ok(())
 }
 
@@ -488,7 +561,8 @@ fn cmd_collect_lowconf(archive: &Path, out: &Path) -> Result<()> {
             .unwrap_or_else(|| PathBuf::from(src.file_name().unwrap()));
         link_into(src, &out.join(rel))?;
     }
-    println!("collected {} low-confidence files -> {}", low.len(), out.display());
+    rlit_cli::set_data(serde_json::json!({ "collected": low.len(), "out": out }));
+    out_ln!("collected {} low-confidence files -> {}", low.len(), out.display());
     Ok(())
 }
 
@@ -513,21 +587,41 @@ fn cmd_pull_screenshots(out: &Path) -> Result<()> {
                 Err(_) => failed.push(rel.clone()), // iCloud 云端原件未下载到本机的会失败
             }
             if (i + 1) % 200 == 0 {
-                println!("  {}/{total} ...", i + 1);
+                out_ln!("  {}/{total} ...", i + 1);
             }
         }
-        println!("screenshots: {ok}/{total} pulled -> {}", out.display());
+        rlit_cli::set_data(serde_json::json!({
+            "pulled": ok,
+            "total": total,
+            "cloud_only_skipped": failed.len(),
+            "out": out,
+        }));
+        out_ln!("screenshots: {ok}/{total} pulled -> {}", out.display());
         if !failed.is_empty() {
-            println!("  {} cloud-only (原件不在本机, 跳过)", failed.len());
+            out_ln!("  {} cloud-only (原件不在本机, 跳过)", failed.len());
         }
         Ok(())
     })
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn classify_error(err: &anyhow::Error) -> ErrorKind {
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        return rlit_cli::io_error_kind(io);
+    }
+    if err.downcast_ref::<serde_json::Error>().is_some() {
+        return ErrorKind::Input;
+    }
+    let msg = err.to_string().to_lowercase();
+    if msg.contains("adb") || msg.contains("afc") || msg.contains("usbmux") || msg.contains("device") {
+        return ErrorKind::External;
+    }
+    ErrorKind::Runtime
+}
+
+fn main() {
+    let cli: Cli = CONTRACT.parse();
     let adb = adb_path(&cli.adb);
-    match &cli.cmd {
+    let result = match &cli.cmd {
         Cmd::Scan { root, out } => cmd_scan(&adb, root, out),
         Cmd::Pull {
             dest,
@@ -540,5 +634,18 @@ fn main() -> Result<()> {
         Cmd::PushIos { from, dest } => cmd_push_ios(from, dest),
         Cmd::CollectLowconf { archive, out } => cmd_collect_lowconf(archive, out),
         Cmd::PullScreenshots { out } => cmd_pull_screenshots(out),
+    };
+    rlit_cli::finish(result, classify_error);
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_matches_rlit_contract() {
+        let issues = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(issues.is_empty(), "contract issues: {issues:#?}");
     }
 }

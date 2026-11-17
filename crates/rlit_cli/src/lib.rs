@@ -1,6 +1,6 @@
 //! Shared machine-call contract for r_lit CLIs.
 //!
-//! Every short-running r_lit tool links this crate so AI agents and the
+//! Every r_lit CLI tool links this crate so AI agents and the
 //! titan-wall executor can call any of them the same way:
 //!
 //! * `--json` is global. With it, stdout carries **exactly one** JSON document

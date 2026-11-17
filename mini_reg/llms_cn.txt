@@ -14,7 +14,7 @@
 - 人工步骤: 应用类型、图标资质、类目、实名、协议、付费、提交
 - 确认来源: 人工登记应用编号；platform_verified=false
 - 中断: 写入前持久保存 needs_review；不重试最终注册
-- 输出: --json 标准输出单个结果；标准错误日志；每次覆盖同名 .log
+- 输出: 全局 --json 标准输出单个 envelope（`rlit_cli` 契约）；`__schema`；退出码 0-4；标准错误日志与 `rlit_cli::runlog` 边车 `.log`
 - 导出: 仅任务资料；不含浏览器绑定和登录资料
 - 验收状态: 尚未进行真实平台表单验收
 - 构建分发: 专用 Jenkins worker；沿用 r_lit 的 R2/HFrog 链路

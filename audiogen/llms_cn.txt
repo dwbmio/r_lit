@@ -3,6 +3,7 @@
 - 用途: 纯 Rust 游戏音频资产管线（程序化音效、MP3/WAV/FLAC 编解码、经 SSH/Redis 异步调度 MiniMax 音乐与语音）
 - 版本: 0.1.0
 - 二进制: audiogen（附校验辅助 bin: dry_run）
+- 契约: `rlit_cli`（全局 `--json` envelope、`audiogen __schema`、退出码 0-5）
 - 构建: cd audiogen && cargo build --release
 - 输入: JSON 任务清单（`--jobs jobs/<game>.json`）
 - 输出: `output_dir` 下的音频文件（mp3/wav/flac）及 `.pending.json` 状态文件

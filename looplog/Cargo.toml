@@ -12,6 +12,7 @@ default = []
 pure-rust-sqlite = []
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 clap = { version = "^4", features = ["derive"] }
 dirs = "5"
 humantime = "2"

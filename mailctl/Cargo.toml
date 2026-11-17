@@ -6,6 +6,7 @@ description = "Multi-account IMAP/SMTP dispatcher with guard rails (allowlist, c
 license = "MIT"
 
 [dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
 anyhow = "1"
 base64 = "0.22"
 encoding_rs = "0.8"

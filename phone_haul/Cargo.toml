@@ -3,6 +3,7 @@ name = "phone_haul"
 version = "0.1.0"
 edition = "2021"
 description = "Phone media migration: Android (adb + agent) and iOS (pure-Rust AFC), dedup-aware, time-ordered"
+default-run = "phone_haul"
 
 [lib]
 name = "phone_haul"
@@ -19,7 +20,7 @@ path = "src/agent/main.rs"
 
 [features]
 default = ["host"]
-host = ["dep:clap", "dep:redb", "dep:tokio", "dep:idevice", "dep:rusqlite", "dep:kamadak-exif", "dep:libc"]
+host = ["dep:clap", "dep:redb", "dep:tokio", "dep:idevice", "dep:rusqlite", "dep:kamadak-exif", "dep:libc", "dep:rlit_cli"]
 
 [dependencies]
 anyhow = "1"
@@ -27,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
 rayon = "1"
+rlit_cli = { path = "../crates/rlit_cli", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 redb = { version = "2", optional = true }
 

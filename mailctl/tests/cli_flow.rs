@@ -346,7 +346,9 @@ fn scan_json_and_folder_are_usable_by_bots() {
     );
     assert_eq!(code, 0, "scan --json failed: {err}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("输出应是合法 JSON");
-    let arr = v.as_array().expect("应是数组");
+    assert_eq!(v["contract"], 1);
+    assert_eq!(v["ok"], true);
+    let arr = v["data"].as_array().expect("data 应是数组");
     assert_eq!(arr.len(), 1, "应只命中 1 封: {out}");
     assert_eq!(arr[0]["message_id"], "<CASE-30000006887467@apple.com>");
     assert_eq!(arr[0]["folder"], "Sent Messages");
@@ -373,10 +375,12 @@ allow_recipients = ["corp.com"]
     let (code, out, err) = run(&cfg_path, &["accounts", "--json"]);
     assert_eq!(code, 0, "accounts --json failed: {err}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v[0]["name"], "work");
-    assert_eq!(v[0]["imap"], "imap.exmail.qq.com:993(tls)");
-    assert_eq!(v[0]["credential"], "keychain:mail-work");
-    assert_eq!(v[0]["default"], true);
+    assert_eq!(v["contract"], 1);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"][0]["name"], "work");
+    assert_eq!(v["data"][0]["imap"], "imap.exmail.qq.com:993(tls)");
+    assert_eq!(v["data"][0]["credential"], "keychain:mail-work");
+    assert_eq!(v["data"][0]["default"], true);
 }
 
 #[test]

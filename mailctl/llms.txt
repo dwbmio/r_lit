@@ -2,7 +2,7 @@
 
 - purpose: Multi-account IMAP/SMTP dispatcher with guard rails (allowlist, confirm-before-send, audit)
 - binary: mailctl (Rust, single file, rustls; no OpenSSL, no interpreter)
-- contract: `mailctl capabilities --json` emits the machine-readable capability manifest (same source as README)
+- contract: global `--json` (`rlit_cli` envelope) and `mailctl __schema`; `mailctl capabilities --json` emits the embedded capability manifest (same source as README)
 - config: one file per mailbox at ~/.config/hermes-mail/accounts/<account>.toml; filename = account name; *.toml active, *.toml.example ignored
 - credentials: macOS keychain via auth.keychain_service (never in config files)
 - isolation: address / credential ref / allow_recipients / sent_folder / signature are all per-account
@@ -40,7 +40,7 @@
 
 ## Exit codes
 
-- 0 ok | 1 runtime error (connect/auth/allowlist/identity) | 2 missing credential | 3 send refused without --yes
+- 0 ok | 1 runtime error (auth/allowlist/identity) | 2 usage error | 3 input error (`--yes` required on `send`, missing file) | 4 external error (IMAP/SMTP/TLS)
 
 ## Not implemented
 

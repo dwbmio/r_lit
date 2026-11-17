@@ -9,19 +9,61 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io};
 use std::path::PathBuf;
 
 use audiogen::jobs::JobsFile;
 use audiogen::pipeline;
-use audiogen::r2;
 use audiogen::ssh;
+
+/// Machine-call annotations for `__schema` (see `docs/cli-contract.md`).
+static CONTRACT: Contract = Contract {
+    tool: env!("CARGO_PKG_NAME"),
+    version: env!("CARGO_PKG_VERSION"),
+    commands: &[
+        CommandSpec::new("submit", Effects::External)
+            .io(&[("jobs", Io::InputFile), ("ssh_key", Io::InputFile)])
+            .env(&[
+                "AUDIOGEN_REDIS_URL",
+                "AUDIOGEN_REDIS_QUEUE",
+                "AUDIOGEN_REDIS_RESULT",
+                "AUDIOGEN_VPS",
+                "AUDIOGEN_SSH_KEY",
+            ]),
+        CommandSpec::new("collect", Effects::External)
+            .io(&[("jobs", Io::InputFile), ("ssh_key", Io::InputFile)])
+            .env(&[
+                "AUDIOGEN_REDIS_URL",
+                "AUDIOGEN_REDIS_QUEUE",
+                "AUDIOGEN_REDIS_RESULT",
+                "AUDIOGEN_VPS",
+                "AUDIOGEN_SSH_KEY",
+            ]),
+        CommandSpec::new("sfx", Effects::Pure).io(&[("jobs", Io::InputFile)]),
+        CommandSpec::new("install", Effects::LocalWrite).io(&[("jobs", Io::InputFile)]),
+        CommandSpec::new("release", Effects::External)
+            .io(&[("jobs", Io::InputFile), ("s3_file", Io::InputFile)])
+            .env(&[
+                "S3_BUCKET",
+                "S3_ACCESS_KEY",
+                "S3_SECRET_KEY",
+                "S3_ENDPOINT",
+                "S3_REGION",
+            ]),
+        CommandSpec::new("status", Effects::ReadOnly).io(&[("jobs", Io::InputFile)]),
+    ],
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "audiogen", version, about = "Pure-Rust game audio pipeline")]
 struct Cli {
+    /// Emit one JSON envelope on stdout; send human logs to stderr.
+    #[arg(long, global = true)]
+    json: bool,
+
     /// Path to jobs JSON file (e.g. jobs/classroom.json).
-    #[arg(short, long)]
-    jobs: PathBuf,
+    #[arg(short, long, global = true)]
+    jobs: Option<PathBuf>,
 
     /// Redis URL for direct LPUSH/BRPOP (preferred over SSH). Env: AUDIOGEN_REDIS_URL.
     #[arg(long, global = true, env = "AUDIOGEN_REDIS_URL")]
@@ -57,11 +99,13 @@ enum Cmd {
     },
     /// Collect results from VPS (BRPOP). Blocks up to --max-wait seconds.
     Collect {
+        /// Maximum wait time in seconds.
         #[arg(long, default_value_t = 600)]
         max_wait: u64,
     },
     /// Run procedural SFX jobs locally (no VPS).
     Sfx {
+        /// Comma-separated job names; default = all.
         #[arg(long)]
         only: Option<String>,
     },
@@ -93,10 +137,36 @@ enum Cmd {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let jf = JobsFile::load(&cli.jobs)
-        .with_context(|| format!("loading jobs: {}", cli.jobs.display()))?;
+async fn main() {
+    let cli: Cli = CONTRACT.parse();
+    let result = run(&cli).await;
+    rlit_cli::finish(result, classify_error);
+}
+
+fn classify_error(err: &anyhow::Error) -> ErrorKind {
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        return rlit_cli::io_error_kind(io);
+    }
+    if err.downcast_ref::<serde_json::Error>().is_some() {
+        return ErrorKind::Input;
+    }
+    let msg = err.to_string().to_lowercase();
+    if msg.contains("missing --jobs") {
+        return ErrorKind::Usage;
+    }
+    if msg.contains("ssh") || msg.contains("redis") || msg.contains("hfrog") || msg.contains("r2") {
+        return ErrorKind::External;
+    }
+    ErrorKind::Runtime
+}
+
+async fn run(cli: &Cli) -> Result<()> {
+    let jobs_path = cli
+        .jobs
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("missing --jobs <PATH>"))?;
+    let jf = JobsFile::load(jobs_path)
+        .with_context(|| format!("loading jobs: {}", jobs_path.display()))?;
 
     // Build connection — Redis preferred (no SSH required), SSH fallback.
     let redis = match &cli.redis_url {
@@ -116,38 +186,45 @@ async fn main() -> Result<()> {
         None
     };
 
-    match cli.cmd {
+    match &cli.cmd {
         Cmd::Submit { only } => {
             let only_vec = only.as_deref().map(split_csv);
             pipeline::submit(&jf, redis.as_ref(), ssh_conn.as_mut(), only_vec.as_deref()).await?;
+            rlit_cli::set_data(serde_json::json!({ "game": jf.game, "action": "submit" }));
         }
         Cmd::Collect { max_wait } => {
-            pipeline::collect(&jf, redis.as_ref(), ssh_conn.as_mut(), max_wait).await?;
+            pipeline::collect(&jf, redis.as_ref(), ssh_conn.as_mut(), *max_wait).await?;
+            rlit_cli::set_data(serde_json::json!({ "game": jf.game, "action": "collect" }));
         }
         Cmd::Sfx { only } => {
             let only_vec = only.as_deref().map(split_csv);
             pipeline::run_procedural(&jf, only_vec.as_deref())?;
+            rlit_cli::set_data(serde_json::json!({ "game": jf.game, "action": "sfx", "output_dir": jf.output_dir }));
         }
         Cmd::Install => {
             pipeline::install(&jf)?;
+            rlit_cli::set_data(serde_json::json!({ "game": jf.game, "action": "install", "install_dir": jf.install_dir }));
         }
         Cmd::Release { public_base, hfrog_base, s3_file, only, ver, skip_hfrog } => {
             let (bucket, ak, sk, endpoint, region) =
                 audiogen::r2::R2Client::load_env_or_file(s3_file.as_deref())?;
             let r2_client = audiogen::r2::R2Client::new(
-                &bucket, &region, &endpoint, &ak, &sk, &public_base,
+                &bucket, &region, &endpoint, &ak, &sk, public_base,
             )?;
-            let hf_client = if skip_hfrog { None } else { Some(audiogen::hfrog::HfrogClient::new(&hfrog_base)) };
-            cmd_release(&jf, &r2_client, hf_client.as_ref(), only.as_deref(), &ver).await?;
+            let hf_client = if *skip_hfrog { None } else { Some(audiogen::hfrog::HfrogClient::new(hfrog_base)) };
+            cmd_release(&jf, &r2_client, hf_client.as_ref(), only.as_deref(), ver).await?;
         }
         Cmd::Status => {
             let st = pipeline::load_pending(&std::path::PathBuf::from(&jf.output_dir), &jf.game)?;
-            println!("game: {}", st.game);
-            println!("last_submit_at: {:?}", st.last_submit_at);
-            println!("pending ({}):", st.jobs.len());
-            for (k, j) in &st.jobs {
-                println!("  {}  kind={:?}  format={}  submitted_at={}",
-                         k, j.kind, j.format, j.submitted_at);
+            rlit_cli::set_data(&st);
+            if !rlit_cli::json_mode() {
+                println!("game: {}", st.game);
+                println!("last_submit_at: {:?}", st.last_submit_at);
+                println!("pending ({}):", st.jobs.len());
+                for (k, j) in &st.jobs {
+                    println!("  {}  kind={:?}  format={}  submitted_at={}",
+                             k, j.kind, j.format, j.submitted_at);
+                }
             }
         }
     }
@@ -212,7 +289,9 @@ async fn cmd_release(
         };
         // R2 upload.
         let res = r2_client.upload_file(&p, &key, ct).await?;
-        println!("  ↑ {key}  ({res}B)  → {ct}", res = res.bytes);
+        if !rlit_cli::json_mode() {
+            println!("  ↑ {key}  ({res}B)  → {ct}", res = res.bytes);
+        }
         uploaded += 1;
         // HFrog registration.
         if let Some(hf) = hf_client {
@@ -222,10 +301,32 @@ async fn cmd_release(
             hf.register_file(
                 &runtime, stem, ver, &key, res.bytes, &md5, &desc,
             ).await.with_context(|| format!("register {key}"))?;
-            println!("     ✓ HFrog: pid=? name={stem} runtime={runtime}");
+            if !rlit_cli::json_mode() {
+                println!("     ✓ HFrog: pid=? name={stem} runtime={runtime}");
+            }
             registered += 1;
         }
     }
-    println!("== uploaded {uploaded} files to R2, registered {registered} in HFrog ==");
+    rlit_cli::set_data(serde_json::json!({
+        "game": jf.game,
+        "action": "release",
+        "uploaded": uploaded,
+        "registered": registered,
+    }));
+    if !rlit_cli::json_mode() {
+        println!("== uploaded {uploaded} files to R2, registered {registered} in HFrog ==");
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_matches_rlit_contract() {
+        let issues = rlit_cli::check_contract(&CONTRACT, &Cli::command());
+        assert!(issues.is_empty(), "contract issues: {issues:#?}");
+    }
 }

@@ -24,6 +24,7 @@ static LOGGER: OnceLock<&'static DualLogger> = OnceLock::new();
 struct DualLogger {
     buffer: Mutex<Vec<String>>,
     console_level: Level,
+    always_stderr: bool,
 }
 
 impl Log for DualLogger {
@@ -44,7 +45,7 @@ impl Log for DualLogger {
         }
 
         if record.level() <= self.console_level {
-            if crate::json_mode() {
+            if self.always_stderr || crate::json_mode() {
                 eprintln!("{}", line);
             } else {
                 println!("{}", line);
@@ -57,6 +58,17 @@ impl Log for DualLogger {
 
 /// Install the dual logger. Idempotent — extra calls are no-ops.
 pub fn init() {
+    init_with(false);
+}
+
+/// Install the dual logger with console output always routed to stderr
+/// (useful for tools that reserve stdout for machine-readable output even
+/// without `--json`).
+pub fn init_stderr() {
+    init_with(true);
+}
+
+fn init_with(always_stderr: bool) {
     if LOGGER.get().is_some() {
         return;
     }
@@ -70,6 +82,7 @@ pub fn init() {
     let logger: &'static DualLogger = Box::leak(Box::new(DualLogger {
         buffer: Mutex::new(Vec::new()),
         console_level,
+        always_stderr,
     }));
 
     let _ = LOGGER.set(logger);

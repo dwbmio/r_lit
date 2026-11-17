@@ -114,10 +114,10 @@ The `needs_review` checkpoint is committed before a browser write; after an erro
 or crash, inspect the page before explicitly running `fill --apply` again.
 No final registration request is automatically retried.
 
-`--json` produces one stdout envelope. Logs go to stderr and a replaced per-run
-sidecar: `<database-stem>.log`, or `<output-stem>.log` for init/export. CLI arguments
-and browser payloads are not logged. A failed command exits with status 1 and
-still flushes its error log. Manifest/export files refuse overwrite. Treat the
+`--json` is global (`rlit_cli` contract): stdout emits one JSON envelope and logs go to stderr plus a replaced per-run
+sidecar via `rlit_cli::runlog` (`<database-stem>.log`, or `<output-stem>.log` for init/export). CLI arguments
+and browser payloads are not logged. Failures follow `rlit_cli` exit codes (`1` runtime, `2` usage, `3` input, `4` external) and
+still flush their error log. Run `mini_reg __schema` for the JSON Schema contract. Manifest/export files refuse overwrite. Treat the
 database and exports as internal company metadata. Do not place secrets in them.
 
 Backup or move a database with SQLite's backup API, or after all mini_reg processes

@@ -81,7 +81,7 @@ def check_cargo_excludes(errors: list[str]) -> None:
 
 
 def check_no_duplicate_runlog(errors: list[str]) -> None:
-    for crate in ("mj_atlas", "bulk_upload", "img_resize", "textexture"):
+    for crate in ("mj_atlas", "bulk_upload", "img_resize", "textexture", "mini_reg"):
         dup = ROOT / crate / "src" / "runlog.rs"
         if dup.exists():
             errors.append(f"duplicate {crate}/src/runlog.rs should use rlit_cli::runlog")
