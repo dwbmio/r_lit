@@ -71,6 +71,3 @@ r_lit 二进制分发已从 Nexus（`nexus.gamesci-lite.com`）迁到 Cloudflare
 https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
 https://r2.gamesci-lite.com/r_lit/<tool>/v<ver>/<tool>-<target>.tar.gz   # Windows: .zip
 ```
-
-ci-all-in-one 内残留 Nexus 引用的扫描见
-[`docs/nexus-deprecation-audit.md`](nexus-deprecation-audit.md)。

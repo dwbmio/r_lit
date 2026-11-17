@@ -3,7 +3,7 @@
 //! ## Why this lives in the headless core
 //!
 //! Texture synthesis must obey the Headless Invariant
-//! (see `docs/handoff/COST_AWARENESS.md`): the GUI is a presentation
+//! (see `docs/COST_AWARENESS.md`): the GUI is a presentation
 //! layer over a window-free core. Concretely that means:
 //!
 //! * the `TextureProvider` trait is sync, so a CLI can call it

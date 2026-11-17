@@ -2,7 +2,7 @@
 //!
 //! ## What ships in the file
 //!
-//! Per the **Export Golden Rule** in `docs/handoff/COST_AWARENESS.md`,
+//! Per the **Export Golden Rule** in `docs/COST_AWARENESS.md`,
 //! exports contain only what every engine understands without help:
 //!
 //! * **Body** — one glTF mesh with one primitive per palette color that

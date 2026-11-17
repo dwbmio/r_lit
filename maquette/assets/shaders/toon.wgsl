@@ -17,7 +17,7 @@
 //
 // This shader runs ONLY in the preview. Exports never reference it —
 // the Export Golden Rule says geometry + vertex color + standard material
-// only (see docs/handoff/COST_AWARENESS.md).
+// only (see docs/COST_AWARENESS.md).
 
 #import bevy_pbr::forward_io::VertexOutput
 

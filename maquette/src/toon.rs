@@ -17,7 +17,7 @@
 //!   this mode) so the texture is the dominant signal.
 //!
 //! **This material is preview-only.** Per the Export Golden Rule
-//! (`docs/handoff/COST_AWARENESS.md`), exports never reference this
+//! (`docs/COST_AWARENESS.md`), exports never reference this
 //! material — they ship geometry + vertex color + a standard/unlit
 //! material, and the toon look is either (a) reproduced by the target
 //! engine's own toon shader, or (b) faked with a baked inverted-hull

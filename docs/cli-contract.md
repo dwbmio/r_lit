@@ -1,6 +1,6 @@
 # r_lit CLI 机器调用契约 (contract v1)
 
-r_lit 下所有短时 CLI 对 AI / 执行器（titan-wall、CI、脚本）的调用约定。
+r_lit 下所有 CLI binary 对 AI / 执行器（titan-wall、CI、脚本）的统一调用约定。
 实现在 `crates/rlit_cli`，各工具以 path 依赖接入：
 
 ```toml

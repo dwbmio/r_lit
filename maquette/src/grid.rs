@@ -22,7 +22,7 @@ pub const CELL_SIZE: f32 = 1.0;
 
 /// Maximum column height a single cell may hold.
 /// This cap is a **product decision, not a technical one** — see
-/// `docs/handoff/COST_AWARENESS.md` §Post-v1.0 Possible Product Line Split.
+/// `docs/COST_AWARENESS.md` §Post-v1.0 Possible Product Line Split.
 /// Do NOT raise this past 8 before v1.0; if users keep hitting it, the
 /// correct response is to discuss a Maquette Figure fork, not a cap bump.
 pub const MAX_HEIGHT: u8 = 8;

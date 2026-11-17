@@ -43,7 +43,6 @@ STALE_PATTERNS = (
 # Historical audit/migration docs that intentionally mention deprecated URLs.
 STALE_EXEMPT = {
     "docs/release.md",
-    "docs/nexus-deprecation-audit.md",
 }
 
 

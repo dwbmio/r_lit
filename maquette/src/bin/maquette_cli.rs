@@ -6,7 +6,7 @@
 //! operation is parameterised on the command line so it can be
 //! invoked from `make`, a CI runner, or a game-project build hook.
 //!
-//! See `docs/handoff/COST_AWARENESS.md` §The Headless Invariant for
+//! See `docs/COST_AWARENESS.md` §The Headless Invariant for
 //! the rationale behind this binary's existence.
 //!
 //! ### Exit codes

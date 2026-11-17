@@ -1,6 +1,6 @@
 # R_LIT
 
-A collection of independent, **short-running** Rust CLI tools and companion desktop utilities. Each subdirectory is a standalone Cargo crate (with root `Cargo.toml` exposing `deskpet` only). Short-running CLIs are built to run, do their job, and exit.
+A collection of independent Rust CLI tools and companion desktop utilities maintained for medium- and long-term evolution. Each subdirectory is a standalone Cargo crate (with root `Cargo.toml` exposing `deskpet` only), and CLI binaries converge on the shared [`crates/rlit_cli`](crates/rlit_cli/) contract (`--json`, `__schema`, exit codes, `runlog`).
 
 [![CI](https://github.com/dwbmio/r_lit/workflows/CI/badge.svg)](https://github.com/dwbmio/r_lit/actions)
 

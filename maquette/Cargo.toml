@@ -8,7 +8,7 @@ repository = "https://github.com/nicholasgasior/r_lit"
 default-run = "maquette"
 
 # Layout: `lib.rs` holds the headless core (Headless Invariant —
-# see docs/handoff/COST_AWARENESS.md). The GUI binary (`maquette`)
+# see docs/COST_AWARENESS.md). The GUI binary (`maquette`)
 # depends on the lib plus egui/panorbit/etc; the CLI binary
 # (`maquette-cli`) depends on the lib only.
 

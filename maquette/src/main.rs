@@ -2,7 +2,7 @@
 //!
 //! All the headless logic (grid data, meshing, project I/O, export)
 //! lives in the `maquette` lib and is shared with `maquette-cli`.
-//! See `docs/handoff/COST_AWARENESS.md` §The Headless Invariant for
+//! See `docs/COST_AWARENESS.md` §The Headless Invariant for
 //! why this split exists.
 
 mod autosave;

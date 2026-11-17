@@ -1,7 +1,7 @@
 # R_LIT
 
-- 用途: Rust 独立短时运行 CLI 工具、配套桌面工具与共享库集合仓库
-- 定位: 以短时运行的 CLI 工具为主；GUI/桌面工具（`deskpet`、`maquette`、`group_vibe_workbench`、`mpreview`）另作标注
+- 用途: 面向中长期建设的 Rust 独立 CLI 工具、配套桌面工具与共享库集合仓库
+- 定位: 所有 CLI binary 统一对齐 `crates/rlit_cli`（`--json`、`__schema`、退出码、`runlog`）；桌面/GUI 工具（`deskpet`、`maquette`、`group_vibe_workbench`、`mpreview`）同仓维护
 - 仓库: https://github.com/dwbmio/r_lit
 - 安装通道: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
 - 制品中心: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>

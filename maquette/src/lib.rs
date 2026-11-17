@@ -6,7 +6,7 @@
 //! lib only; the GUI binary (`maquette`) links against this lib *plus*
 //! the windowing stack defined in `src/main.rs`.
 //!
-//! See `docs/handoff/COST_AWARENESS.md` §The Headless Invariant for
+//! See `docs/COST_AWARENESS.md` §The Headless Invariant for
 //! the rules that govern what belongs here vs. in the GUI binary.
 //!
 //! ## Module map

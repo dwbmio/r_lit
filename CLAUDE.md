@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-R_LIT 是一个 Rust **短时运行 CLI 工具**集合仓库。每个子目录是**独立的 Cargo crate**（无根 `Cargo.toml` workspace），有各自的依赖和发布周期。本仓库仅存放"运行、完成、退出"型工具，不存放长时运行的服务或守护进程。
+R_LIT 是一个中长期演进的 Rust CLI 工具与桌面工程集合仓库。每个子目录是**独立的 Cargo crate**（根 `Cargo.toml` 仅用于嵌入 `deskpet`），有各自的依赖和发布周期。所有 CLI binary 统一遵循 `crates/rlit_cli` 机器调用契约与 `docs/` 公共规范。
 
 | 目录 | 说明 |
 |------|------|
@@ -46,7 +46,7 @@ just install_loc <tool> release
 
 ## Documentation Standards
 
-遵循 `ci-all-in-one/_ai/rules/doc-organization.md` 双语文档规范。每个子工具/库目录必须包含：
+遵循 [`docs/doc-standard.md`](docs/doc-standard.md)（及 `ci-all-in-one/_ai/rules/doc-organization.md`）双语文档规范。每个子工具/库目录必须包含：
 
 | 文件 | 语言 | 受众 | 说明 |
 |------|------|------|------|
@@ -55,21 +55,19 @@ just install_loc <tool> release
 | `llms.txt` | English | AI/LLM | 结构化 key-value，纯事实性信息 |
 | `llms_cn.txt` | 中文 | AI/LLM | 与英文版对应 |
 
-详细规范见: `/Users/admin/data0/private_work/ci-all-in-one/_ai/rules/doc-organization.md`
-
 ## Shared Patterns
 
 - **错误处理:** 各 crate 在 `error.rs` 中用 `thiserror` 定义错误枚举 + `Result<T>` 别名。禁止 `unwrap()`，用 `?`。
 - **CLI:** `clap` derive 宏 + `--json` 全局标志 + 子命令架构 + 中英双语帮助。
-- **机器调用契约:** 短时 CLI 统一接入 `crates/rlit_cli`（统一 JSON envelope、退出码 0-5、`artifacts` 回执、隐藏 `__schema` 子命令导出 JSON Schema）。规范与新工具接入清单见 `docs/cli-contract.md`。已接入: mj_atlas / img_resize / ui-trim / textexture / bulk_upload。
+- **机器调用契约:** 所有 CLI binary 统一接入 `crates/rlit_cli`（统一 JSON envelope、退出码 0-5、`artifacts` 回执、隐藏 `__schema` 子命令导出 JSON Schema）。规范与接入清单见 `docs/cli-contract.md`。已接入: `mj_atlas` / `img_resize` / `ui-trim` / `textexture` / `bulk_upload`；待对齐: `audiogen` / `looplog` / `mailctl` / `maquette-cli` / `mini_reg` / `phone_haul`。
 - **根 `Cargo.toml`:** 只为 deskpet 存在；其他 crate 必须列在 `workspace.exclude`，否则在子目录里 `cargo build` 会报 "believes it's in a workspace"。
 - **日志:** `log` crate；直接复用 `rlit_cli::runlog`（INFO+ 打控制台、`--json` 下切到 stderr、全级别进内存 buffer，运行结束 flush 到 `<output>.log` 边车文件，RFC3339 时间戳）。
 - **Release profile:** `lto = true, panic = "abort", strip = true, opt-level = "z"`
 
 ## Troubleshooting / 排查问题
 
-报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `_ai/troubleshooting.md`。
-短时 CLI 工具统一通过 `rlit_cli::runlog` 落盘 `<output>.log`（已接入: `mj_atlas` / `bulk_upload` / `img_resize` / `textexture`）。
+报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `docs/troubleshooting.md`。
+所有 CLI 工具统一通过 `rlit_cli::runlog` 落盘 `<output>.log`（已接入: `mj_atlas` / `bulk_upload` / `img_resize` / `textexture`）。
 
 ## AI Debug Loop Context
 

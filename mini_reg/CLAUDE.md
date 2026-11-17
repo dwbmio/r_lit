@@ -1,7 +1,7 @@
 # mini_reg
 
 Independent, short-running r_lit Rust CLI. Read README.md/README_CN.md before edits.
-The parent r_lit CLAUDE.md and `_ai/sub-tool-docs.md` apply.
+The parent r_lit CLAUDE.md and `docs/doc-standard.md` apply.
 
 - Keep persistent state in embedded SQLite, not session memory or a daemon.
 - Keep all transport and orchestration in Rust; bundle any CDP form payload.

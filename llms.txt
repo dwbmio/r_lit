@@ -1,7 +1,7 @@
 # R_LIT
 
-- purpose: Collection of independent, short-running Rust CLI tools, companion desktop tools, and shared crates
-- scope: Short-running CLI tools as primary focus; GUI/desktop tools (`deskpet`, `maquette`, `group_vibe_workbench`, `mpreview`) explicitly noted
+- purpose: Collection of independent Rust CLI tools, companion desktop tools, and shared crates built for medium- and long-term maintenance
+- scope: All CLI binaries standardize on `crates/rlit_cli` (`--json`, `__schema`, exit codes, `runlog`); desktop/GUI tools (`deskpet`, `maquette`, `group_vibe_workbench`, `mpreview`) coexist in the same repo
 - repository: https://github.com/dwbmio/r_lit
 - install_base: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
 - release_tracker: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>

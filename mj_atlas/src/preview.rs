@@ -1347,7 +1347,7 @@ impl MJAtlasApp {
                         // the upload hangs/fails the user's data is safe.
                         // The toast above already confirmed local success;
                         // we don't add a second toast on mirror failure (the
-                        // runlog captures details for `_ai/troubleshooting`).
+                        // runlog captures details for `docs/troubleshooting.md`).
                         let cfg = self.config.clone();
                         if cfg.hfrog.is_active() {
                             let project_name = path

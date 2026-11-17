@@ -1,6 +1,6 @@
 # R_LIT
 
-Rust 独立**短时运行** CLI 工具与配套桌面工程集合仓库。每个子目录是独立的 Cargo crate（根 `Cargo.toml` 仅作为 `deskpet` 嵌入清单存在）。短时 CLI 专为"运行、完成、退出"型任务设计。
+面向中长期演进的 Rust 独立 CLI 工具与配套桌面工程集合仓库。每个子目录是独立的 Cargo crate（根 `Cargo.toml` 仅作为 `deskpet` 嵌入清单存在），所有 CLI binary 统一向共享底座 [`crates/rlit_cli`](crates/rlit_cli/)（`--json`、`__schema`、退出码、`runlog`）对齐。
 
 [![CI](https://github.com/dwbmio/r_lit/workflows/CI/badge.svg)](https://github.com/dwbmio/r_lit/actions)
 

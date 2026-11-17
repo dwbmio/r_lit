@@ -29,7 +29,6 @@
 !CLAUDE.md
 !docs/**/*.md
 !**/docs/**/*.md
-!_ai/**/*.md
 
 # Runtime data / local backups
 **/workbench_data_*/
