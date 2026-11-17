@@ -142,7 +142,7 @@ jobs:
             libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
 
       - name: Check deskpet
-        run: cargo check -p deskpet --features os-notify
+        run: cargo check -p deskpet
 
       - name: Check mj_atlas (gui feature)
         working-directory: mj_atlas

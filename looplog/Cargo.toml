@@ -1,7 +1,7 @@
 [package]
 name = "looplog"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Local-first log intake and query CLI for AI-assisted debugging"
 
 # 独立 crate：仓库根 Cargo.toml 的 workspace 只含 deskpet，这里显式声明自己的 workspace

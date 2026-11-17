@@ -1,7 +1,7 @@
 [package]
 name = "rlit_cli"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["R_LIT Contributors"]
 description = "Shared machine-call contract for r_lit CLIs: JSON envelope, exit codes, artifacts and `__schema` export"
 license = "MIT OR Apache-2.0"

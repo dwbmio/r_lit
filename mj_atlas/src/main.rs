@@ -875,9 +875,10 @@ mod contract_tests {
     #[test]
     fn no_mirror_env_accepts_boolish_values() {
         for (val, want) in [("1", true), ("yes", true), ("true", true), ("0", false), ("off", false)] {
-            std::env::set_var("MJ_ATLAS_NO_MIRROR", val);
+            // SAFETY: this test is the sole env mutator for `MJ_ATLAS_NO_MIRROR`.
+            unsafe { std::env::set_var("MJ_ATLAS_NO_MIRROR", val) };
             let cli = Cli::try_parse_from(["mj_atlas", "pack", "in"]).expect(val);
-            std::env::remove_var("MJ_ATLAS_NO_MIRROR");
+            unsafe { std::env::remove_var("MJ_ATLAS_NO_MIRROR") };
             match cli.command {
                 Commands::Pack { no_mirror, .. } => assert_eq!(no_mirror, want, "{}", val),
                 _ => unreachable!(),

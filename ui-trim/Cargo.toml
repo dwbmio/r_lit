@@ -1,7 +1,7 @@
 [package]
 name = "ui-trim"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 description = "Trim pseudo-transparent UI asset backgrounds into tight PNGs"
 
 [dependencies]

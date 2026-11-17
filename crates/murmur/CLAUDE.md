@@ -7,7 +7,7 @@ This file provides guidance to Claude Code when working with the Murmur codebase
 Murmur is a distributed P2P collaboration library written in Rust. It enables applications to sync data across devices without central servers, using CRDT for conflict-free synchronization and iroh-net for P2P networking.
 
 **Version**: 0.1.0
-**Language**: Rust 2021 edition
+**Language**: Rust 2024 edition
 **License**: MIT OR Apache-2.0
 
 ## Architecture

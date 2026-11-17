@@ -2,7 +2,7 @@
 
 - purpose: P2P collaboration library with CRDT sync, leader election, and versioned file ops
 - version: 0.2.0
-- language: Rust (edition 2021)
+- language: Rust (edition 2024)
 - type: library (not a CLI binary)
 - transport: iroh-net (QUIC + NAT traversal)
 - sync-protocol: Automerge incremental sync (bloom-filter diff exchange)

@@ -1,7 +1,7 @@
 [package]
 name = "audiogen"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Pure-Rust game audio pipeline. Multi-format codec trait (encode-only in v1), MiniMax async submit/collect via SSH, procedural SFX synthesis."
 license = "MIT OR Apache-2.0"
 default-run = "audiogen"
@@ -29,7 +29,7 @@ serde_json = "1"
 
 # Errors
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 
 # Audio — MP3 encode + multi-format decode (mp3/ogg/wav/flac/aac via symphonia)
 shine-rs = "0.1"

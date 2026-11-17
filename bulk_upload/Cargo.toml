@@ -1,7 +1,7 @@
 [package]
 name = "bulk_upload"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 rlit_cli = { path = "../crates/rlit_cli" }

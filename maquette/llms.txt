@@ -2,7 +2,7 @@
 
 - purpose: Kit-based low-poly 3D asset forge with dual GUI (`maquette`) and headless CLI (`maquette-cli`) frontends sharing a window-free core library
 - version: 0.1.1
-- language: Rust (edition 2021)
+- language: Rust (edition 2024)
 - binaries: `maquette` (requires `gui` feature, default), `maquette-cli` (no GUI deps required)
 - features: `default = ["gui"]`, `gui` (enables `bevy_egui`, `bevy_panorbit_camera`, `bevy_infinite_grid`, `bevy_mod_outline`, `rfd`)
 - engine: bevy 0.18, bevy_egui 0.39, bevy_panorbit_camera 0.34, bevy_infinite_grid 0.18, bevy_mod_outline 0.12

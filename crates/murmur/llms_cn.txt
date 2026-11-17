@@ -2,7 +2,7 @@
 
 - 用途: P2P 协作库，支持 CRDT 同步、领导选举、版本化文件操作
 - 版本: 0.2.0
-- 语言: Rust (edition 2021)
+- 语言: Rust (edition 2024)
 - 类型: 库（非 CLI 二进制）
 - 传输: iroh-net (QUIC + NAT 穿透)
 - 同步协议: Automerge 增量同步（bloom-filter 差异交换）

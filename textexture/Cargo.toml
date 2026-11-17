@@ -1,7 +1,7 @@
 [package]
 name = "textexture"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 description = "Generate stylized text images with visual effects (shadow, outline, gradient, glow, neon)"
 license = "MIT"
 repository = "https://github.com/nicholasgasior/r_lit"

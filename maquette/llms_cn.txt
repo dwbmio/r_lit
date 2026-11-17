@@ -2,7 +2,7 @@
 
 - 用途: 积木式 low-poly 3D 资产建模工具，提供桌面 GUI（`maquette`）与无头 CLI（`maquette-cli`），共用无窗口核心库
 - 版本: 0.1.1
-- 语言: Rust (edition 2021)
+- 语言: Rust (edition 2024)
 - 二进制: `maquette`（需 `gui` feature，默认开启）、`maquette-cli`（不依赖 GUI crate）
 - features: `default = ["gui"]`、`gui`（启用 `bevy_egui`、`bevy_panorbit_camera`、`bevy_infinite_grid`、`bevy_mod_outline`、`rfd`）
 - 引擎与界面: bevy 0.18、bevy_egui 0.39、bevy_panorbit_camera 0.34、bevy_infinite_grid 0.18、bevy_mod_outline 0.12
