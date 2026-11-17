@@ -1,0 +1,23 @@
+# audiogen
+
+- purpose: Pure-Rust game audio asset pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax music/voice jobs over SSH/Redis)
+- version: 0.1.0
+- binary: audiogen (plus helper binary dry_run)
+- build: cd audiogen && cargo build --release
+- input: JSON job manifest (`--jobs jobs/<game>.json`)
+- output: encoded audio files in `output_dir` (mp3/wav/flac) + pending state `.pending.json`
+
+## Commands
+
+- `audiogen --jobs <file> status` — list jobs and completion state
+- `audiogen --jobs <file> sfx [--only a,b]` — synthesize procedural SFX offline
+- `audiogen --jobs <file> submit [--only a,b]` — enqueue AI music/voice jobs via SSH (`AUDIOGEN_VPS`, `AUDIOGEN_SSH_KEY`)
+- `audiogen --jobs <file> collect [--max-wait 600]` — wait and decode queued AI results
+- `audiogen --jobs <file> install` — copy `output_dir` assets to `install_dir`
+- `cargo run --bin dry_run -- <file>` — validate manifest and print request envelopes
+
+## Codecs & Dependencies
+
+- encode: mp3 (`shine-rs`), wav (native), flac (`flacenc`)
+- decode: mp3/flac/ogg/aac (`symphonia`), wav (native)
+- transport: `russh` + `russh-keys` (pure Rust SSH, no system ssh binary required)

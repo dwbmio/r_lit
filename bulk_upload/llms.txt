@@ -105,10 +105,8 @@ cargo build --release
 
 ## Links
 
-- Tool page: https://snappywatt.com/tools/bulk-upload
 - Install script: https://r2.gamesci-lite.com/r_lit/bulk_upload/install.sh
 - Release tracker: https://hfrog.gamesci-lite.com/api/release/softwares/bulk_upload
-- GitHub Releases: https://github.com/dwbmio/r_lit/releases?q=bulk_upload-
 - Repository: https://github.com/dwbmio/r_lit/tree/main/bulk_upload
 - For humans: see README.md in the same directory
 

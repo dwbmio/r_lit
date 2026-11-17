@@ -1,26 +1,30 @@
 # R_LIT
 
-- 用途: Rust 独立短时运行 CLI 工具与库的集合仓库，无根 Cargo workspace
-- 定位: 仅存放短时运行的 CLI 工具，不存放长时运行的服务或守护进程
-- 主站: https://www.snappywatt.com/
-- 预编译包: 托管于 https://www.snappywatt.com/
+- 用途: Rust 独立短时运行 CLI 工具、配套桌面工具与共享库集合仓库
+- 定位: 以短时运行的 CLI 工具为主；GUI/桌面工具（`deskpet`、`maquette`、`group_vibe_workbench`、`mpreview`）另作标注
 - 仓库: https://github.com/dwbmio/r_lit
+- 安装通道: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
+- 制品中心: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>
 
 ## 目录
 
+- audiogen/ — 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务）
 - bulk_upload/ — 从 JSON 批量提取 URL 并上传至 S3 兼容存储
-- mini_reg/ — Rust 原生小程序注册辅助；批次与断点持久保存；核实企业浏览器；人工确认
+- deskpet/ — 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻）
+- gamereel/ — 把游戏协议回放渲染成短视频（Cargo workspace；CUDA + FFmpeg）
+- group_vibe_workbench/ — 桌面协作工作台 (GPUI + Murmur P2P)
 - img_resize/ — 图片缩放与压缩
-- mailctl/ — 多邮箱 IMAP/SMTP 分发器（按邮箱身份收发、白名单、发前确认、审计；`mailctl capabilities --json` 输出能力清单）
-- ui-trim/ — 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG
-- textexture/ — 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹）
-- mj_atlas/ — 精灵图集 / 打包工具，支持增量构建
-- looplog/ — 本地日志摄入 / 查询工具，服务 AI 辅助联调（微信小程序 MVP；指南: looplog/WECHAT_AI_DEBUG_CN.md）
+- looplog/ — 本地日志摄入 / 查询工具，服务 AI 辅助联调（指南: looplog/WECHAT_AI_DEBUG_CN.md）
+- mailctl/ — 多邮箱 IMAP/SMTP 分发器（按邮箱身份收发、白名单、发前确认、审计；`mailctl capabilities --json`）
 - maquette/ — Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI）
-- group_vibe_workbench/ — 桌面协作工作台 (GPUI + P2P)
-- deskpet/ — 无边框透明置顶 3D 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻）
-- video-generator/ — 视频工具集
+- mini_reg/ — Rust 原生小程序注册辅助；批次与断点持久保存；核实企业浏览器；人工确认
+- mj_atlas/ — 精灵图集 / 打包工具，支持增量构建与多边形 mesh
+- mpreview/ — Godot 模型预览与多角度相机截图工具
+- phone_haul/ — 手机媒体迁移（Android adb+agent 与 iOS AFC/Photos.sqlite，BLAKE3 排重，`yyyy/MM` 归档）
+- textexture/ — 艺术字图片生成（阴影 / 描边 / 渐变 / 发光 / 霓虹）
+- ui-trim/ — 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG
 - crates/murmur/ — P2P 协作库 (iroh-net + Automerge CRDT)
+- crates/rlit_cli/ — 共享 CLI 机器调用契约（`--json` envelope、`__schema`、退出码、`runlog`）
 
 ## 机器调用契约
 
@@ -29,12 +33,16 @@
 - JSON: `--json` → stdout 只输出一个 envelope {contract, ok, tool, version, command, data, artifacts, error}
 - 退出码: 0 成功, 1 运行时, 2 参数, 3 输入, 4 外部服务, 5 部分失败
 - schema: `<工具> __schema` → 每个子命令的 JSON Schema + x-cli / x-effects / x-env / x-stdin
+- runlog: `rlit_cli::runlog` 提供双 sink 缓冲日志并落盘到 `<output>.log`
 
 ## 构建
 
 ```bash
 cd <tool_dir> && cargo build --release
 ```
+
+- binary 目录约定: target/ 可删除；保留的本地可执行文件放 <tool>/out/<target-triple>/<binary>；正式制品由 Jenkins 发布到 R2/HFrog
+- 仓库校验: `python3 scripts/check_repo.py` 或 `just check`
 
 ## AI 调试循环上下文
 

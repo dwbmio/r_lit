@@ -1,6 +1,6 @@
 # mj_atlas
 
-[中文文档 / Chinese →](README_CN.md)
+[Chinese →](README_CN.md)
 
 **mj_atlas** is a fast, single-binary texture-atlas packer with an opinionated workflow for game engines. It takes a directory of sprite images and produces a packed atlas PNG plus the metadata sidecar your engine can consume directly — TexturePacker-compatible JSON, Godot 4 native `.tres` resources, or whatever else you wire up next.
 

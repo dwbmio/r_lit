@@ -8,18 +8,23 @@ R_LIT 是一个 Rust **短时运行 CLI 工具**集合仓库。每个子目录�
 
 | 目录 | 说明 |
 |------|------|
+| `audiogen/` | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | `bulk_upload/` | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
-| `mini_reg/` | 自家小程序半自动注册辅助；企业 Chrome、SQLite 续办、原生 HTTP/WebSocket |
-| `img_resize/` | 图片缩放与压缩 |
-| `mailctl/` | 多邮箱 IMAP/SMTP 分发器：按邮箱身份收发、白名单、发前确认、审计 |
-| `ui-trim/` | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
-| `textexture/` | 艺术字图片生成（阴影/描边/渐变/发光/霓虹） |
-| `mj_atlas/` | 精灵图集 / 打包工具，支持增量构建 |
-| `maquette/` | Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI） |
-| `group_vibe_workbench/` | 桌面协作工作台 (GPUI + Murmur P2P) |
-| `deskpet/` | 无边框透明置顶 3D 桌面宠物（Bevy + bevy_egui + 系统托盘 / macOS 菜单栏常驻；GUI，非短时 CLI） |
+| `deskpet/` | 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / macOS 菜单栏常驻；GUI，非短时 CLI） |
 | `gamereel/` | 把游戏协议回放渲染成短视频（cargo workspace；CUDA + ffmpeg + 多游戏协议插件） |
+| `group_vibe_workbench/` | 桌面协作工作台 (GPUI + Murmur P2P) |
+| `img_resize/` | 图片缩放与压缩 |
+| `looplog/` | 本地日志摄入 / 查询工具（SQLite 24h 保留 + HTTP 接入 + CLI JSON 查询 + Web View） |
+| `mailctl/` | 多邮箱 IMAP/SMTP 分发器：按邮箱身份收发、白名单、发前确认、审计 |
+| `maquette/` | Kit 风格 low-poly 建模 + glTF 导出（GUI + headless CLI） |
+| `mini_reg/` | 自家小程序半自动注册辅助；企业 Chrome、SQLite 续办、原生 HTTP/WebSocket |
+| `mj_atlas/` | 精灵图集 / 打包工具，支持增量构建与多边形 mesh |
+| `mpreview/` | Godot 模型预览与多角度相机截图工具 |
+| `phone_haul/` | 手机照片/视频迁移：Android（adb + 设备端 agent）与 iOS（AFC / Photos.sqlite）双栈；并行流 + 魔数判型 + 两级 BLAKE3 排重 + 按时间归档 |
+| `textexture/` | 艺术字图片生成（阴影/描边/渐变/发光/霓虹） |
+| `ui-trim/` | 清理 AI 生成 UI 素材的伪透明背景并裁成 tight PNG |
 | `crates/murmur/` | P2P 协作库 |
+| `crates/rlit_cli/` | 共享 CLI 机器调用契约（JSON envelope、`__schema`、退出码、`runlog` 双 sink 日志） |
 
 各工具的架构、用法、API 等详细文档见对应子目录内的 README / docs。
 
@@ -58,13 +63,13 @@ just install_loc <tool> release
 - **CLI:** `clap` derive 宏 + `--json` 全局标志 + 子命令架构 + 中英双语帮助。
 - **机器调用契约:** 短时 CLI 统一接入 `crates/rlit_cli`（统一 JSON envelope、退出码 0-5、`artifacts` 回执、隐藏 `__schema` 子命令导出 JSON Schema）。规范与新工具接入清单见 `docs/cli-contract.md`。已接入: mj_atlas / img_resize / ui-trim / textexture / bulk_upload。
 - **根 `Cargo.toml`:** 只为 deskpet 存在；其他 crate 必须列在 `workspace.exclude`，否则在子目录里 `cargo build` 会报 "believes it's in a workspace"。
-- **日志:** `log` crate；推荐自定义 `Log` 实现把 INFO+ 转 stdout、全级别捕获到内存 buffer，运行结束 flush 到 `<output>.log` 边车文件（参考实现 `mj_atlas/src/runlog.rs`，依赖 `log` + `humantime`）。RFC3339 时间戳。
+- **日志:** `log` crate；直接复用 `rlit_cli::runlog`（INFO+ 打控制台、`--json` 下切到 stderr、全级别进内存 buffer，运行结束 flush 到 `<output>.log` 边车文件，RFC3339 时间戳）。
 - **Release profile:** `lto = true, panic = "abort", strip = true, opt-level = "z"`
 
 ## Troubleshooting / 排查问题
 
 报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `_ai/troubleshooting.md`。
-mj_atlas 已落地这套；其他短时 CLI 工具新增 / 改造时复用 `mj_atlas/src/runlog.rs` 的双 sink logger。
+短时 CLI 工具统一通过 `rlit_cli::runlog` 落盘 `<output>.log`（已接入: `mj_atlas` / `bulk_upload` / `img_resize` / `textexture`）。
 
 ## AI Debug Loop Context
 

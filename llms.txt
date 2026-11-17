@@ -1,40 +1,48 @@
 # R_LIT
 
-- purpose: Collection of independent, short-running Rust CLI tools and libraries, no root Cargo workspace
-- scope: Short-running CLI tools only — no long-running services or daemons
-- homepage: https://www.snappywatt.com/
-- binaries: Pre-built binaries hosted at https://www.snappywatt.com/
+- purpose: Collection of independent, short-running Rust CLI tools, companion desktop tools, and shared crates
+- scope: Short-running CLI tools as primary focus; GUI/desktop tools (`deskpet`, `maquette`, `group_vibe_workbench`, `mpreview`) explicitly noted
 - repository: https://github.com/dwbmio/r_lit
+- install_base: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
+- release_tracker: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>
 
 ## Directory
 
+- audiogen/ — Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs)
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
-- mini_reg/ — Native Rust mini-app registration helper; persistent batches; verified enterprise Chrome; human confirmations
+- deskpet/ — Frameless transparent always-on-top 3D/Spine desktop mascot (Bevy + tray / menu-bar resident)
+- gamereel/ — Render game protocol replays into short videos (Cargo workspace; CUDA + FFmpeg)
+- group_vibe_workbench/ — Desktop collaboration workbench (GPUI + Murmur P2P)
 - img_resize/ — Image resizing and compression
-- mailctl/ — Multi-mailbox IMAP/SMTP dispatcher (per-mailbox identity, allowlist, confirm-before-send, audit; `mailctl capabilities --json` for the manifest)
-- ui-trim/ — Clean AI-generated UI asset PNGs into tight transparent PNGs
-- textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)
-- mj_atlas/ — Sprite atlas / packing tool with incremental builds
-- looplog/ — Local log intake/query tool for AI-assisted debugging (WeChat Mini Program MVP; guide: looplog/WECHAT_AI_DEBUG_CN.md)
+- looplog/ — Local log intake/query tool for AI-assisted debugging (guide: looplog/WECHAT_AI_DEBUG_CN.md)
+- mailctl/ — Multi-mailbox IMAP/SMTP dispatcher (per-mailbox identity, allowlist, confirm-before-send, audit; `mailctl capabilities --json`)
 - maquette/ — Kit-based low-poly modeling + glTF export (GUI + headless CLI)
-- group_vibe_workbench/ — Desktop collaboration workbench (GPUI + P2P)
-- deskpet/ — Frameless transparent always-on-top 3D desktop mascot (Bevy + tray / menu-bar resident)
-- video-generator/ — Video generation tools
+- mini_reg/ — Native Rust mini-app registration helper; persistent batches; verified enterprise Chrome; human confirmations
+- mj_atlas/ — Sprite atlas / packing tool with incremental builds and polygon meshes
+- mpreview/ — Godot model preview and multi-angle camera screenshot tool
+- phone_haul/ — Phone media migration (Android adb+agent + iOS AFC/Photos.sqlite, BLAKE3 dedup, yyyy/MM archive)
+- textexture/ — Art-text image generation (shadow / stroke / gradient / glow / neon)
+- ui-trim/ — Clean AI-generated UI asset PNGs into tight transparent PNGs
 - crates/murmur/ — P2P collaboration library (iroh-net + Automerge CRDT)
+- crates/rlit_cli/ — Shared CLI machine-call contract (`--json` envelope, `__schema`, exit codes, `runlog`)
 
 ## Machine Call Contract
 
 - spec: docs/cli-contract.md; shared crate: crates/rlit_cli
 - adopted_by: mj_atlas, img_resize, ui-trim, textexture, bulk_upload
-- json: `--json` → exactly one envelope {contract, ok, tool, version, command, data, artifacts, error} on stdout
+- json: `--json` -> exactly one envelope {contract, ok, tool, version, command, data, artifacts, error} on stdout
 - exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial
-- schema: `<tool> __schema` → JSON Schema per subcommand + x-cli / x-effects / x-env / x-stdin
+- schema: `<tool> __schema` -> JSON Schema per subcommand + x-cli / x-effects / x-env / x-stdin
+- runlog: `rlit_cli::runlog` provides dual-sink buffered logging flushed to `<output>.log`
 
 ## Build
 
 ```bash
 cd <tool_dir> && cargo build --release
 ```
+
+- binary_layout: target/ is disposable; retained local executables use <tool>/out/<target-triple>/<binary>; Jenkins publishes release artifacts to R2/HFrog
+- repo_checks: `python3 scripts/check_repo.py` or `just check`
 
 ## AI Debug Loop Context
 

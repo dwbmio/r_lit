@@ -141,6 +141,6 @@ mj_atlas __schema
 3. `let cli: Cli = CONTRACT.parse();` 代替 `Cli::parse()`。
 4. 结果用 `rlit_cli::set_data(..)`，写出的文件用 `rlit_cli::add_artifact(path, role)`，批处理部分失败用 `rlit_cli::set_failure(ErrorKind::Partial, ..)`；**不要再自己 `println!` JSON 或 `process::exit`**。
 5. `main` 结尾 `rlit_cli::finish(result, |e| 分类)`，把错误枚举映射到上表的 kind。
-6. 有 runlog 的，console 回显在 `rlit_cli::json_mode()` 时改走 stderr（参考 `mj_atlas/src/runlog.rs`）。
+6. 有 runlog 的，直接使用 `rlit_cli::runlog::{init, standard_header, flush}`（在 `rlit_cli::json_mode()` 下会自动将 console 回显切到 stderr）。
 7. 加单测：`assert!(rlit_cli::check_contract(&CONTRACT, &Cli::command()).is_empty())`。它会检查每个叶子命令都有 `CommandSpec` 和 about、每个参数都有 help、`io` 引用的参数真实存在。
 8. 在 `llms.txt` / `llms_cn.txt` 里写一节 Machine Call Contract（参考已接入工具）。

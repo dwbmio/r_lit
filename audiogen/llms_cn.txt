@@ -1,0 +1,23 @@
+# audiogen
+
+- 用途: 纯 Rust 游戏音频资产管线（程序化音效、MP3/WAV/FLAC 编解码、经 SSH/Redis 异步调度 MiniMax 音乐与语音）
+- 版本: 0.1.0
+- 二进制: audiogen（附校验辅助 bin: dry_run）
+- 构建: cd audiogen && cargo build --release
+- 输入: JSON 任务清单（`--jobs jobs/<game>.json`）
+- 输出: `output_dir` 下的音频文件（mp3/wav/flac）及 `.pending.json` 状态文件
+
+## 命令
+
+- `audiogen --jobs <file> status` — 查看任务完成状态
+- `audiogen --jobs <file> sfx [--only a,b]` — 离线生成程序化音效
+- `audiogen --jobs <file> submit [--only a,b]` — 通过 SSH 提交 AI 音乐/语音任务（`AUDIOGEN_VPS`、`AUDIOGEN_SSH_KEY`）
+- `audiogen --jobs <file> collect [--max-wait 600]` — 阻塞拉取并转码 AI 结果
+- `audiogen --jobs <file> install` — 将 `output_dir` 产物复制到 `install_dir`
+- `cargo run --bin dry_run -- <file>` — 本地校验任务清单并打印请求信封
+
+## 编解码与依赖
+
+- 编码: mp3 (`shine-rs`)、wav（自研）、flac (`flacenc`)
+- 解码: mp3/flac/ogg/aac (`symphonia`)、wav（自研）
+- 传输: `russh` + `russh-keys`（纯 Rust SSH）

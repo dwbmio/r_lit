@@ -1,0 +1,21 @@
+# phone_haul
+
+- purpose: Phone media migration across Android (adb + static on-device agent) and iOS (pure-Rust AFC + Photos.sqlite diff)
+- version: 0.1.0
+- binaries: phone_haul (host, feature `host`), phone_haul_agent (Android aarch64 static agent)
+- build_host: cd phone_haul && cargo build --release --bin phone_haul
+- build_agent: cd phone_haul && cargo zigbuild --release --target aarch64-linux-android --bin phone_haul_agent
+
+## Commands
+
+- `phone_haul scan --out <DIR>` — push Android agent, scan media, write manifest.json
+- `phone_haul pull --dest <DIR> [-j 8] [--images-only]` — dedup via redb + parallel adb exec-out + BLAKE3 verify + yyyy/MM archive
+- `phone_haul ios-scan --out <DIR>` — pull iPhone Photos.sqlite over AFC and build iphone_keys.json
+- `phone_haul diff --archive <DIR> --out <DIR>` — diff archive against iphone_keys.json and hardlink missing media
+- `phone_haul push-ios --from <DIR> --dest <DIR>` — reorganize diff output into yyyy/MM tree for Finder sync
+- `phone_haul collect-lowconf --archive <DIR> --out <DIR>` — collect low-confidence PNG/HEIC assets for manual review
+
+## Internals
+
+- magic_bytes: classifies JPEG/PNG/GIF/WEBP/HEIC/AVIF/MP4/MOV/WEBM from first 512 bytes
+- dedup: tier1 quick BLAKE3 (head/mid/tail 64KiB + size) + tier2 full streaming BLAKE3 stored in redb

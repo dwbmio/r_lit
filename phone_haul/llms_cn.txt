@@ -1,0 +1,21 @@
+# phone_haul
+
+- 用途: 跨 Android（adb + 设备端静态 agent）与 iOS（纯 Rust AFC + Photos.sqlite 差量比对）的手机媒体迁移工具
+- 版本: 0.1.0
+- 二进制: phone_haul（Mac 主机端，默认 `host` feature）、phone_haul_agent（Android aarch64 静态端）
+- 构建主机端: cd phone_haul && cargo build --release --bin phone_haul
+- 构建手机端: cd phone_haul && cargo zigbuild --release --target aarch64-linux-android --bin phone_haul_agent
+
+## 命令
+
+- `phone_haul scan --out <DIR>` — 推送 Android agent 并扫描媒体生成 manifest.json
+- `phone_haul pull --dest <DIR> [-j 8] [--images-only]` — redb 排重 + N 路并行 adb exec-out + BLAKE3 校验 + yyyy/MM 归档
+- `phone_haul ios-scan --out <DIR>` — 通过 AFC 拉取 iPhone Photos.sqlite 并生成 iphone_keys.json
+- `phone_haul diff --archive <DIR> --out <DIR>` — 对比归档库并硬链缺失媒体到输出目录
+- `phone_haul push-ios --from <DIR> --dest <DIR>` — 重组为 yyyy/MM 相册树供 Finder 同步
+- `phone_haul collect-lowconf --archive <DIR> --out <DIR>` — 归集无可靠时间键的 PNG/HEIC 文件
+
+## 核心机制
+
+- 魔数判型: 读前 512 字节识别 JPEG/PNG/GIF/WEBP/HEIC/AVIF/MP4/MOV/WEBM
+- 两级排重: tier1 快速 BLAKE3（头/中/尾 64KiB + size）+ tier2 全量流式 BLAKE3（redb 持久化）

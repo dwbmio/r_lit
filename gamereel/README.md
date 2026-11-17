@@ -137,7 +137,7 @@ The wgpu compositor is **opt-in only** via `GAMEREEL_WORKER_COMPOSITOR=wgpu`. De
 | Scene class | Why | Example games |
 |---|---|---|
 | Sparse UI with small static background | dirty cache returns 70–90 % cached frames at near-zero cost | hs-mvp data card, idle-game leaderboard |
-| Match-3 / puzzle replay (small grid cells) | per-cell sprites are 32–96 px; 64 cells × 4 KB = 250 K px / frame, half cache-hits | 方块游戏战报, candy-crush-style replays |
+| Match-3 / puzzle replay (small grid cells) | per-cell sprites are 32–96 px; 64 cells × 4 KB = 250 K px / frame, half cache-hits | tile-match battle reports, candy-crush-style replays |
 | Card animation (1 bg + ≤ 10 cards) | only the cards are dirty; bg stays cached | hs-mvp, MTG / Hearthstone clone replays |
 | 1-shot result / score screen with rolling text | text is the only animation; bg cached | weekly summary, leaderboard intro |
 | Talking-head replay overlays (face cam + chat scroll) | small overlay regions, big cached bg | streaming-style replays |
@@ -147,7 +147,7 @@ The wgpu compositor is **opt-in only** via `GAMEREEL_WORKER_COMPOSITOR=wgpu`. De
 | Scene class | Why | Example games |
 |---|---|---|
 | Battle replay with full-screen VFX (explosions, screen shake, color flash) | every frame touches the full canvas, no cache hits | RPG / MOBA battle highlights, tower defense waves |
-| Cinematic intro with parallax full-screen layers | 3–5 full-screen layers all moving every frame | 二次元 ARPG opening, season trailer |
+| Cinematic intro with parallax full-screen layers | 3–5 full-screen layers all moving every frame | anime ARPG opening, season trailer |
 | Dynamic background that re-renders per frame | `_clear_image` cache invalidates every frame | live-tiling background, moving sky / weather |
 | Particle-heavy effects (50+ particles spanning the frame) | particles span the whole canvas | shoot-em-up, bullet-hell replay |
 | Continuous full-screen filter (blur, color grade, bloom) | filter touches every pixel every frame | dream-sequence / flashback transitions |
@@ -179,8 +179,8 @@ gamereel/
     ├── gamereel-compositor/           # wgpu compositor (M4) — opt-in heavy-scene path
     ├── gamereel-farm/                 # worker pool, hardware probe, Worker trait
     ├── gamereel-output/               # OutputSink trait + LocalDiskSink + ObjectStorageSink
-    ├── proto-puzzle/                  # 方块游戏 v0 JSON parser + Scene translator
-    └── proto-bubble/                  # 泡泡龙 protocol parser (skeleton)
+    ├── proto-puzzle/                  # tile-puzzle v0 JSON parser + Scene translator
+    └── proto-bubble/                  # bubble-shooter protocol parser (skeleton)
 ```
 
 ## Output delivery (S3-compatible, env-driven)

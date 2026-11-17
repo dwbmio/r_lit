@@ -62,7 +62,7 @@
 | 包含完整 argv + 解析后的选项摘要       | 头部 `# ` 注释行；让 review 时能不依赖 `--verbose` 复跑   |
 | DEBUG 进文件不进 stdout                | 文件用 `LevelFilter::Debug`，stdout 沿用 `Info`         |
 
-参考实现：`mj_atlas/src/runlog.rs`（自定义 `log::Log` 双 sink + `flush(path, &header)`）。新工具复用这一套是最低成本的做法。
+参考实现：`crates/rlit_cli/src/runlog.rs`（`rlit_cli::runlog::{init, standard_header, flush}` 双 sink 缓冲日志）。新工具直接复用 `rlit_cli::runlog` 即可。
 
 ## 反模式
 

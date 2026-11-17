@@ -1,0 +1,15 @@
+# rlit_cli
+
+- purpose: Shared Rust library crate providing the r_lit CLI machine-call contract (JSON envelope, exit codes, `__schema` export) and dual-sink `runlog` sidecar logging
+- version: 0.1.0
+- contract_version: 1
+- spec: docs/cli-contract.md
+- adopted_by: mj_atlas, img_resize, ui-trim, textexture, bulk_upload
+
+## Public API
+
+- `Contract::parse` / `Contract::parse_from` — handles `__schema`, tracks `--json`, captures subcommand path
+- `set_data`, `add_artifact`, `warn`, `set_failure`, `set_failure_code`, `finish`, `finish_ok`
+- `schema_for`, `check_contract`
+- `runlog::init`, `runlog::flush`, `runlog::standard_header`, `runlog::standard_header_for`
+- `ErrorKind`: Runtime(1), Usage(2), Input(3), External(4), Partial(5)

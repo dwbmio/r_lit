@@ -1,72 +1,72 @@
 # mailctl
 
-多邮箱 IMAP/SMTP 分发器：**一个配置目录，按邮箱身份收发信**，带白名单 / 发前确认 / 审计。
-纯 Rust 单二进制（rustls + webpki-roots，无 OpenSSL、无解释器依赖）。
+Multi-mailbox IMAP/SMTP dispatcher: **one config directory, send and receive per mailbox identity** with allowlist, confirm-before-send, and audit logging.
+Pure-Rust single binary (`rustls` + `webpki-roots`, no OpenSSL, no runtime interpreter dependencies).
 
-## 能力清单（给人和 AI 共用）
+## Capability Manifest (Shared for Humans and AI)
 
-机器可读版本由二进制直接输出，契约与本文同源（`capabilities.json` 内嵌进二进制）：
+The machine-readable version is emitted directly by the binary from the embedded `capabilities.json`:
 
 ```bash
 mailctl capabilities --json | jq .
 ```
 
-| 命令 | 作用 | 联网 | 副作用 |
+| Command | Purpose | Network | Side Effects |
 |---|---|---|---|
-| `accounts` | 列出账号（端点 / 凭证来源 / 来源文件 / 签名首行），`--json` 机器可读 | 否 | 无 |
-| `folders` | 列出邮箱目录（IMAP modified-UTF-7 解码成中文） | IMAP | 无 |
-| `verify` | 登录自测 IMAP + SMTP，**不发信** | IMAP+SMTP | 无 |
-| `scan` | 只读扫邮件头：`--limit` `--unseen` `--folder` `--criteria` `--match` `--json` | IMAP | 无（EXAMINE + BODY.PEEK） |
-| `read` | 读某封正文（GBK/GB18030/UTF-8 + 嵌套 multipart），`--raw` 打印原始报文 | IMAP | 无 |
-| `draft` | 新建草稿（自动加本账号签名），不发送 | 否 | 写 `.eml` |
-| `reply` | 按 UID 生成线程内回复（自动继承 In-Reply-To / References），不发送 | IMAP | 写 `.eml` |
-| `send` | 真发 `.eml`：必须 `--yes`；受白名单 + 身份校验；`--append-sent` 存已发送 | SMTP(+IMAP) | **外发 + 审计行** |
-| `selftest` | 闭环自测：给自己发一封并回读收件箱，不外发第三方 | IMAP+SMTP | 自发一封 + 审计 |
-| `capabilities` | 输出本能力清单（JSON） | 否 | 无 |
+| `accounts` | List configured accounts (endpoints / credential source / source file / signature first line); `--json` | No | None |
+| `folders` | List mailbox folders (IMAP modified-UTF-7 decoded) | IMAP | None |
+| `verify` | Test IMAP + SMTP login without sending mail | IMAP+SMTP | None |
+| `scan` | Read-only header scan (`--limit` `--unseen` `--folder` `--criteria` `--match` `--json`) | IMAP | None (`EXAMINE` + `BODY.PEEK`) |
+| `read` | Read message body (`GBK`/`GB18030`/`UTF-8` + nested multipart); `--raw` prints raw RFC822 | IMAP | None |
+| `draft` | Create `.eml` draft with per-account signature, without sending | No | Writes `.eml` |
+| `reply` | Generate threaded reply draft by UID (inherits `In-Reply-To` / `References`), without sending | IMAP | Writes `.eml` |
+| `send` | Send `.eml`: requires `--yes`, enforces allowlist and sender identity; `--append-sent` saves to Sent | SMTP (+IMAP) | **External email + audit line** |
+| `selftest` | Loopback test: send to self and read back from INBOX (never contacts third parties) | IMAP+SMTP | Sends to self + audit |
+| `capabilities` | Emit capability manifest JSON | No | None |
 
-## 四道闸（不可绕过）
+## Four Guard Rails (Non-Bypassable)
 
-1. **凭证**：钥匙串 `keychain_service` > 环境变量 > 不回显交互输入；配置文件里永远没有密码。
-2. **白名单**：`allow_recipients` 按账号隔离，不匹配直接拒发（exit 1），**无命令行开关可绕**；自发自收自动放行。
-3. **发前确认**：`confirm_before_send = true`（默认）时 `send` 必须带 `--yes`，否则 exit 3。
-4. **身份一致**：`.eml` 的 `From` 必须等于账号地址，禁止用 A 身份发 B 的信。
+1. **Credentials**: Keychain (`keychain_service`) > env var > masked interactive input; passwords are never stored in config files.
+2. **Allowlist**: `allow_recipients` is scoped per account; mismatches are rejected (exit 1) with **no CLI bypass**; self-address is always allowed.
+3. **Confirm before send**: When `confirm_before_send = true` (default), `send` requires `--yes` or exits with code 3.
+4. **Sender identity**: `.eml` `From` header must match the selected account address.
 
-另有：明文 SMTP/IMAP 只允许 `127.0.0.1`（防授权码裸奔）；`scan` / `read` 全程只读，不标已读、不删信。
+Additional safeguards: plaintext SMTP/IMAP is restricted to `127.0.0.1`/`localhost`; `scan` and `read` are strictly read-only (never mark seen, never delete).
 
-## 配置：一个邮箱一个文件
+## Configuration: One File per Mailbox
 
 ```
 ~/.config/hermes-mail/accounts/
-├── qq-personal.toml          # 生效，账号名 = 文件名
-└── work-exmail.toml.example  # 模板，不生效
+├── qq-personal.toml          # active, account name = filename stem
+└── work-exmail.toml.example  # template, ignored
 ```
 
 ```toml
 [account]
 provider = "qq"                      # qq / exmail / aliyun-enterprise / aliyun / gmail / outlook / custom
-address  = "416646744@qq.com"
-display_name = "段文彬 | Mujin Technology"
+address  = "user@qq.com"
+display_name = "Alice | Example Org"
 auth.keychain_service = "mail-qq-personal"
 sent_folder = "Sent Messages"
 allow_recipients = ["apple.com", "*.apple.com"]
 signature = """
-段文彬 / Duan Wenbin
-运维负责人 · Head of Operations
-Mujin Technology Co., Ltd.（Gamesci · Picboo）
+Alice
+Head of Operations
+Example Org
 """
 ```
 
-签名也可用 `signature_file = "sig.txt"`（相对该账号文件所在目录）。签名按账号隔离，`--no-signature` 临时关闭。
+You can also use `signature_file = "sig.txt"` (resolved relative to the account TOML file). Signatures are isolated per account; pass `--no-signature` to omit temporarily.
 
-## 常用流程
+## Common Workflows
 
 ```bash
-# 首次接入
-security add-generic-password -U -a 416646744@qq.com -s mail-qq-personal -w '<授权码>'
+# Initial setup
+security add-generic-password -U -a user@qq.com -s mail-qq-personal -w '<app-password>'
 mailctl verify   -a qq-personal
-mailctl selftest -a qq-personal --wait 90      # 自发自收，闭环验证
+mailctl selftest -a qq-personal --wait 90      # self-send loopback verification
 
-# 回复某封
+# Reply to a message
 mailctl scan  -a qq-personal --match 'apple' --json
 mailctl read  -a qq-personal --uid 3016
 mailctl reply -a qq-personal --uid 3016 --body-file body.txt --out /tmp/r.eml
@@ -74,28 +74,26 @@ mailctl send  -a qq-personal --eml /tmp/r.eml --yes --append-sent
 mailctl scan  -a qq-personal --folder 'Sent Messages' --limit 5
 ```
 
-## 退出码
+## Exit Codes
 
-| 码 | 含义 |
+| Code | Meaning |
 |---|---|
-| 0 | 成功 |
-| 1 | 运行错误（连接 / 认证 / 白名单拦截 / 身份不符） |
-| 2 | 缺少凭证 |
-| 3 | 未带 `--yes`，拒绝发送 |
+| 0 | Success |
+| 1 | Runtime error (connect / auth / allowlist blocked / sender mismatch) |
+| 2 | Missing credential |
+| 3 | Refused to send without `--yes` |
 
-## 构建与发布
+## Build & Release
 
 ```bash
-cargo test            # 25 项：单元 + 端到端（内置假 IMAP/SMTP，不联网）
+cargo test            # unit + E2E tests (built-in mock IMAP/SMTP, offline)
 cargo build --release
 ```
 
-发布走 Jenkins `r_lit` 流水线（`ci-all-in-one/task/ci/pipeline/r_lit/`），交叉编译矩阵：
-`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`x86_64-unknown-linux-musl`、
-`aarch64-apple-darwin`、`x86_64-pc-windows-gnu`。
+Published via the internal Jenkins `r_lit` pipeline (`ci-all-in-one/task/ci/pipeline/r_lit/`).
 
-## 已知边界
+## Known Boundaries
 
-- 收信走 IMAP（不用 POP3）：POP3 无目录、无 UID 精确定位、无法回读「已发送」。
-- 厂商差异：QQ 投递会**改写 Message-ID**（线程靠 References 维持）；部分厂商 SMTP 发信不自动进「已发送」，需 `--append-sent`。
-- 未实现：附件发送、HTML 正文、IMAP IDLE 实时收信（轮询用 `scan --unseen`）。
+- Receiving uses IMAP (not POP3): POP3 has no folders, no stable UID addressing, and cannot read back Sent.
+- Provider quirks: QQ Mail rewrites `Message-ID` on delivery (threading relies on `References`); some SMTP servers do not auto-save to Sent, requiring `--append-sent`.
+- Not implemented: attachments, HTML body rendering, IMAP IDLE (poll with `scan --unseen`).

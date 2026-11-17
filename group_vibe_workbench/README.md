@@ -61,10 +61,10 @@ group_vibe_workbench --help
 Group Vibe Workbench uses mDNS (Multicast DNS) for automatic local network discovery:
 
 1. **Launch Application**: Start the workbench and log in with your nickname
-2. **Discover Groups**: Click "搜索群组" to scan for active groups on your local network
+2. **Discover Groups**: Click "Search Groups" to scan for active groups on your local network
 3. **Join or Create**:
    - Join an existing group by clicking on it
-   - Create a new group with "创建新群组"
+   - Create a new group with "Create New Group"
 4. **Automatic Connection**: The app automatically connects to peers in the same group
 5. **Start Collaborating**: Edit shared files with real-time synchronization
 

@@ -87,7 +87,7 @@ attention, and posts the text as an OS system notification (dedup + throttled). 
 reminders* — build results, long-job completion, battery/disk warnings, "stand
 up" nudges, anything you can `echo` from a script.
 
-The full wire reference is in **[`PROTOCOL.md`](PROTOCOL.md)** (中文：
+The full wire reference is in **[`PROTOCOL.md`](PROTOCOL.md)** (Chinese:
 [`PROTOCOL_CN.md`](PROTOCOL_CN.md)) — also reachable in-app from the tray
 right-click menu (*Reminder Protocol Docs*).
 

@@ -1,7 +1,7 @@
 name: deskpet
 type: rust-binary-crate
 purpose: Frameless transparent always-on-top 3D desktop mascot with a system-tray / macOS menu-bar resident icon, built with Bevy.
-engine: bevy 0.18 (trimmed features), bevy_tray_icon 0.3（egui/bevy_egui 已移除）
+engine: bevy 0.18 (trimmed features) + bevy_spine + bevy_egui (Spine HUD) + bevy_tray_icon 0.3
 entrypoint: src/main.rs
 binary: deskpet
 
@@ -44,7 +44,7 @@ reminders (notify protocol, src/notify.rs):
   - {"type":"notify","title":?,"body":"...","level":"info|success|warn|error","duration_ms":?}
   - {"type":"clear"}
 - level: serde de_level tolerant (warn/warning, error/err synonyms; unknown -> info)
-- Level 仅存 severity 语义（影响默认时长）；原 accent() 配色随气泡移除删除
+- Level only carries severity semantics (affects default duration); prior accent() palette was removed with the in-app bubble
 - Notice::from_parts: explicit duration_ms clamped 800..120000; else derived base(info/success 4500, warn 6500, error 9000)+28ms/char, capped 20000
 - NotifyInbox(Arc<Mutex<VecDeque<Incoming>>>): listener pushes (CAP 256, drops oldest), drain_inbox pops each frame
 - NotifyState { current: Option<Notice>, timer, queue }: showing(), dismiss(); one reminder at a time, arrival order

@@ -1,0 +1,15 @@
+# rlit_cli
+
+- 用途: 为 r_lit 短时 CLI 工具提供统一机器调用契约（JSON envelope、退出码、`__schema` 导出）与双 sink `runlog` 边车日志的共享 Rust 库
+- 版本: 0.1.0
+- 契约版本: 1
+- 规范: docs/cli-contract.md
+- 已接入工具: mj_atlas, img_resize, ui-trim, textexture, bulk_upload
+
+## 公开接口
+
+- `Contract::parse` / `Contract::parse_from` — 处理 `__schema`、识别 `--json`、记录子命令路径
+- `set_data`、`add_artifact`、`warn`、`set_failure`、`set_failure_code`、`finish`、`finish_ok`
+- `schema_for`、`check_contract`
+- `runlog::init`、`runlog::flush`、`runlog::standard_header`、`runlog::standard_header_for`
+- `ErrorKind`: Runtime(1)、Usage(2)、Input(3)、External(4)、Partial(5)
