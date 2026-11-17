@@ -1,0 +1,10 @@
+# mpreview
+- purpose: interactive single-model 3D previewer with the game renderer (Godot gl_compatibility) + matching Blender comparison shot
+- run_interactive: Godot --path ./mpreview -- --model <file.glb> [--anim <name>] [--rot-x 0] [--cam cam.json] [--phone 405x720] [--compare ref.png]
+- run_shot: Godot --path ./mpreview --quit-after 200 -- --model <file.glb> --anim <name> --shot out.png [--shot-frames 90]
+- run_blender: blender --background --python blender_shot.py -- <file.glb> out.png cam.json [--action <name>] [--size WxH] [--samples N] [--frame N]
+- files: project.godot, main.tscn, main.gd, cam.json (Blender-space), blender_shot.py
+- panel: filename, size KB, meshes, tris, bones, materials, anim count, height (skeleton span)
+- keys: Space play/pause, S screenshot, C compare, R reset view, Q quit; drag orbit, wheel zoom
+- notes: screenshots need a real GL context (display or xvfb-run), --headless captures nothing; cam.json is Blender-space, viewer converts (x,y,z)->(x,z,-y); some editor-imported glbs need instance rotation.x=+90deg, runtime-loaded stand at identity
+- binary: Godot export templates, ~40-70MB per platform, not cargo

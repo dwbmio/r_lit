@@ -1,0 +1,10 @@
+# mpreview
+- 用途：单个模型交互预览（游戏同款 Godot gl_compatibility 渲染器）+ 同机位 Blender 对照图
+- 交互运行：Godot --path ./mpreview -- --model <file.glb> [--anim <name>] [--rot-x 0] [--cam cam.json] [--phone 405x720] [--compare ref.png]
+- 自动抓屏：Godot --path ./mpreview --quit-after 200 -- --model <file.glb> --anim <name> --shot out.png [--shot-frames 90]
+- Blender 对照：blender --background --python blender_shot.py -- <file.glb> out.png cam.json [--action <name>] [--size WxH] [--samples N] [--frame N]
+- 文件：project.godot、main.tscn、main.gd、cam.json（Blender 坐标系）、blender_shot.py
+- 面板：文件名、大小、mesh 数、三角面、骨骼数、材质数、动画数、身高（骨骼跨度）
+- 按键：Space 播放/暂停，S 抓屏，C 对照，R 复位，Q 退出；拖拽环绕，滚轮缩放
+- 注意：抓屏要真 GL 上下文（显示器或 xvfb-run），--headless 截不到；cam.json 是 Blender 坐标，viewer 内转 (x,y,z)->(x,z,-y)；个别编辑器导入的 glb 实例要 rotation.x=+90 度，运行时加载则 0 即站立
+- 二进制：Godot 导出模板，每平台约 40–70MB，非 cargo
