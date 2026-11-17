@@ -1,98 +1,108 @@
 # Maquette
 
-> 积木式低模资产生成器 —— 拼方块，导 3D 模型和 2D 精灵。
+> 积木式低模资产生成器 —— 堆方块、上材质，导出 3D 模型与 2D 等距渲染图。
 
-**Maquette** 是一个面向独立游戏开发者的轻量级桌面工具。不用开 Blender，就能用基础几何体拼出
-低多边形道具，顺手把各个角度的 2D sprite 批量烘焙出来。从方块库里选形状、丢进视口、
-摆位置上色，最后导出 glTF / OBJ 或者一整套方向 sprite。
+**Maquette**（v0.1.1）是一个面向独立游戏开发者的轻量级 Rust 建模工具，由**无窗口核心库**（`maquette`）、**无头命令行工具**（`maquette-cli`）和 **Bevy + egui 桌面客户端**（`maquette`）组成，无需启动 Blender 即可快速拼装 low-poly 道具与资产。
 
-名字取自法语 / 电影业术语 "maquette"——建筑/场景的**模块化缩比模型**，和这个工具干的事是同一回事。
+## 核心特性
 
-## 当前状态
-
-**MVP · v0.1** —— 基础骨架：
-
-- 带 3D 视口的主窗口，轨道相机操作
-- 无限地面网格 + 世界坐标轴
-- 左侧方块库面板，内置 6 种基础体（立方、球、圆柱、圆锥、平面、圆环）
-- 右侧属性面板，显示最后生成方块的 Transform
-- 顶部菜单栏骨架（File / Edit / View / Help），按钮已连但逻辑待填
-- 底部状态栏，显示方块数量和操作提示
-
-尚未实现（v0.2+ 规划）：
-
-- 视口内点选方块（`bevy_picking`）
-- 变换 gizmo（`transform-gizmo-bevy`）
-- 自定义方块导入（用户的 glTF / OBJ）
-- 工程存档（自研 `.maq` JSON 格式）
-- 整场景 glTF 导出
-- 多方向 sprite 烘焙（8 / 16 / 24 向）
-- 程序化脚本钩子（rhai 或 mlua）
+- **GUI / 无头 CLI 双模架构**：`maquette-cli` 可通过 `--no-default-features --bin maquette-cli` 编译（完全不带 `bevy_egui` / `wgpu` 窗口依赖），适合 CI 缩略图生成与批处理导出。
+- **积木建模与组合器**：网格编辑器与多块组合器（`block_composer`），内置 12 种基础块并支持从 `hfrog` 同步块元数据（`block_meta`），支持撤销/重做（`history`）与 `.maq` 工程存档/自动保存。
+- **glTF 2.0 / GLB 导出**：支持导出 `.glb` / `.gltf`，内置反面法线描边烘焙（`--outline-width`、`--outline-color`、`--no-outline`），GUI 与 CLI 共用同一套导出引擎。
+- **纯 CPU 等距光栅渲染**：`maquette-cli render` 无需 GPU 或桌面会话即可直接把 `.maq` 工程渲染成 PNG 预览图。
+- **调色板与 AI 贴图管线**：支持 `colors.json` 调色板导入/导出（`palette_io`）、槽位贴图元数据（`texture_meta`）、离线确定性 `mock` 生成器与基于 Rustyme（sonargrid/Redis）的 AI 贴图生成及 SHA-256 本地缓存。
+- **桌面端增强**：轨道相机、卡通着色预览、多视角画中画（`multiview`）、浮动窗口与云端任务队列状态展示。
 
 ## 技术栈
 
 | 组成 | Crate | 版本 |
-|------|-------|------|
-| 引擎 / 3D | `bevy` | 0.18 |
-| UI 面板 | `bevy_egui` | 0.39 |
-| 相机 | `bevy_panorbit_camera` | 0.34 |
-| 地面网格 | `bevy_infinite_grid` | 0.18 |
+|---|---|---|
+| 核心 / ECS / 3D | `bevy` | 0.18 |
+| UI 面板（`gui` feature） | `bevy_egui` | 0.39 |
+| 轨道相机（`gui` feature） | `bevy_panorbit_camera` | 0.34 |
+| 无限地面网格（`gui` feature） | `bevy_infinite_grid` | 0.18 |
+| 轮廓描边（`gui` feature） | `bevy_mod_outline` | 0.12 |
+| CLI | `clap` | 4 |
+| 队列 / HTTP / 缓存 | `redis`、`ureq`、`sha2`、`png` | - |
 
-## 构建
+## 安装与构建
 
-在本目录下：
+预编译二进制安装（Linux / macOS）：
 
 ```bash
-cargo run                # dev 版本（依赖已优化，迭代快）
-cargo build --release    # 发布版，产物在 target/release/maquette
+curl -fsSL https://r2.gamesci-lite.com/r_lit/maquette/install.sh | bash
 ```
 
-从仓库根目录：
+本地源码构建（在 `maquette/` 目录下）：
+
+```bash
+# 桌面 GUI + CLI（默认开启 `gui` feature）
+cargo build --release
+cargo run --bin maquette
+
+# 仅编译无头 CLI（跳过 GUI 依赖，CI 极速构建）
+cargo build --no-default-features --bin maquette-cli --release
+cargo test --no-default-features
+```
+
+也可在仓库根目录执行：
 
 ```bash
 just build maquette release
 ```
 
-首次构建会比较久，Bevy 和它的依赖体量不小。之后的增量编译会很快。
+## 命令行用法（`maquette-cli`）
 
-## 操作
+```bash
+# 导出 .maq 工程为 GLB / glTF（支持反面法线描边）
+maquette-cli export scene.maq -o scene.glb
+maquette-cli export scene.maq -o scene.gltf --no-outline
 
-| 输入 | 动作 |
-|------|------|
-| 视口内左键拖拽 | 轨道旋转相机 |
-| 右键拖拽 / 中键拖拽 | 平移相机 |
-| 滚轮 | 缩放 |
-| 点击库里的方块 | 生成到场景 |
-| Edit → Clear Scene | 清空全部方块 |
+# 查看工程摘要与结构校验
+maquette-cli info scene.maq --json
+maquette-cli validate scene.maq
+
+# 纯 CPU 渲染等距视角 PNG 预览图
+maquette-cli render scene.maq -o preview.png --width 512 --height 512 --background '#181a1e'
+
+# 调色板导入 / 导出
+maquette-cli palette export scene.maq -o colors.json
+maquette-cli palette import scene.maq --from colors.json -o scene_recolored.maq
+
+# 贴图生成（mock 离线确定性 / rustyme 集群）
+maquette-cli texture gen --prompt "mossy stone tile" -o stone.png --provider mock --seed 42
+maquette-cli texture revoke <TASK_UUID>
+maquette-cli texture purge texgen
+
+# 块库元数据查询与同步（本地内置 + hfrog 制品库）
+maquette-cli block list --source all --json
+maquette-cli block get oak_planks
+maquette-cli block sync
+```
 
 ## 目录结构
 
-```
+```text
 src/
-├── main.rs      # App 入口，插件装配
-├── camera.rs    # 轨道相机初始化
-├── scene.rs     # 光照、背景、地面网格
-├── block.rs     # BlockKind 枚举、生成/清理 system、Message 定义
-└── ui.rs        # egui 面板（菜单、库、属性、状态栏）
+├── lib.rs              # 无窗口核心库（Headless Invariant）
+├── bin/
+│   └── maquette_cli.rs # 无头命令行入口（`maquette-cli`）
+├── main.rs             # Bevy + egui 桌面 GUI 入口（`maquette`）
+├── grid.rs             # 2D/体素网格模型与调色板
+├── mesher.rs           # 体素网格转三角网格
+├── project.rs          # `.maq` 工程文件读写与序列化
+├── export.rs           # glTF 2.0 / GLB 导出与反面描边烘焙
+├── render.rs           # 纯 CPU 等距视角 PNG 光栅器
+├── palette_io.rs       # `colors.json` 调色板导入/导出
+├── texture_meta.rs     # 槽位贴图元数据与 TexturePrefs
+├── texgen.rs           # Mock / Rustyme AI 贴图生成器与 SHA-256 缓存
+├── block_meta.rs       # BlockMeta trait、LocalProvider 与 HfrogProvider
+└── （GUI 专属模块）     # ui, camera, scene, block_library, block_composer,
+                        # preview_mesh, multiview, export_dialog, slot_texgen,
+                        # texture_registry, toon, history, autosave, session,
+                        # float_window, notify, cloud_status, fonts
 ```
 
-UI 部分是 **egui 即时模式**，**不是 ECS**。ECS 只用来存场景数据（方块、变换、相机）。
-加一个新功能通常就是：一个 `Message` 类型 + 一个消费它的 Bevy system。
+## 关于 r_lit
 
-## 设计说明
-
-- 每个放置的方块是一个 ECS entity，带 `BlockKind` + `Transform` + `Mesh3d` +
-  `MeshMaterial3d` + `Name` 组件
-- UI 到场景的通信是单向的——靠 `Message`（`SpawnBlockEvent`、`ClearSceneEvent`），
-  不存在共享可变状态
-- Bevy 的 `EguiPrimaryContextPass` 调度每帧跑一次 UI（多 pass 模式）
-
-## 许可证
-
-MIT
-
-## 在 r_lit 仓库中的位置
-
-本 crate 属于 [r_lit](../README.md) 的 Rust 工具集。
-和仓库里其他**短时运行 CLI 工具**不同，Maquette 是一个长期运行的桌面程序——它放在这里
-是一个刻意的例外，因为它共享同一套构建基础设施。
+本 crate 隶属 [r_lit](https://github.com/dwbmio/r_lit) 仓库；桌面端 `maquette` 与无头 `maquette-cli` 共享同一套核心库。

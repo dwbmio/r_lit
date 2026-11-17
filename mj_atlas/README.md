@@ -28,7 +28,7 @@ sprite_dir/  ──────►   atlas.png  +  atlas.json     (TexturePacker
 
 ## Install
 
-The release pipeline ships pre-built binaries to [dev.gamesci-lite.com](https://dev.gamesci-lite.com) for macOS arm64/x86_64, Linux x86_64/aarch64, and Windows x86_64. Or build locally:
+The release pipeline publishes pre-built binaries to Cloudflare R2 (`curl -fsSL https://r2.gamesci-lite.com/r_lit/mj_atlas/install.sh | bash`) and tracks releases on [HFrog](https://hfrog.gamesci-lite.com/api/release/softwares/mj_atlas) for macOS arm64, Linux x86_64, and Windows x86_64. Or build locally:
 
 ```bash
 cd mj_atlas
@@ -235,4 +235,4 @@ MIT. The `--quantize` feature pulls in `imagequant` which is GPL-3.0; binaries b
 
 ## Contributing
 
-This crate lives in the [`r_lit`](https://github.com/...) Rust CLI tool collection. Each tool is an independent Cargo crate with its own release cycle. PRs welcome — please run `cargo test` and follow the existing module layout (`src/pack/`, `src/output/`, error types in `src/error.rs`).
+This crate lives in the [`r_lit`](https://github.com/dwbmio/r_lit) Rust CLI tool collection. Each tool is an independent Cargo crate with its own release cycle. PRs welcome — please run `cargo test` and follow the existing module layout (`src/pack/`, `src/output/`, error types in `src/error.rs`).

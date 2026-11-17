@@ -1,52 +1,48 @@
 # Maquette
 
-> Kit-based low-poly asset forge — stack blocks, export 3D models and 2D sprites.
+> Kit-based low-poly asset forge — stack blocks, paint textures, export 3D models and 2D isometric renders.
 
-**Maquette** is a lightweight desktop tool for indie game developers who want to
-assemble low-poly 3D props and bake 2D sprite sheets without firing up Blender.
-You pick from a library of primitives, drop them in a viewport, arrange and
-paint, then export to glTF / OBJ or render a batch of sprite frames.
+**Maquette** (v0.1.1) is a Rust desktop modeling tool and headless CLI for indie game developers who want to assemble low-poly voxel/kit props without firing up Blender. It splits cleanly into a **window-free core library** (`maquette`), a **headless CLI** (`maquette-cli`), and a **Bevy + egui desktop GUI** (`maquette`).
 
-The name comes from the French / film-industry term for a scaled-down modular
-mock-up — which is exactly what this tool is for.
+## Highlights
 
-## Status
-
-**MVP · v0.1** — the foundation:
-
-- Empty window with a 3D viewport and pan-orbit camera
-- Infinite ground grid with world axes
-- Block library side panel with six primitives (Cube, Sphere, Cylinder, Cone, Plane, Torus)
-- Properties panel showing transform of the last-spawned block
-- Top menu bar scaffold (File / Edit / View / Help) with placeholder actions
-- Status bar with block count and control hints
-
-Not yet implemented (planned for v0.2+):
-
-- Click-to-select blocks in the viewport (`bevy_picking`)
-- Transform gizmo (`transform-gizmo-bevy`)
-- Custom block import (user-provided glTF / OBJ)
-- Project save / load (`.maq` JSON format)
-- glTF export of the composed scene
-- Multi-angle sprite sheet baking (8 / 16 / 24 directions)
-- Procedural scripting hook (rhai or mlua)
+- **Headless / GUI Split**: `maquette-cli` compiles with `--no-default-features --bin maquette-cli` (zero `bevy_egui` / `wgpu` windowing overhead) for CI pipelines, thumbnails, and batch exports.
+- **Voxel/Kit Modeling & Composer**: 2D/3D grid editing, multi-block composer (`block_composer`), built-in 12-block library plus optional `hfrog` cloud block-meta sync (`block_meta`), undo/redo (`history`), and `.maq` project save/load with autosave.
+- **glTF 2.0 / GLB Export**: Exports composed scenes to `.glb` or `.gltf` with optional inverted-hull outline baking (`--outline-width`, `--outline-color`, `--no-outline`), shared by GUI `File -> Export` and `maquette-cli export`.
+- **Pure-CPU Isometric Renderer**: `maquette-cli render` rasterizes `.maq` projects to PNG thumbnails without requiring a GPU or windowing session.
+- **Palettes & AI Texture Pipeline**: Portable `colors.json` palette export/import (`palette_io`), per-slot texture metadata (`texture_meta`), deterministic `mock` provider, and `rustyme` (sonargrid/Redis) AI texture generation with SHA-256 disk caching (`texgen`).
+- **GUI Extras**: Pan-orbit camera, toon preview & outline shader, multi-view PIP preview (`multiview`), floating panels, and cloud queue status.
 
 ## Tech Stack
 
 | Component | Crate | Version |
-|-----------|-------|---------|
-| Engine / 3D | `bevy` | 0.18 |
-| UI panels | `bevy_egui` | 0.39 |
-| Camera | `bevy_panorbit_camera` | 0.34 |
-| Ground grid | `bevy_infinite_grid` | 0.18 |
+|---|---|---|
+| Core / ECS / 3D | `bevy` | 0.18 |
+| GUI panels (`gui` feature) | `bevy_egui` | 0.39 |
+| Camera (`gui` feature) | `bevy_panorbit_camera` | 0.34 |
+| Ground grid (`gui` feature) | `bevy_infinite_grid` | 0.18 |
+| Outline (`gui` feature) | `bevy_mod_outline` | 0.12 |
+| CLI | `clap` | 4 |
+| Texture queue / HTTP | `redis`, `ureq`, `sha2`, `png` | - |
 
-## Build
+## Build & Install
 
-From this directory:
+Pre-built binaries (Linux/macOS):
 
 ```bash
-cargo run                # dev build (deps optimized, fast iteration)
-cargo build --release    # optimized binary in target/release/maquette
+curl -fsSL https://r2.gamesci-lite.com/r_lit/maquette/install.sh | bash
+```
+
+Build locally from `maquette/`:
+
+```bash
+# Desktop GUI + CLI (default `gui` feature)
+cargo build --release
+cargo run --bin maquette
+
+# Headless CLI only (fast CI build, no GUI crates)
+cargo build --no-default-features --bin maquette-cli --release
+cargo test --no-default-features
 ```
 
 From the monorepo root:
@@ -55,51 +51,58 @@ From the monorepo root:
 just build maquette release
 ```
 
-First build will take a while — Bevy and its dependencies are substantial.
-Subsequent incremental builds are fast.
+## CLI Usage (`maquette-cli`)
 
-## Controls
+```bash
+# Export .maq project to GLB / glTF (with optional inverted-hull outline)
+maquette-cli export scene.maq -o scene.glb
+maquette-cli export scene.maq -o scene.gltf --no-outline
 
-| Input | Action |
-|-------|--------|
-| Left-drag in viewport | Orbit camera |
-| Right-drag / middle-drag | Pan camera |
-| Scroll wheel | Zoom |
-| Click a block in the library | Spawn it into the scene |
-| Edit → Clear Scene | Delete every block |
+# Inspect and validate .maq files
+maquette-cli info scene.maq --json
+maquette-cli validate scene.maq
+
+# Render pure-CPU isometric PNG thumbnail
+maquette-cli render scene.maq -o preview.png --width 512 --height 512 --background '#181a1e'
+
+# Palette import / export
+maquette-cli palette export scene.maq -o colors.json
+maquette-cli palette import scene.maq --from colors.json -o scene_recolored.maq
+
+# Texture generation (mock offline or rustyme sonargrid cluster)
+maquette-cli texture gen --prompt "mossy stone tile" -o stone.png --provider mock --seed 42
+maquette-cli texture revoke <TASK_UUID>
+maquette-cli texture purge texgen
+
+# Block library metadata (local bundled + hfrog artifact registry)
+maquette-cli block list --source all --json
+maquette-cli block get oak_planks
+maquette-cli block sync
+```
 
 ## Project Layout
 
-```
+```text
 src/
-├── main.rs      # App setup, plugin wiring
-├── camera.rs    # Pan-orbit camera spawn
-├── scene.rs     # Lighting, sky, infinite grid
-├── block.rs     # BlockKind enum, spawn/clear systems, Messages
-└── ui.rs        # egui panels (menu, library, properties, status)
+├── lib.rs              # Window-free core library (Headless Invariant)
+├── bin/
+│   └── maquette_cli.rs # Headless CLI binary (`maquette-cli`)
+├── main.rs             # Bevy + egui GUI binary (`maquette`)
+├── grid.rs             # 2D/voxel grid model & palette
+├── mesher.rs           # Voxel grid -> triangle mesh builder
+├── project.rs          # `.maq` project format serde load/save
+├── export.rs           # glTF 2.0 / GLB writer + inverted-hull outline baker
+├── render.rs           # Pure-CPU isometric PNG rasterizer
+├── palette_io.rs       # `colors.json` palette import/export
+├── texture_meta.rs     # Per-slot texture metadata & TexturePrefs
+├── texgen.rs           # Mock & Rustyme AI texture providers + SHA-256 cache
+├── block_meta.rs       # BlockMeta trait, LocalProvider & HfrogProvider
+└── (GUI modules)       # ui, camera, scene, block_library, block_composer,
+                        # preview_mesh, multiview, export_dialog, slot_texgen,
+                        # texture_registry, toon, history, autosave, session,
+                        # float_window, notify, cloud_status, fonts
 ```
-
-The UI layer is **immediate-mode egui**, not ECS. ECS only holds scene data
-(blocks, transforms, camera). Adding a new feature usually means one Message
-type plus one Bevy system that consumes it.
-
-## Design Notes
-
-- Each placed block is an ECS entity with `BlockKind` + `Transform` +
-  `Mesh3d` + `MeshMaterial3d` + `Name` components.
-- UI → scene communication is one-way via `Message`s (`SpawnBlockEvent`,
-  `ClearSceneEvent`). No shared mutable state.
-- Bevy's `EguiPrimaryContextPass` schedule runs the UI once per frame in
-  multi-pass mode.
-
-## License
-
-MIT
 
 ## Part of r_lit
 
-This crate is part of the [r_lit](../README.md) monorepo of Rust tools.
-Unlike the short-running CLI utilities in this repo, Maquette is a
-long-lived desktop app — its inclusion here is a deliberate exception to
-the "run, complete, exit" convention, since it shares the same build
-infrastructure.
+This crate belongs to [r_lit](https://github.com/dwbmio/r_lit). While `r_lit` focuses on short-running CLIs, `maquette` ships both a desktop GUI (`maquette`) and a headless CLI (`maquette-cli`) sharing one library core.

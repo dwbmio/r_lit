@@ -28,7 +28,7 @@ sprite_dir/  ──────►   atlas.png  +  atlas.json     （TexturePack
 
 ## 安装
 
-CI 流水线会把预编译二进制发到 [dev.gamesci-lite.com](https://dev.gamesci-lite.com)，覆盖 macOS arm64/x86_64、Linux x86_64/aarch64、Windows x86_64。也可以本地构建：
+CI 流水线会把预编译二进制发布到 Cloudflare R2（`curl -fsSL https://r2.gamesci-lite.com/r_lit/mj_atlas/install.sh | bash`）并同步至 [HFrog](https://hfrog.gamesci-lite.com/api/release/softwares/mj_atlas)，覆盖 macOS arm64、Linux x86_64、Windows x86_64。也可以本地构建：
 
 ```bash
 cd mj_atlas
@@ -235,4 +235,4 @@ MIT。`--quantize` 引入的 `imagequant` 是 GPL-3.0；只要构建时启用了
 
 ## 贡献
 
-本 crate 隶属 [`r_lit`](https://github.com/...) Rust CLI 工具集，每个工具独立 Cargo crate、独立发布周期。欢迎 PR——请确保 `cargo test` 通过，且遵守现有模块布局（`src/pack/`、`src/output/`、错误类型在 `src/error.rs`）。
+本 crate 隶属 [`r_lit`](https://github.com/dwbmio/r_lit) Rust CLI 工具集，每个工具独立 Cargo crate、独立发布周期。欢迎 PR——请确保 `cargo test` 通过，且遵守现有模块布局（`src/pack/`、`src/output/`、错误类型在 `src/error.rs`）。

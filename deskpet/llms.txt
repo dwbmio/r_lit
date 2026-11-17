@@ -57,24 +57,23 @@ reminders (notify protocol, src/notify.rs):
 - tests: src/notify.rs #[cfg(test)] cover parse (full/minimal/unknown-level/unknown-fields/clear) + TTL clamp/derive
 
 dependencies:
-- bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
-- bevy_tray_icon = "0.3"
-- rand 0.8, thiserror 2, log 0.4
-- serde 1 (derive) + serde_json 1 (reminder protocol)
+- bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, 2d_bevy_render, scene, png, x11, wayland] }
+- bevy_spine (git rev 7f928b9b), bevy_egui 0.39 (Spine HUD), bevy_tray_icon 0.3 (local patch)
+- rand 0.8, thiserror 2, log 0.4, tiny_http 0.12, utoipa 5 (OpenAPI/RPC)
+- serde 1 (derive) + serde_json 1 (reminder protocol + RPC)
 - macOS: core-graphics 0.24, objc2-foundation 0.2, objc2-app-kit 0.2 (NSApplication/NSResponder/NSRunningApplication)
 - windows: windows-sys 0.59 (GetCursorPos)
+- library embedding: src/in_process.rs (`launch_with_inbox`, `call_via_inbox`, `RpcTaskInbox`)
 
 memory_optimizations:
 - mascot texture downscaled 2048->128 (VRAM 16MB->64KB) via tools/glb_shrink_texture.py
-- trimmed bevy features (no audio/picking/bevy_ui/gilrs/sysinfo); bevy_egui removed entirely
-- Msaa::Off
+- trimmed bevy features (no audio/picking/bevy_ui/gilrs/sysinfo); Msaa::Off
 - measured: ~120MB RSS, ~290MB incl GPU (was ~150/~460), binary ~44MB
 
 tools:
 - tools/fal_meshy.py: image -> rigged+animated GLB via fal-ai/meshy/v6/image-to-3d (FAL_KEY=<uuid>:<secret>)
 - tools/meshy_image_to_3d.py: direct Meshy image-to-3d (blocked on free plan, 402)
 - tools/glb_shrink_texture.py: downscale embedded GLB texture, repack GLB
-- tools/glb_backup/: original full-res GLBs (block.full.glb, blast.full.glb)
 
 tunables_top_of_main:
 - PET_W=150, WIN_H=200, WIN_W=PET_W

@@ -37,6 +37,7 @@ STALE_PATTERNS = (
     re.compile(r"nexus\.gamesci-lite\.com", re.IGNORECASE),
     re.compile(r"github\.com/dwbmio/r_lit/releases", re.IGNORECASE),
     re.compile(r"github\.com/dwbmio/r_lit/workflows/Release", re.IGNORECASE),
+    re.compile(r"github\.com/\.\.\."),
 )
 
 # Historical audit/migration docs that intentionally mention deprecated URLs.
