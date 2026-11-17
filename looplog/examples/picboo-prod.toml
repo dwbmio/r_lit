@@ -1,0 +1,57 @@
+# picture 生产环境日志（just looplog-prod 首次运行会复制成 ~/.config/looplog/config.toml）
+#
+# 服务端日志本来就在写 journald / openresty，这里只是“接进来”，不改服务。
+# client 日志走 Loki push（小程序构建期注入 VITE_LOKI_*），不需要配置 source。
+
+version = 1
+
+[view]
+since = "15m"
+autostart = true
+columns = [
+  { label = "client", tag = "picboo-client" },
+  { label = "edge",   tag = "picboo-edge" },
+  { label = "api",    tag = "picboo-api" },
+  { label = "gql",    tag = "picboo-gql" },
+]
+
+[serve]
+addr = "127.0.0.1:3768"
+allow_lan = false
+allow_cidrs = []
+
+# ── 网关（生产 openresty access log）────────────────────────────────────────
+[[source]]
+name = "prod-edge"
+tag = "picboo-edge"
+from = "nginx"
+remote = "picboo-ali"
+path = "/opt/wirerope-stack/wirerope/logs/ding/c_picboo_access.log"
+lines = 200
+sudo = true
+reconnect = true
+enabled = true
+
+# ── REST（systemd journal）─────────────────────────────────────────────────
+[[source]]
+name = "prod-api"
+tag = "picboo-api"
+from = "journald"
+remote = "picboo-ali"
+unit = "picboo-api"
+since = "15m"
+sudo = true
+reconnect = true
+enabled = true
+
+# ── GraphQL ────────────────────────────────────────────────────────────────
+[[source]]
+name = "prod-gql"
+tag = "picboo-gql"
+from = "journald"
+remote = "picboo-ali"
+unit = "picboo-gql"
+since = "15m"
+sudo = true
+reconnect = true
+enabled = true

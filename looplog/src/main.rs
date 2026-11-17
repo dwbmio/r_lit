@@ -1,3 +1,4 @@
+mod config;
 mod db;
 mod error;
 mod ingest;
@@ -5,7 +6,10 @@ mod meta;
 mod output;
 mod protocol;
 mod server;
+mod source;
 mod storage;
+mod tail;
+mod view;
 
 use clap::{Parser, Subcommand};
 use db::{default_db_path, parse_since, QueryFilter, SqliteStorage, DEFAULT_KEEP_HOURS};
@@ -38,20 +42,33 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     db: Option<PathBuf>,
 
+    /// Configuration file. Defaults to ~/.config/looplog/config.toml.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the loopback-only HTTP intake server.
+    /// Start the HTTP intake server (loopback by default, Loki push compatible).
     Serve {
-        /// Address to bind. Must be loopback for the MVP.
+        /// Address to bind. Non-loopback requires --allow-lan.
         #[arg(long, default_value = "127.0.0.1:3768")]
         addr: String,
         /// Retention window in hours. Values above 24 are capped to 24.
         #[arg(long, default_value_t = DEFAULT_KEEP_HOURS)]
         keep_hours: u64,
+        /// Accept non-loopback peers (real device on the same LAN).
+        #[arg(long)]
+        allow_lan: bool,
+        /// Shared secret required from non-loopback peers. Min 16 chars.
+        #[arg(long)]
+        token: Option<String>,
+        /// CIDR allowlist for non-loopback peers. Repeatable or comma separated.
+        #[arg(long = "allow-cidr", value_name = "CIDR")]
+        allow_cidrs: Vec<String>,
     },
     /// Run a command, capture stdout/stderr, and return the child exit code.
     Run {
@@ -110,6 +127,73 @@ enum Commands {
         #[arg(long)]
         vacuum: bool,
     },
+    /// Follow a log source into the database (cmd / journald / nginx / file / logcat).
+    Tail {
+        /// Tag that groups this stream in `looplog view`.
+        #[arg(long)]
+        tag: String,
+        /// Free-form source label stored on the run.
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+        /// Structured source: cmd (default), journald, nginx, file, logcat.
+        #[arg(long = "from", default_value = "cmd", value_name = "KIND")]
+        from: String,
+        /// Run the source command on this ssh host.
+        #[arg(long)]
+        remote: Option<String>,
+        /// systemd unit for --from journald.
+        #[arg(long)]
+        unit: Option<String>,
+        /// Log file path for --from nginx / file.
+        #[arg(long)]
+        path: Option<String>,
+        /// Android device/emulator serial for --from logcat (adb -s).
+        #[arg(long)]
+        serial: Option<String>,
+        /// Journald backfill window (e.g. 15m / 2h) instead of --lines.
+        #[arg(long)]
+        since: Option<String>,
+        /// Prefix the remote command with `sudo -n` (journald / root-owned logs).
+        #[arg(long)]
+        sudo: bool,
+        /// Number of existing lines to read before following.
+        #[arg(long)]
+        lines: Option<usize>,
+        #[arg(long = "meta", value_name = "KEY=VALUE")]
+        meta: Vec<String>,
+        /// Restart the source when it exits, with exponential backoff.
+        #[arg(long)]
+        reconnect: bool,
+        #[arg(long = "reconnect-max", default_value_t = 30)]
+        reconnect_max: u64,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Show or initialise the configuration file.
+    Config {
+        /// Write a starter config (refuses to overwrite unless --force).
+        #[arg(long)]
+        init: bool,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Multi-column live view of tagged streams in a local window.
+    View {
+        /// Loopback address for the viewer.
+        #[arg(long, default_value = "127.0.0.1:3769")]
+        addr: String,
+        /// Time window override, e.g. 5m / 15m / 1h (default: from config).
+        #[arg(long)]
+        since: Option<String>,
+        /// Column as label:tag. Repeatable; overrides config when given.
+        #[arg(long = "column", value_name = "LABEL:TAG")]
+        columns: Vec<String>,
+        /// Open a browser window on start.
+        #[arg(long)]
+        open: bool,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -147,9 +231,24 @@ fn run() -> Result<()> {
     let db_path = cli.db.unwrap_or_else(default_db_path);
 
     match cli.command {
-        Commands::Serve { addr, keep_hours } => {
-            ensure_loopback(&addr)?;
-            server::serve(&addr, db_path, cap_keep_hours(keep_hours))
+        Commands::Serve {
+            addr,
+            keep_hours,
+            allow_lan,
+            token,
+            allow_cidrs,
+        } => {
+            ensure_bind_allowed(&addr, allow_lan)?;
+            server::serve(
+                db_path,
+                server::ServeOptions {
+                    addr,
+                    keep_hours: cap_keep_hours(keep_hours),
+                    allow_lan,
+                    token,
+                    allow_cidrs,
+                },
+            )
         }
         Commands::Run {
             tag,
@@ -250,6 +349,161 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Tail {
+            tag,
+            kind,
+            source,
+            from,
+            remote,
+            unit,
+            path,
+            serial,
+            since,
+            sudo,
+            lines,
+            meta,
+            reconnect,
+            reconnect_max,
+            command,
+        } => {
+            let spec = parse_source_spec(&from, remote, unit, path, serial, since, sudo, lines)?;
+            tail::tail_command(
+                &db_path,
+                tail::TailOptions {
+                    tag,
+                    kind: normalize_kind(kind),
+                    source,
+                    meta: meta::parse_cli_meta(&meta)?,
+                    reconnect,
+                    reconnect_max_secs: reconnect_max,
+                    spec,
+                },
+                &command,
+            )
+        }
+        Commands::Config { init, force } => {
+            let path = cli.config.unwrap_or_else(config::default_config_path);
+            if init {
+                if path.exists() && !force {
+                    return Err(Error::Message(format!(
+                        "{} already exists (use --force to overwrite)",
+                        path.display()
+                    )));
+                }
+                let cfg = config::Config::default();
+                config::save(&path, &cfg)?;
+                println!("wrote {}", path.display());
+                return Ok(());
+            }
+            let cfg = config::load(&path)?;
+            println!("# {}", path.display());
+            print!(
+                "{}",
+                toml::to_string_pretty(&cfg)
+                    .map_err(|e| Error::Message(format!("could not render config: {e}")))?
+            );
+            Ok(())
+        }
+        Commands::View {
+            addr,
+            since,
+            columns,
+            open,
+        } => {
+            ensure_loopback(&addr)?;
+            let config_path = cli.config.unwrap_or_else(config::default_config_path);
+            let loaded = match config::load(&config_path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("[looplog] {e}; continuing with defaults");
+                    config::Config::default()
+                }
+            };
+            let columns = if columns.is_empty() {
+                None
+            } else {
+                Some(
+                    columns
+                        .iter()
+                        .map(|c| parse_column(c))
+                        .collect::<Result<Vec<config::Column>>>()?,
+                )
+            };
+            let cfg = loaded.with_overrides(since, columns);
+            view::serve(
+                db_path,
+                view::ViewOptions {
+                    addr,
+                    config: cfg,
+                    config_path,
+                    open,
+                },
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_source_spec(
+    from: &str,
+    remote: Option<String>,
+    unit: Option<String>,
+    path: Option<String>,
+    serial: Option<String>,
+    since: Option<String>,
+    sudo: bool,
+    lines: Option<usize>,
+) -> Result<source::SourceSpec> {
+    let need = |value: Option<String>, what: &str| -> Result<String> {
+        value.ok_or_else(|| Error::Message(format!("--from {from} requires {what}")))
+    };
+    let lines = lines.unwrap_or(500);
+    Ok(match from {
+        "cmd" => source::SourceSpec::Cmd {
+            command: Vec::new(),
+        },
+        "logcat" => source::SourceSpec::Logcat { serial, lines },
+        "journald" => source::SourceSpec::Journald {
+            unit: need(unit, "--unit <unit>")?,
+            remote,
+            since,
+            lines,
+            sudo,
+        },
+        "nginx" => source::SourceSpec::Nginx {
+            path: need(path, "--path <access.log>")?,
+            remote,
+            lines,
+            sudo,
+            follow: true,
+        },
+        "file" => source::SourceSpec::File {
+            path: need(path, "--path <file>")?,
+            lines,
+            follow: true,
+        },
+        other => {
+            return Err(Error::Message(format!(
+                "unknown --from `{other}`, expected cmd|journald|nginx|file|logcat"
+            )))
+        }
+    })
+}
+
+fn parse_column(spec: &str) -> Result<config::Column> {
+    match spec.split_once(':') {
+        Some((label, tag)) if !tag.trim().is_empty() => Ok(config::Column {
+            label: label.trim().to_string(),
+            tag: tag.trim().to_string(),
+        }),
+        Some(_) => Err(Error::Message(format!(
+            "invalid column `{spec}`, expected label:tag"
+        ))),
+        None if !spec.trim().is_empty() => Ok(config::Column {
+            label: spec.trim().to_string(),
+            tag: spec.trim().to_string(),
+        }),
+        None => Err(Error::Message("empty column spec".to_string())),
     }
 }
 
@@ -285,13 +539,27 @@ fn cap_keep_hours(keep_hours: u64) -> u64 {
     keep_hours.min(DEFAULT_KEEP_HOURS)
 }
 
+/// Non-loopback binds are opt-in; the token requirement is enforced again by
+/// the server so a bad `--addr` cannot silently expose writes.
+fn ensure_bind_allowed(addr: &str, allow_lan: bool) -> Result<()> {
+    if allow_lan || is_loopback(addr) {
+        return Ok(());
+    }
+    Err(Error::Message(format!(
+        "refusing to bind non-loopback address `{addr}` without --allow-lan"
+    )))
+}
+
+fn is_loopback(addr: &str) -> bool {
+    addr.starts_with("127.") || addr.starts_with("localhost:") || addr.starts_with("[::1]:")
+}
+
 fn ensure_loopback(addr: &str) -> Result<()> {
-    if addr.starts_with("127.") || addr.starts_with("localhost:") || addr.starts_with("[::1]:") {
+    if is_loopback(addr) {
         Ok(())
     } else {
         Err(Error::Message(format!(
-            "refusing to bind non-loopback address `{}` in the MVP",
-            addr
+            "refusing to bind non-loopback address `{addr}`"
         )))
     }
 }

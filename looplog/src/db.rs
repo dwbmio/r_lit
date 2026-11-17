@@ -61,6 +61,7 @@ pub struct LineRecord {
     pub run_id: String,
     pub seq: i64,
     pub ts: String,
+    pub ingest_ms: i64,
     pub stream: String,
     pub level: String,
     pub event: Option<String>,
@@ -94,8 +95,37 @@ impl SqliteStorage {
         }
 
         let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Several `looplog tail` processes may share one database (edge/api/gql
+        // streams are separate processes by design). WAL serializes writers, so
+        // give them room to wait instead of failing with SQLITE_BUSY.
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| Error::Message(format!("open: busy_timeout: {e}")))?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(|e| Error::Message(format!("open: read journal_mode: {e}")))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            // Switching to WAL takes an exclusive lock and does NOT honour
+            // busy_timeout, so concurrent first-time opens must retry by hand.
+            // Failing here is not fatal: we keep whatever mode we got.
+            for attempt in 0..40 {
+                match conn.pragma_update(None, "journal_mode", "WAL") {
+                    Ok(_) => break,
+                    Err(e) if is_busy(&e) && attempt < 39 => {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    Err(e) => {
+                        if !is_busy(&e) {
+                            eprintln!("[looplog] warning: journal_mode not set to WAL: {e}");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| Error::Message(format!("open: synchronous: {e}")))?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .map_err(|e| Error::Message(format!("open: foreign_keys: {e}")))?;
         let mut storage = Self {
             conn,
             fts_available: false,
@@ -131,6 +161,7 @@ impl SqliteStorage {
                 run_id TEXT NOT NULL,
                 seq INTEGER NOT NULL,
                 ts_ms INTEGER NOT NULL,
+                ingest_ms INTEGER,
                 stream TEXT NOT NULL,
                 level TEXT NOT NULL,
                 event TEXT,
@@ -153,8 +184,17 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_runs_kind_appid_started ON runs(kind, appid, started_at_ms);
             CREATE INDEX IF NOT EXISTS idx_runs_page_started ON runs(page, started_at_ms);
             CREATE INDEX IF NOT EXISTS idx_lines_run_seq ON log_lines(run_id, seq);
+            -- 时间线范围扫描（view 每 400ms 用 ts_ms 游标拉增量）
+            CREATE INDEX IF NOT EXISTS idx_lines_ts_seq ON log_lines(ts_ms, seq);
             "#,
         )?;
+
+        // Older databases predate `ingest_ms`; add it in place so existing
+        // 24h windows keep working.
+        if !self.column_exists("log_lines", "ingest_ms")? {
+            self.conn
+                .execute("ALTER TABLE log_lines ADD COLUMN ingest_ms INTEGER", [])?;
+        }
 
         self.fts_available = self
             .conn
@@ -164,6 +204,17 @@ impl SqliteStorage {
             )
             .is_ok();
         Ok(())
+    }
+
+    fn column_exists(&self, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for name in names {
+            if name? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn start_run(&mut self, run: NewRun) -> Result<String> {
@@ -214,36 +265,38 @@ impl SqliteStorage {
             return Ok(0);
         }
 
-        let mut next_seq: i64 = self.conn.query_row(
+        let next_seq: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM log_lines WHERE run_id = ?1",
             [run_id],
             |row| row.get(0),
         )?;
 
         let fts_available = self.fts_available;
+        let first_seq = next_seq;
         let tx = self.conn.transaction()?;
-        for line in lines {
+        for (offset, line) in lines.iter().enumerate() {
+            let seq = first_seq + offset as i64;
+            let ingest_ms = now_ms();
             let ts_ms = match line.ts.as_deref() {
                 Some(ts) => parse_rfc3339_ms(ts)?,
-                None => now_ms(),
+                None => ingest_ms,
             };
             let stream = line.stream.as_deref().unwrap_or("stdout");
             let level = line.level.as_deref().unwrap_or("info");
             let meta_json = serde_json::to_string(&line.meta)?;
             tx.execute(
                 r#"
-                INSERT INTO log_lines (run_id, seq, ts_ms, stream, level, event, text, meta_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                INSERT INTO log_lines (run_id, seq, ts_ms, ingest_ms, stream, level, event, text, meta_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
-                params![run_id, next_seq, ts_ms, stream, level, line.event, line.text, meta_json],
+                params![run_id, seq, ts_ms, ingest_ms, stream, level, line.event, line.text, meta_json],
             )?;
             if fts_available {
                 tx.execute(
                     "INSERT INTO log_fts (run_id, seq, text) VALUES (?1, ?2, ?3)",
-                    params![run_id, next_seq, line.text],
+                    params![run_id, seq, line.text],
                 )?;
             }
-            next_seq += 1;
         }
         tx.execute(
             "UPDATE runs SET line_count = line_count + ?2 WHERE id = ?1",
@@ -295,12 +348,12 @@ impl SqliteStorage {
         let sql = if let Some(tail) = tail {
             values.push(SqlValue::Integer(tail as i64));
             format!(
-                "SELECT * FROM (SELECT run_id, seq, ts_ms, stream, level, event, text FROM log_lines \
+                "SELECT * FROM (SELECT run_id, seq, ts_ms, ingest_ms, stream, level, event, text FROM log_lines \
                  WHERE run_id = ? {stream_clause} ORDER BY seq DESC LIMIT ?) ORDER BY seq ASC"
             )
         } else {
             format!(
-                "SELECT run_id, seq, ts_ms, stream, level, event, text FROM log_lines \
+                "SELECT run_id, seq, ts_ms, ingest_ms, stream, level, event, text FROM log_lines \
                  WHERE run_id = ? {stream_clause} ORDER BY seq ASC"
             )
         };
@@ -346,7 +399,7 @@ impl SqliteStorage {
         let sql = format!(
             "SELECT r.id, r.started_at_ms, r.ended_at_ms, r.status, r.exit_code, r.tag, r.source, \
              r.kind, r.project_path, r.appid, r.page, r.session, r.trace_id, r.line_count, \
-             l.run_id, l.seq, l.ts_ms, l.stream, l.level, l.event, l.text \
+             l.run_id, l.seq, l.ts_ms, l.ingest_ms, l.stream, l.level, l.event, l.text \
              FROM log_lines l JOIN runs r ON r.id = l.run_id {combined_where} \
              ORDER BY l.ts_ms DESC LIMIT ?"
         );
@@ -395,6 +448,17 @@ impl SqliteStorage {
             keep_hours,
         })
     }
+}
+
+fn is_busy(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(e, _)
+            if matches!(
+                e.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 fn filter_sql(filter: &QueryFilter, table: &str) -> (String, Vec<SqlValue>) {
@@ -457,14 +521,16 @@ fn row_to_line(row: &rusqlite::Row<'_>) -> rusqlite::Result<LineRecord> {
 
 fn row_to_line_offset(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<LineRecord> {
     let ts_ms: i64 = row.get(offset + 2)?;
+    let ingest_ms: Option<i64> = row.get(offset + 3)?;
     Ok(LineRecord {
         run_id: row.get(offset)?,
         seq: row.get(offset + 1)?,
         ts: format_ms(ts_ms),
-        stream: row.get(offset + 3)?,
-        level: row.get(offset + 4)?,
-        event: row.get(offset + 5)?,
-        text: row.get(offset + 6)?,
+        ingest_ms: ingest_ms.unwrap_or(ts_ms),
+        stream: row.get(offset + 4)?,
+        level: row.get(offset + 5)?,
+        event: row.get(offset + 6)?,
+        text: row.get(offset + 7)?,
     })
 }
 

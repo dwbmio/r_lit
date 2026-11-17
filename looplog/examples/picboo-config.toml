@@ -1,0 +1,75 @@
+# looplog 配置模板 · picboo 真机联调
+#
+#   cp examples/picboo-config.toml ~/.config/looplog/config.toml
+#   looplog view --open         # autostart 会把 enabled=true 的来源拉起来
+#
+# 页面里「⚙ 配置」可以直接改这些内容并落盘（会生成 config.toml.bak）。
+# token 不放在这里：`looplog serve --allow-lan --token ...` 走命令行。
+
+version = 1
+
+[view]
+# 打开视图时加载的时间窗口
+since = "15m"
+# 打开视图时是否启动 enabled 的来源
+autostart = true
+# 分栏：label 是显示名，tag 必须与下面 [[source]].tag 对上
+columns = [
+  { label = "client", tag = "picboo-client" },
+  { label = "edge",   tag = "picboo-edge" },
+  { label = "api",    tag = "picboo-api" },
+  { label = "gql",    tag = "picboo-gql" },
+]
+
+[serve]
+addr = "127.0.0.1:3768"
+allow_lan = false
+allow_cidrs = []
+
+# ── 服务端：REST（journald，µs 时间戳 + PRIORITY）──────────────────────────
+[[source]]
+name = "picboo-api"
+tag = "picboo-api"
+from = "journald"
+remote = "picboo-ali"
+unit = "picboo-api"
+since = "15m"
+sudo = true
+reconnect = true
+enabled = true
+
+# ── 服务端：GraphQL ────────────────────────────────────────────────────────
+[[source]]
+name = "picboo-gql"
+tag = "picboo-gql"
+from = "journald"
+remote = "picboo-ali"
+unit = "picboo-gql"
+since = "15m"
+sudo = true
+reconnect = true
+enabled = true
+
+# ── 网关：openresty access log（解析 status / request_time / upstream_time）─
+[[source]]
+name = "picboo-edge"
+tag = "picboo-edge"
+from = "nginx"
+remote = "picboo-ali"
+path = "/opt/wirerope-stack/wirerope/logs/ding/c_picboo_access.log"
+lines = 200
+sudo = true
+reconnect = true
+enabled = true
+
+# ── 客户端：微信开发者工具会话日志（raw，时间戳=接收时间）──────────────────
+# 真机/模拟器的 logger.* 走 Loki push 直连 looplog（见 .env.loc 的 VITE_LOKI_*），
+# 不需要这一条；只有从 `_ai/runs/weapp-dev-debug/*.log` 回流时才用。
+# [[source]]
+# name = "picboo-client-file"
+# tag = "picboo-client"
+# from = "file"
+# path = "_ai/runs/weapp-dev-debug/latest.log"
+# lines = 0
+# reconnect = true
+# enabled = false

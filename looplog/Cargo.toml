@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Local-first log intake and query CLI for AI-assisted debugging"
 
+# 独立 crate：仓库根 Cargo.toml 的 workspace 只含 deskpet，这里显式声明自己的 workspace
+[workspace]
+
 [features]
 default = []
 pure-rust-sqlite = []
@@ -17,8 +20,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+toml = "0.8"
 tiny_http = "0.12"
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

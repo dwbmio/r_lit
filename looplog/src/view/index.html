@@ -1,0 +1,1376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>looplog · view</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #0f151c;
+    --line: #1a222c;
+    --fg: #c9d1d9;
+    --dim: #6b7785;
+    --err: #ff7b72;
+    --warn: #e3b341;
+    --info: #58a6ff;
+    --ok: #3fb950;
+    --mark: #7a5c00;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    user-select: none;
+    /* 窄窗口换行，任何控件都不会被裁掉 */
+    flex-wrap: wrap;
+    row-gap: 6px;
+    overflow: visible;
+  }
+  /* 功能分组：组间一条竖线，组内紧凑 */
+  header .group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    padding: 0 9px;
+    border-left: 1px solid #2f3a47;
+    height: 22px;
+  }
+  header .group:hover { border-left-color: var(--dim); }
+  header .group:last-of-type { padding-right: 10px; }
+  header .group > * { flex: 0 0 auto; white-space: nowrap; }
+  header .group:first-of-type { margin-left: 2px; }
+  .brand { color: var(--ok); font-weight: 700; letter-spacing: .5px; margin-right: 4px; }
+  .brand small { color: var(--dim); font-weight: 400; margin-left: 4px; }
+  select, input, button {
+    flex: 0 0 auto;
+    background: #141b24;
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font: inherit;
+    padding: 3px 6px;
+    outline: none;
+  }
+  input { width: clamp(130px, 18vw, 280px); min-width: 110px; flex: 1 1 auto !important; }
+  input:focus { border-color: var(--info); }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  #stat {
+    margin-left: auto;
+    padding-left: 12px;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* basis 0：宁可收缩到省略号，也不单独换一行 */
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: right;
+  }
+  #stat b { color: var(--fg); font-weight: 400; }
+  #panes { flex: 1 1 auto; display: flex; min-height: 0; }
+  .pane {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .pane:last-child { border-right: none; }
+  .ph {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: #0d131a;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    font-size: 11px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--info); flex: 0 0 auto; }
+  .plabel { color: var(--fg); font-weight: 600; }
+  .ptag { color: var(--dim); }
+  .plast { color: var(--dim); }
+  .pmeta { margin-left: auto; color: var(--dim); }
+  #cursor { color: var(--dim); white-space: nowrap; }
+  #cursor:empty { display: none; }
+  #cursor b { color: var(--fg); font-weight: 400; }
+  .pmeta .e { color: var(--err); }
+  .pmeta .w { color: var(--warn); }
+  .jump {
+    display: none;
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1f6feb;
+    color: #fff;
+    border: none;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    z-index: 5;
+  }
+  .pb {
+    flex: 1 1 auto;
+    overflow: auto;
+    position: relative;   /* offsetTop 基准：时间线二分定位依赖它 */
+    padding: 2px 0 12px;
+    contain: content;
+  }
+  .ln {
+    display: flex;
+    gap: 7px;
+    padding: 0 8px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border-left: 2px solid transparent;
+    cursor: copy;
+  }
+  .ln:hover { background: #131a23; }
+  .ln .t { color: var(--dim); flex: 0 0 auto; }
+  .ln .lag { color: #d29922; font-size: 10px; margin-left: 2px; }
+  .ln .g { flex: 0 0 auto; color: var(--dim); display: none; }
+  body.merged .ln .g { display: inline; min-width: 92px; }
+  .ln .x { flex: 1 1 auto; min-width: 0; }
+  .ln.e { color: #ffb3ad; background: rgba(255, 123, 114, .07); border-left-color: var(--err); }
+  .ln.w { color: #f0d396; border-left-color: var(--warn); }
+  .ln.d { color: var(--dim); }
+  .ln.sys .x { color: var(--dim); font-style: italic; }
+  mark { background: var(--mark); color: #fff; border-radius: 2px; }
+  .empty { color: var(--dim); padding: 12px; }
+  /* ---- config drawer ---- */
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 440px; max-width: 92vw;
+    background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; transform: translateX(102%);
+    transition: transform .18s ease; z-index: 30;
+    box-shadow: -12px 0 32px rgba(0,0,0,.45);
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  .drawer-head .t { font-weight: 600; }
+  .drawer-head .kbd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .drawer-head button { margin-left: auto; }
+  .drawer-body { flex: 1 1 auto; overflow: auto; padding: 10px 12px 24px; }
+  .drawer-body section { margin-bottom: 18px; }
+  .drawer-body h4 {
+    margin: 0 0 8px; font-size: 11px; color: var(--dim);
+    font-weight: 500; text-transform: uppercase; letter-spacing: .06em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .drawer-body h4 button { margin-left: auto; padding: 2px 8px; font-size: 11px; }
+  .drawer-body label { display: block; margin-bottom: 8px; color: var(--dim); font-size: 11px; }
+  .drawer-body label > input, .drawer-body label > select, .drawer-body label > textarea {
+    display: block; width: 100%; margin-top: 3px;
+  }
+  .drawer-body textarea { resize: vertical; font: inherit; }
+  .drawer-body .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .drawer-body .row { display: flex; gap: 14px; align-items: center; margin: 6px 0 10px; }
+  .drawer-body .row label { display: flex; gap: 5px; align-items: center; margin: 0; }
+  .src {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
+    margin-bottom: 6px; background: #0d131a;
+  }
+  .src .dot { margin-top: 4px; }
+  .src .dot.on { background: var(--ok); }
+  .src .dot.off { background: #3a4450; }
+  .src-main { flex: 1 1 auto; min-width: 0; }
+  .src-title { display: flex; gap: 6px; align-items: baseline; }
+  .src-sub { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src-acts { display: flex; gap: 4px; flex: 0 0 auto; }
+  .src-acts button { padding: 1px 6px; font-size: 11px; white-space: nowrap; }
+  .drawer-foot {
+    display: flex; gap: 8px; align-items: center;
+    padding: 8px 12px; border-top: 1px solid var(--line); flex: 0 0 auto;
+  }
+  .drawer-foot .kbd { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dirty { color: var(--warn); }
+  #picker {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center; z-index: 20;
+  }
+  #picker.show { display: flex; }
+  #picker .box {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; min-width: 380px; max-height: 70vh; overflow: auto;
+  }
+  #picker h3 { margin: 0 0 10px; font-size: 12px; color: var(--dim); font-weight: 500; }
+  #picker label { display: flex; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+  #picker label span.n { color: var(--dim); margin-left: auto; }
+  #picker .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .kbd { color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">looplog<small>view</small></span>
+
+  <div class="group" title="时间线">
+    <select id="since" title="时间窗口">
+      <option value="300000">5m</option>
+      <option value="900000">15m</option>
+      <option value="3600000">1h</option>
+      <option value="10800000">3h</option>
+      <option value="86400000">24h</option>
+    </select>
+    <span id="cursor" title="当前时间线位置"></span>
+  </div>
+
+  <div class="group" title="过滤">
+    <select id="level" title="级别过滤">
+      <option value="all">全部</option>
+      <option value="warn">warn+</option>
+      <option value="error">仅 error</option>
+      <option value="debug">debug+</option>
+    </select>
+    <input id="q" placeholder="过滤 + 高亮  /regex/i" title="普通词高亮；/正则/i 走正则；匹配即过滤">
+  </div>
+
+  <div class="group" title="视图布局">
+    <button id="mode" title="m">分栏</button>
+    <button id="sync" title="按时间线对齐各栏滚动（默认开）">⏱ 对齐</button>
+    <button id="cols" title="选择分栏">栏…</button>
+  </div>
+
+  <div class="group" title="运行控制">
+    <button id="pause" title="p">暂停</button>
+    <button id="clear">清屏</button>
+  </div>
+
+  <div class="group" title="设置">
+    <button id="cfgBtn" title="来源与视图配置">⚙ 配置</button>
+  </div>
+
+  <span id="stat"></span>
+</header>
+
+<div id="panes"></div>
+
+<aside id="cfg" class="drawer">
+  <div class="drawer-head">
+    <span class="t">配置</span>
+    <span id="cfgPath" class="kbd"></span>
+    <button id="cfgClose">关闭</button>
+  </div>
+  <div class="drawer-body">
+    <section>
+      <h4>视图</h4>
+      <label>时间窗口
+        <input id="cfgSince" placeholder="15m / 1h">
+      </label>
+      <label>自动启动
+        <select id="cfgAutostart">
+          <option value="1">打开视图时启动已启用的来源</option>
+          <option value="0">只列出来源，不自动启动</option>
+        </select>
+      </label>
+      <label>分栏（每行 <code>label:tag</code>）
+        <textarea id="cfgColumns" rows="4" placeholder="client:picboo-client&#10;api:picboo-api"></textarea>
+      </label>
+    </section>
+
+    <section>
+      <h4>来源 <button id="srcNew">+ 新增</button></h4>
+      <div id="srcList"></div>
+    </section>
+
+    <section id="srcFormWrap" hidden>
+      <h4 id="srcFormTitle">新增来源</h4>
+      <div class="grid">
+        <label>name（唯一 id）<input id="fName" placeholder="api"></label>
+        <label>tag（分栏名）<input id="fTag" placeholder="picboo-api"></label>
+        <label>from
+          <select id="fFrom">
+            <option value="journald">journald</option>
+            <option value="nginx">nginx</option>
+            <option value="file">file</option>
+            <option value="cmd">cmd</option>
+            <option value="logcat">logcat</option>
+          </select>
+        </label>
+        <label>remote（ssh 主机）<input id="fRemote" placeholder="picboo-ali"></label>
+        <label>unit（journald）<input id="fUnit" placeholder="picboo-api"></label>
+        <label>path（nginx / file）<input id="fPath" placeholder="/var/log/access.log"></label>
+        <label>serial（logcat / adb -s）<input id="fSerial" placeholder="emulator-5554"></label>
+        <label>since（journald）<input id="fSince" placeholder="15m"></label>
+        <label>lines（预读行数）<input id="fLines" type="number" placeholder="500"></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="fSudo"> sudo -n</label>
+        <label><input type="checkbox" id="fReconnect" checked> reconnect</label>
+        <label><input type="checkbox" id="fEnabled" checked> enabled</label>
+      </div>
+      <label id="fCommandWrap" hidden>command（from=cmd，空格分隔）
+        <input id="fCommand" placeholder="ssh host journalctl -o json -f">
+      </label>
+      <div class="row">
+        <button id="fSave" class="on">保存到列表</button>
+        <button id="fCancel">取消</button>
+      </div>
+    </section>
+  </div>
+  <div class="drawer-foot">
+    <span id="cfgMsg" class="kbd"></span>
+    <button id="cfgSave" class="on">保存配置并应用</button>
+  </div>
+</aside>
+
+<div id="picker">
+  <div class="box">
+    <h3>选择分栏（每个 tag 一栏）</h3>
+    <div id="pickerList"></div>
+    <div class="actions">
+      <span class="kbd" style="margin-right:auto">tag 来自 `looplog tail --tag`</span>
+      <button id="pickCancel">取消</button>
+      <button id="pickOk" class="on">应用</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__BOOTSTRAP__*/
+</script>
+<script>
+(() => {
+  "use strict";
+
+  const MAX_ROWS = 1200;
+  const POLL_MS = 400;
+  const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
+
+  const boot = window.LOOPLOG_BOOT || { sinceMs: Date.now() - 900000, columns: [], db: "" };
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    columns: (boot.columns || []).slice(),
+    merged: false,
+    minLevel: "all",
+    pattern: "",
+    regex: null,
+    paused: false,
+    syncScroll: true,
+    sinceMs: boot.sinceMs || Date.now() - 900000,
+    cursor: boot.sinceMs || Date.now() - 900000,
+    firstLoad: true,
+    lastLatency: 0,
+    lastAdded: 0,
+  };
+
+  /** tag -> { rows: [], seen: Set } */
+  const store = new Map();
+  /** tag -> pane DOM refs */
+  const panes = new Map();
+  let mergedPane = null;
+
+  function storeFor(tag) {
+    const key = tag || "(none)";
+    if (!store.has(key)) store.set(key, { rows: [], seen: new Set() });
+    return store.get(key);
+  }
+
+  // ---------------------------------------------------------------- rendering
+
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+  function escRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function compilePattern() {
+    const p = state.pattern;
+    state.regex = null;
+    if (!p) return;
+    const lastSlash = p.lastIndexOf("/");
+    try {
+      if (p.startsWith("/") && lastSlash > 0) {
+        const body = p.slice(1, lastSlash);
+        const flags = p.slice(lastSlash + 1) || "i";
+        state.regex = new RegExp(body, flags.includes("g") ? flags : flags + "g");
+      } else {
+        state.regex = new RegExp(escRe(p), "gi");
+      }
+    } catch (_) {
+      state.regex = null;
+    }
+  }
+
+  function highlight(text) {
+    const safe = esc(text);
+    if (!state.regex) return safe;
+    try {
+      state.regex.lastIndex = 0;
+      return safe.replace(state.regex, (m) => "<mark>" + m + "</mark>");
+    } catch (_) {
+      return safe;
+    }
+  }
+
+  function pad(n, w = 2) {
+    return String(n).padStart(w, "0");
+  }
+  function fmtTs(ms) {
+    const d = new Date(ms);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "." + pad(d.getMilliseconds(), 3);
+  }
+
+  function visible(row) {
+    if (state.minLevel !== "all") {
+      const want = LEVEL_RANK[state.minLevel] || 0;
+      if ((LEVEL_RANK[row.level] ?? 1) < want) return false;
+    }
+    if (state.regex) {
+      state.regex.lastIndex = 0;
+      if (!state.regex.test(row.text)) return false;
+    }
+    return true;
+  }
+
+  // ingest lag: how late the line reached us relative to its own timestamp.
+  // Large or negative values mean clock skew or a slow/batched source.
+  function fmtDuration(ms) {
+    const abs = Math.abs(ms);
+    if (abs < 1000) return Math.round(abs) + "ms";
+    if (abs < 60000) return (abs / 1000).toFixed(1) + "s";
+    if (abs < 3600000) return Math.round(abs / 60000) + "m";
+    return (abs / 3600000).toFixed(1) + "h";
+  }
+
+  function lagHtml(row) {
+    if (!row.ingest_ms || !row.ts_ms) return "";
+    const lag = row.ingest_ms - row.ts_ms;
+    if (Math.abs(lag) < 250) return "";
+    return '<span class="lag" title="入库时间 − 日志时间">' +
+      (lag < 0 ? "-" : "+") + fmtDuration(lag) + "</span>";
+  }
+
+  function rowHtml(row) {
+    const lv = row.level || "info";
+    const cls = lv === "error" ? "e" : lv === "warn" ? "w" : lv === "debug" ? "d" : "";
+    return (
+      '<div class="ln ' + cls + '" title="' + esc(row.level + " · " + (row.tag || "-") + " · " + row.stream) + '"' +
+      ' data-run="' + esc(row.run) + '" data-seq="' + row.seq + '" data-ts="' + row.ts_ms + '">' +
+      '<span class="t">' + fmtTs(row.ts_ms) + lagHtml(row) + "</span>" +
+      '<span class="g">' + esc(row.tag || "-") + "</span>" +
+      '<span class="x">' + highlight(row.text) + "</span>" +
+      "</div>"
+    );
+  }
+
+  function rowsFor(pane) {
+    if (pane.merged) {
+      const all = [];
+      for (const [, s] of store) all.push(...s.rows);
+      all.sort((a, b) => a.ts_ms - b.ts_ms || a.seq - b.seq);
+      return all;
+    }
+    return storeFor(pane.tag).rows;
+  }
+
+  function countsFor(pane) {
+    const rows = rowsFor(pane);
+    let e = 0, w = 0;
+    for (let i = rows.length - 1, n = 0; i >= 0 && n < 2000; i--, n++) {
+      if (rows[i].level === "error") e++;
+      else if (rows[i].level === "warn") w++;
+    }
+    return { total: rows.length, e, w };
+  }
+
+  // ---- timeline alignment -------------------------------------------------
+  //
+  // 时间线是两条流唯一的公共坐标。滚动任一栏 → 其他栏二分定位到同一 ts，
+  // 这样「client 点了按钮」和「server 回了 503」永远在同一屏。
+
+  let scrollRaf = 0;
+
+  function linesOf(body) {
+    const kids = body.children;
+    if (!kids.length) return null;
+    const first = kids[0].classList.contains("ln") ? kids[0] : kids[0].nextElementSibling;
+    if (!first || !first.classList.contains("ln")) return null;
+    return kids;
+  }
+
+  /// 视口顶部可见行的 ts_ms
+  function topTs(body) {
+    const kids = linesOf(body);
+    if (!kids) return null;
+    let lo = 0;
+    let hi = kids.length - 1;
+    let best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const el = kids[mid];
+      if (el.offsetTop + el.offsetHeight > body.scrollTop) {
+        best = el;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return best ? Number(best.dataset.ts) : null;
+  }
+
+  /// 第一个 ts >= 目标的行（时间线二分）
+  function lineAtTs(body, ts) {
+    const kids = linesOf(body);
+    if (!kids) return null;
+    let lo = 0;
+    let hi = kids.length - 1;
+    let best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const value = Number(kids[mid].dataset.ts);
+      if (value >= ts) {
+        best = kids[mid];
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return best;
+  }
+
+  function firstPane() {
+    if (mergedPane) return mergedPane;
+    for (const pane of panes.values()) return pane;
+    return null;
+  }
+
+  function allPanes() {
+    const list = [...panes.values()];
+    if (mergedPane) list.push(mergedPane);
+    return list;
+  }
+
+  function updateCursor(ts) {
+    const el = $("cursor");
+    if (ts == null) {
+      el.innerHTML = "";
+      return;
+    }
+    el.innerHTML = '⏱ <b>' + fmtTs(ts) + "</b>";
+  }
+
+  function syncFrom(source) {
+    if (!state.syncScroll || syncing || jumping) return;
+    const ts = topTs(source.body);
+    if (allPanes().length < 2) {
+      updateCursor(ts);
+      return;
+    }
+    if (ts == null) return;
+    syncing = true;
+    try {
+      for (const pane of allPanes()) {
+        if (pane === source) continue;
+        const el = lineAtTs(pane.body, ts);
+        if (el) {
+          setScroll(pane, el.offsetTop);
+          // 对齐到历史位置后不跟随新行，但保留「跳到最新」入口
+          pane.frozen = true;
+          pane.jump.textContent = pane.pending ? "↓ " + pane.pending + " 条新日志" : "↓ 跳到最新";
+          pane.jump.style.display = "block";
+        }
+      }
+      updateCursor(ts);
+    } finally {
+      // 无论中间发生什么都必须解锁，否则后续滚动永远不再同步
+      requestAnimationFrame(() => { syncing = false; });
+      setTimeout(() => { syncing = false; }, 120);
+    }
+  }
+
+  let syncing = false;
+  // 「跳到最新」期间禁止时间线对齐：否则先回底的那栏会把其他栏拉回历史并重新冻结
+  let jumping = false;
+  let jumpTimer = 0;
+
+  /// 滚动到指定像素，并记住期望位置以吞掉自己触发的 scroll 事件
+  function setScroll(pane, top) {
+    pane.body.scrollTop = top;
+    // 记录实际落点：浏览器会把超出的值 clamp 到 max，用请求值会抑制失败
+    pane.expectedTop = Math.round(pane.body.scrollTop);
+  }
+
+  function paint(pane, force) {
+    const body = pane.body;
+    const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 14;
+    if (!force && !atBottom && pane.painted) {
+      pane.frozen = true;
+      pane.jump.style.display = "block";
+      return;
+    }
+    pane.frozen = false;
+    pane.jump.style.display = "none";
+    const keep = body.scrollTop;
+    const anchorTs = topTs(body);
+    const rows = rowsFor(pane).filter(visible);
+    const slice = rows.slice(-MAX_ROWS);
+    const filtering = !!state.regex || state.minLevel !== "all";
+    body.innerHTML = slice.length
+      ? slice.map(rowHtml).join("")
+      : filtering
+        ? '<div class="empty">无匹配行（清空搜索 / 放宽级别可恢复）</div>'
+        : '<div class="empty">' + emptyHint(pane) + "</div>";
+    if (atBottom || force) setScroll(pane, body.scrollHeight);
+    else if (anchorTs != null) {
+      const anchor = lineAtTs(body, anchorTs);
+      setScroll(pane, anchor ? anchor.offsetTop : keep);
+    } else setScroll(pane, keep);
+    pane.painted = true;
+    if (pane === firstPane()) updateCursor(topTs(body));
+    updatePaneMeta(pane);
+  }
+
+  function atBottomOf(pane) {
+    const body = pane.body;
+    return body.scrollTop + body.clientHeight >= body.scrollHeight - 14;
+  }
+
+  function markFrozen(pane, addedCount) {
+    pane.frozen = true;
+    pane.pending = (pane.pending || 0) + addedCount;
+    pane.jump.textContent = pane.pending ? "↓ " + pane.pending + " 条新日志" : "↓ 跳到最新";
+    pane.jump.style.display = "block";
+  }
+
+  /// 空态文案必须区分三种情况，否则用户会以为“还要再跑一条命令”
+  /// 时间线是共用坐标：回到最新必须对所有栏一起生效，否则其他栏还停在冻结状态。
+  function jumpAllToLatest() {
+    jumping = true;
+    for (const pane of allPanes()) jumpToLatest(pane);
+    // scroll 事件可能延迟派发，锁一个时间窗而不是固定帧数
+    clearTimeout(jumpTimer);
+    jumpTimer = setTimeout(() => { jumping = false; }, 250);
+    flash("已回到最新");
+  }
+
+  /// 回到最新：解冻、清挂起、按当前 store 重绘并滚到底。
+  function jumpToLatest(pane) {
+    pane.frozen = false;
+    pane.pending = 0;
+    pane.catchup = false;
+    pane.expectedTop = null;
+    pane.jump.textContent = "↓ 跳到最新";
+    pane.jump.style.display = "none";
+    paint(pane, true);
+    setScroll(pane, pane.body.scrollHeight);
+  }
+
+  function emptyHint(pane) {
+    if (pane.merged) return "暂无日志";
+    const cfg = (cfgState.data && cfgState.data.source) || [];
+    const src = cfg.find((s) => s.tag === pane.tag);
+    if (!src) {
+      return "没有来源 · 到「⚙ 配置」新增，或 looplog tail --tag " + esc(pane.tag);
+    }
+    const st = cfgState.statuses.get(src.name);
+    if (st && st.running) {
+      return "暂无日志 · " + esc(src.name) + " 运行中（" + esc(st.target || src.from) + "），有新日志会自动出现";
+    }
+    return "来源已停止 · 到「⚙ 配置」点「启动」";
+  }
+
+  function updatePaneMeta(pane) {
+    const rows = rowsFor(pane);
+    if (pane.last) {
+      const latest = rows.length ? rows[rows.length - 1].ts_ms : null;
+      pane.last.textContent = latest == null ? "" : fmtTs(latest);
+    }
+    const c = countsFor(pane);
+    pane.meta.innerHTML =
+      c.total + " 行" +
+      (c.e ? ' · <span class="e">' + c.e + "E</span>" : "") +
+      (c.w ? ' · <span class="w">' + c.w + "W</span>" : "");
+  }
+
+  /// 稳态路径：只把新行追加进 DOM，不重建整栏。
+  /// 全量 innerHTML 重绘的成本随行数线性增长，1000 行/秒时会积压。
+  function appendRows(pane, added) {
+    const rows = pane.merged ? added : added.filter((r) => r.tag === pane.tag);
+    const vis = rows.filter(visible);
+    if (vis.length) {
+      const body = pane.body;
+      const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 14;
+      // 首帧可能渲染过「等待日志…」空态；追加前必须清掉，
+      // 否则第一行不是 .ln，时间线二分（topTs）永远取不到锚点。
+      if (!pane.painted || body.firstElementChild?.classList.contains("empty")) {
+        body.innerHTML = "";
+        pane.painted = true;
+      }
+      body.insertAdjacentHTML("beforeend", vis.map(rowHtml).join(""));
+      // DOM 上限：超出后批量裁掉头部，保持节点数恒定
+      if (body.children.length > MAX_ROWS + 300) {
+        const drop = body.children.length - MAX_ROWS;
+        for (let i = 0; i < drop; i++) body.firstElementChild.remove();
+      }
+      if (atBottom) setScroll(pane, body.scrollHeight);
+      if (pane === firstPane()) updateCursor(topTs(body));
+    }
+    updatePaneMeta(pane);
+  }
+
+  // -------------------------------------------------------------------- panes
+
+  function buildPanes() {
+    const host = $("panes");
+    host.innerHTML = "";
+    panes.clear();
+    mergedPane = null;
+
+    if (state.merged) {
+      const pane = makePane({ label: "ALL", tag: "", merged: true });
+      host.appendChild(pane.el);
+      mergedPane = pane;
+      return;
+    }
+    for (const col of state.columns) {
+      const pane = makePane({ label: col.label || col.tag, tag: col.tag, merged: false });
+      host.appendChild(pane.el);
+      panes.set(col.tag, pane);
+    }
+  }
+
+  function makePane({ label, tag, merged }) {
+    const el = document.createElement("section");
+    el.className = "pane";
+    const ph = document.createElement("div");
+    ph.className = "ph";
+    ph.innerHTML =
+      '<span class="dot"></span><span class="plabel"></span>' +
+      (merged ? "" : '<span class="ptag"></span>') +
+      '<span class="plast"></span>' +
+      '<span class="pmeta"></span>';
+    ph.querySelector(".plabel").textContent = label;
+    if (!merged) ph.querySelector(".ptag").textContent = tag;
+    el.appendChild(ph);
+
+    const body = document.createElement("div");
+    body.className = "pb";
+    el.appendChild(body);
+
+    const jump = document.createElement("button");
+    jump.className = "jump";
+    jump.textContent = "↓ 跳到最新";
+    el.appendChild(jump);
+
+    const pane = {
+      el, body, jump, tag, merged,
+      meta: ph.querySelector(".pmeta"),
+      last: ph.querySelector(".plast"),
+      painted: false, frozen: false,
+    };
+
+    body.addEventListener("scroll", () => {
+      if (body.scrollTop + body.clientHeight >= body.scrollHeight - 14) {
+        const wasFrozen = pane.frozen;
+        pane.frozen = false;
+        pane.pending = 0;
+        pane.jump.textContent = "↓ 跳到最新";
+        jump.style.display = "none";
+        // 冻结期间漏掉的行在解冻时补齐一次（增量路径不回头补）
+        if (wasFrozen) pane.catchup = true;
+      } else if (!pane.frozen) {
+        // 用户把这一栏滚到历史位置：立刻进入冻结，别等下一次轮询
+        markFrozen(pane, 0);
+      }
+      // 程序设置的 scrollTop 也会触发 scroll：位置与期望值一致就吞掉，
+      // 不回弹、不覆盖时间游标（时间窗口不可靠，scroll 事件可能晚到）。
+      if (pane.expectedTop != null && Math.abs(body.scrollTop - pane.expectedTop) <= 2) {
+        pane.expectedTop = null;
+        return;
+      }
+      if (scrollRaf) return;
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0;
+        syncFrom(pane);
+      });
+      // 兜底：rAF 若被节流/丢弃，别把同步永久锁死
+      setTimeout(() => { scrollRaf = 0; }, 120);
+    });
+    jump.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      jumpAllToLatest();
+    });
+    body.addEventListener("click", (ev) => {
+      const line = ev.target.closest(".ln");
+      if (!line) return;
+      const text = line.querySelector(".x").textContent;
+      const ts = line.querySelector(".t").textContent;
+      const g = line.querySelector(".g").textContent;
+      const out = ts + (g ? " [" + g + "] " : " ") + text;
+      navigator.clipboard?.writeText(out).then(() => flash("已复制一行"), () => {});
+    });
+    return pane;
+  }
+
+  function repaintAll(force) {
+    for (const pane of panes.values()) paint(pane, force);
+    if (mergedPane) paint(mergedPane, force);
+  }
+
+  // --------------------------------------------------------------------- data
+
+  function activeTags() {
+    return state.merged
+      ? state.columns.map((c) => c.tag)
+      : state.columns.map((c) => c.tag);
+  }
+
+  function absorb(labels) {
+    const added = [];
+    let maxMs = state.cursor;
+    for (const line of labels) {
+      maxMs = Math.max(maxMs, line.ts_ms);
+      const s = storeFor(line.tag);
+      const key = line.run + "#" + line.seq;
+      if (s.seen.has(key)) continue;
+      s.seen.add(key);
+      s.rows.push(line);
+      added.push(line);
+      if (s.rows.length > MAX_ROWS * 2) {
+        const dropped = s.rows.splice(0, s.rows.length - MAX_ROWS * 2);
+        for (const d of dropped) s.seen.delete(d.run + "#" + d.seq);
+      }
+    }
+    state.cursor = maxMs;
+    return added;
+  }
+
+  async function tick() {
+    if (state.paused) return;
+    const tags = activeTags().filter(Boolean);
+    if (!tags.length) {
+      setStat("没有分栏；点「栏…」选择 tag");
+      return;
+    }
+    const t0 = performance.now();
+    const params = new URLSearchParams({
+      after_ms: String(state.cursor),
+      tags: tags.join(","),
+      limit: "3000",
+    });
+    if (state.firstLoad) params.set("tail", "1");
+    try {
+      const res = await fetch("/api/lines?" + params.toString(), { cache: "no-store" });
+      const j = await res.json();
+      if (j.status !== "ok") throw new Error(j.error || "bad response");
+      const added = absorb(j.lines || []);
+      state.firstLoad = false;
+      state.lastLatency = Math.round(performance.now() - t0);
+      state.lastAdded = added.length;
+      if (added.length) {
+        for (const pane of allPanes()) {
+          const mine = pane.merged ? added.length : added.filter((r) => r.tag === pane.tag).length;
+          if (pane.frozen) {
+            markFrozen(pane, mine);
+            continue;
+          }
+          // 不在底部 = 用户在翻历史：不追加，攒 pending
+          if (!atBottomOf(pane)) {
+            markFrozen(pane, mine);
+            continue;
+          }
+          if (pane.catchup) {
+            pane.catchup = false;
+            paint(pane, true);
+            continue;
+          }
+          appendRows(pane, added);
+        }
+      }
+      updateStat();
+    } catch (e) {
+      // 顶栏只留短文案，细节放 tooltip，避免把其他控件挤掉
+      setStat("拉取失败");
+      $("stat").title = e.message;
+    }
+  }
+
+  function setStat(html) {
+    $("stat").innerHTML = html;
+  }
+
+  function updateStat() {
+    const rows = [...store.values()].reduce((n, s) => n + s.rows.length, 0);
+    const text = rows + " 行 · 拉取 " + state.lastLatency + "ms · 窗口 " +
+      fmtDuration(Date.now() - state.sinceMs) + " · " + (boot.db || "");
+    setStat(
+      "<b>" + rows + "</b> 行 · 拉取 " + state.lastLatency + "ms · 窗口 " +
+      fmtDuration(Date.now() - state.sinceMs) + " · " + esc(boot.db || "")
+    );
+    $("stat").title = text;
+  }
+
+  function flash(msg) {
+    const prev = $("stat").innerHTML;
+    setStat(esc(msg));
+    setTimeout(() => { $("stat").innerHTML = prev; updateStat(); }, 900);
+  }
+
+  // -------------------------------------------------------------- config panel
+  //
+  // 配置的唯一来源是 ~/.config/looplog/config.toml；这里编辑的是内存草稿，
+  // 「保存配置并应用」才落盘（服务端会重启受影响的来源）。
+
+  const cfgState = { data: null, statuses: new Map(), editing: -1 };
+
+  async function api(path, opts) {
+    const res = await fetch(path, opts);
+    let j = {};
+    try { j = await res.json(); } catch (_) {}
+    if (!res.ok || j.status === "error") throw new Error(j.error || "HTTP " + res.status);
+    return j;
+  }
+
+  function cfgMsg(text, cls) {
+    const el = $("cfgMsg");
+    el.textContent = text || "";
+    el.className = "kbd" + (cls ? " " + cls : "");
+  }
+
+  function markDirty() {
+    cfgMsg("有未保存的改动 → 点「保存配置并应用」", "dirty");
+  }
+
+  function draft() {
+    return cfgState.data;
+  }
+
+  function sinceOptionsMs() {
+    return [...$("since").options].map((o) => Number(o.value));
+  }
+  function parseSince(text) {
+    const m = String(text || "").trim().match(/^(\d+)\s*(s|m|h|d)?$/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    const unit = m[2] || "m";
+    return n * (unit === "s" ? 1000 : unit === "m" ? 60000 : unit === "h" ? 3600000 : 86400000);
+  }
+  function closestSince(ms) {
+    return sinceOptionsMs().reduce((a, b) => (Math.abs(b - ms) < Math.abs(a - ms) ? b : a));
+  }
+
+  /// 配置里的窗口（如 30m）不一定在下拉选项里：动态补一个 option，
+  /// 避免「下拉显示 15m、实际查的是 30m」这种误导。
+  function setSinceSelect(windowMs) {
+    const sel = $("since");
+    const value = String(windowMs);
+    if (![...sel.options].some((o) => o.value === value)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = fmtDuration(windowMs);
+      sel.appendChild(opt);
+    }
+    sel.value = value;
+  }
+
+  function renderCfgFields() {
+    const v = (draft() && draft().view) || {};
+    $("cfgSince").value = v.since || "15m";
+    $("cfgAutostart").value = v.autostart === false ? "0" : "1";
+    $("cfgColumns").value = (v.columns || []).map((c) => c.label + ":" + c.tag).join("\n");
+  }
+
+  function renderSources() {
+    const list = $("srcList");
+    const sources = (draft() && draft().source) || [];
+    if (!sources.length) {
+      list.innerHTML = '<div class="empty">还没有来源；点「+ 新增」</div>';
+      return;
+    }
+    list.innerHTML = "";
+    sources.forEach((s, i) => {
+      const st = cfgState.statuses.get(s.name) || {};
+      const target = st.target || s.path || s.unit ||
+        (s.from === "logcat" ? (s.serial ? "adb -s " + s.serial + " logcat" : "adb logcat") : "");
+      const el = document.createElement("div");
+      el.className = "src";
+      el.innerHTML =
+        '<span class="dot ' + (st.running ? "on" : "off") + '"></span>' +
+        '<div class="src-main">' +
+          '<div class="src-title"><b>' + esc(s.name) + "</b>" +
+            '<span class="kbd">' + esc(s.tag) + "</span>" +
+            (s.enabled === false ? '<span class="kbd">(禁用)</span>' : "") +
+          "</div>" +
+          '<div class="src-sub">' + esc(s.from) + " · " + esc(target) +
+            (st.run_id ? " · run " + esc(st.run_id.slice(0, 8)) : "") + "</div>" +
+        "</div>" +
+        '<div class="src-acts">' +
+          '<button data-act="toggle" data-i="' + i + '">' + (st.running ? "停止" : "启动") + "</button>" +
+          '<button data-act="edit" data-i="' + i + '">编辑</button>' +
+          '<button data-act="del" data-i="' + i + '">删除</button>' +
+        "</div>";
+      list.appendChild(el);
+    });
+  }
+
+  function fieldOf(id) {
+    const el = $(id);
+    return el.closest("label") || el;
+  }
+
+  function syncFormVisibility() {
+    const from = $("fFrom").value;
+    $("fCommandWrap").hidden = from !== "cmd";
+    fieldOf("fUnit").style.opacity = from === "journald" ? "1" : ".45";
+    fieldOf("fSince").style.opacity = from === "journald" ? "1" : ".45";
+    fieldOf("fPath").style.opacity = from === "nginx" || from === "file" ? "1" : ".45";
+    fieldOf("fSerial").style.opacity = from === "logcat" ? "1" : ".45";
+  }
+
+  function openSourceForm(index) {
+    cfgState.editing = typeof index === "number" ? index : -1;
+    const s = cfgState.editing >= 0
+      ? draft().source[cfgState.editing]
+      : { name: "", tag: "", from: "journald", enabled: true, remote: "", unit: "", path: "",
+          serial: "", since: "15m", lines: 500, sudo: false, reconnect: true, command: [] };
+    $("srcFormTitle").textContent = cfgState.editing >= 0 ? "编辑来源 · " + s.name : "新增来源";
+    $("fName").value = s.name || "";
+    $("fTag").value = s.tag || "";
+    $("fFrom").value = s.from || "journald";
+    $("fRemote").value = s.remote || "";
+    $("fUnit").value = s.unit || "";
+    $("fPath").value = s.path || "";
+    $("fSerial").value = s.serial || "";
+    $("fSince").value = s.since || "";
+    $("fLines").value = s.lines == null ? "" : s.lines;
+    $("fSudo").checked = !!s.sudo;
+    $("fReconnect").checked = s.reconnect !== false;
+    $("fEnabled").checked = s.enabled !== false;
+    $("fCommand").value = (s.command || []).join(" ");
+    syncFormVisibility();
+    $("srcFormWrap").hidden = false;
+  }
+
+  function commitSourceForm() {
+    const val = (id) => $(id).value.trim();
+    const from = $("fFrom").value;
+    const source = {
+      name: val("fName"),
+      tag: val("fTag"),
+      from: from,
+      enabled: $("fEnabled").checked,
+      remote: val("fRemote") || null,
+      unit: val("fUnit") || null,
+      path: val("fPath") || null,
+      serial: val("fSerial") || null,
+      since: val("fSince") || null,
+      lines: $("fLines").value ? Number($("fLines").value) : null,
+      sudo: $("fSudo").checked,
+      reconnect: $("fReconnect").checked,
+      kind: null,
+      command: from === "cmd" ? val("fCommand").split(/\s+/).filter(Boolean) : [],
+    };
+    if (!source.name) return cfgMsg("name 必填", "dirty");
+    if (!source.tag) return cfgMsg("tag 必填（分栏名）", "dirty");
+    const dup = draft().source.some((s, i) => s.name === source.name && i !== cfgState.editing);
+    if (dup) return cfgMsg("name 重复：" + source.name, "dirty");
+
+    if (cfgState.editing >= 0) draft().source[cfgState.editing] = source;
+    else draft().source.push(source);
+    cfgState.editing = -1;
+    $("srcFormWrap").hidden = true;
+    renderSources();
+    markDirty();
+  }
+
+  function removeSource(index) {
+    draft().source.splice(index, 1);
+    renderSources();
+    markDirty();
+  }
+
+  async function toggleSource(name, running) {
+    try {
+      cfgMsg((running ? "停止 " : "启动 ") + name + "…");
+      await api("/api/sources/" + encodeURIComponent(name) + "/" + (running ? "stop" : "start"), {
+        method: "POST",
+      });
+      await loadStatuses();
+      cfgMsg("已" + (running ? "停止" : "启动") + " " + name);
+    } catch (e) {
+      cfgMsg("失败：" + e.message, "dirty");
+    }
+  }
+
+  function collectViewFields() {
+    const d = draft();
+    if (!d.view) d.view = {};
+    d.view.since = $("cfgSince").value.trim() || "15m";
+    d.view.autostart = $("cfgAutostart").value === "1";
+    d.view.columns = $("cfgColumns").value
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const i = line.indexOf(":");
+        return i > 0
+          ? { label: line.slice(0, i).trim(), tag: line.slice(i + 1).trim() }
+          : { label: line, tag: line };
+      });
+  }
+
+  function applyConfiguredView() {
+    const v = draft() && draft().view;
+    if (!v) return;
+    state.columns = (v.columns || []).map((c) => ({ label: c.label, tag: c.tag }));
+    const windowMs = parseSince(v.since);
+    if (windowMs) {
+      state.sinceMs = Date.now() - windowMs;
+      setSinceSelect(windowMs);
+    }
+    resetData();
+    tick();
+  }
+
+  async function saveConfig() {
+    collectViewFields();
+    try {
+      cfgMsg("保存中…");
+      await api("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft()),
+      });
+      await loadConfigPanel();
+      applyConfiguredView();
+      cfgMsg("已保存并应用");
+    } catch (e) {
+      cfgMsg("保存失败：" + e.message, "dirty");
+    }
+  }
+
+  async function loadStatuses(refreshEmpty) {
+    try {
+      const j = await api("/api/sources");
+      cfgState.statuses = new Map((j.sources || []).map((s) => [s.name, s]));
+    } catch (_) {
+      /* older server or transient error */
+    }
+    renderSources();
+    if (refreshEmpty) {
+      const hasRows = [...store.values()].some((s) => s.rows.length > 0);
+      if (!hasRows) repaintAll(true);
+    }
+  }
+
+  async function loadConfigPanel() {
+    const j = await api("/api/config");
+    cfgState.data = j.config;
+    cfgState.data.source = cfgState.data.source || [];
+    $("cfgPath").textContent = j.path || "";
+    renderCfgFields();
+    await loadStatuses();
+  }
+
+  // --------------------------------------------------------------------- init
+
+  function resetData() {
+    store.clear();
+    state.cursor = state.sinceMs;
+    state.firstLoad = true;
+    buildPanes();
+    repaintAll(true);
+  }
+
+  async function autodiscover() {
+    if (state.columns.length) return;
+    try {
+      const res = await fetch("/api/tags?since_ms=" + state.sinceMs);
+      const j = await res.json();
+      if (j.status !== "ok") return;
+      const tags = (j.tags || []).map((t) => t.tag).filter(Boolean).slice(0, 4);
+      if (tags.length) {
+        state.columns = tags.map((t) => ({ label: t, tag: t }));
+        resetData();
+      }
+    } catch (_) { /* offline */ }
+  }
+
+  async function openPicker() {
+    const res = await fetch("/api/tags?since_ms=" + state.sinceMs);
+    const j = await res.json();
+    const tags = (j.tags || []).filter((t) => t.tag);
+    const chosen = new Set(state.columns.map((c) => c.tag));
+    const list = $("pickerList");
+    list.innerHTML = tags.length
+      ? tags.map((t) =>
+          '<label><input type="checkbox" value="' + esc(t.tag) + '"' +
+          (chosen.has(t.tag) ? " checked" : "") + "><span>" + esc(t.tag) +
+          '</span><span class="n">' + t.lines + " 行</span></label>"
+        ).join("")
+      : '<div class="empty">还没有任何 tag。先开一个 <b>looplog tail --tag xxx</b></div>';
+    $("picker").classList.add("show");
+  }
+
+  function applyPicker() {
+    const picked = [...$("pickerList").querySelectorAll("input:checked")].map((i) => i.value);
+    $("picker").classList.remove("show");
+    state.columns = picked.map((t) => ({ label: t, tag: t }));
+    resetData();
+    tick();
+  }
+
+  function bind() {
+    $("since").addEventListener("change", (e) => {
+      state.sinceMs = Date.now() - Number(e.target.value);
+      resetData();
+      tick();
+    });
+    $("level").addEventListener("change", (e) => {
+      state.minLevel = e.target.value;
+      repaintAll(true);
+    });
+    let timer = 0;
+    $("q").addEventListener("input", (e) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        state.pattern = e.target.value.trim();
+        compilePattern();
+        repaintAll(true);
+      }, 120);
+    });
+    $("pause").addEventListener("click", () => {
+      state.paused = !state.paused;
+      $("pause").classList.toggle("on", state.paused);
+      $("pause").textContent = state.paused ? "继续" : "暂停";
+    });
+    $("mode").addEventListener("click", () => {
+      state.merged = !state.merged;
+      document.body.classList.toggle("merged", state.merged);
+      $("mode").textContent = state.merged ? "合并" : "分栏";
+      buildPanes();
+      repaintAll(true);
+    });
+    $("sync").addEventListener("click", () => {
+      state.syncScroll = !state.syncScroll;
+      $("sync").classList.toggle("on", state.syncScroll);
+      flash(state.syncScroll ? "已开：按时间线对齐滚动" : "已关：各栏独立滚动");
+    });
+    $("cols").addEventListener("click", openPicker);
+    $("pickCancel").addEventListener("click", () => $("picker").classList.remove("show"));
+    $("pickOk").addEventListener("click", applyPicker);
+    $("clear").addEventListener("click", () => {
+      store.clear();
+      state.cursor = Date.now();
+      repaintAll(true);
+    });
+    $("cfgBtn").addEventListener("click", async () => {
+      $("cfg").classList.add("open");
+      try {
+        await loadConfigPanel();
+      } catch (e) {
+        cfgMsg("配置加载失败：" + e.message, "dirty");
+      }
+    });
+    $("cfgClose").addEventListener("click", () => $("cfg").classList.remove("open"));
+    $("srcNew").addEventListener("click", () => openSourceForm(-1));
+    $("fFrom").addEventListener("change", syncFormVisibility);
+    $("fSave").addEventListener("click", commitSourceForm);
+    $("fCancel").addEventListener("click", () => {
+      $("srcFormWrap").hidden = true;
+      cfgState.editing = -1;
+    });
+    $("cfgSave").addEventListener("click", saveConfig);
+    $("srcList").addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("button[data-act]");
+      if (!btn) return;
+      const i = Number(btn.dataset.i);
+      const s = draft() && draft().source && draft().source[i];
+      if (!s) return;
+      if (btn.dataset.act === "edit") openSourceForm(i);
+      else if (btn.dataset.act === "del") removeSource(i);
+      else if (btn.dataset.act === "toggle") {
+        const st = cfgState.statuses.get(s.name) || {};
+        await toggleSource(s.name, !!st.running);
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      if (e.key === "p") $("pause").click();
+      if (e.key === "g") jumpAllToLatest();
+      if (e.key === "m") $("mode").click();
+      if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+      if (e.key === "Escape") $("picker").classList.remove("show");
+    });
+  }
+
+  async function init() {
+    document.body.classList.toggle("merged", state.merged);
+    $("sync").classList.toggle("on", state.syncScroll);
+    bind();
+    buildPanes();
+    repaintAll(true);
+
+    // 配置文件是唯一事实源：启动后总是读一次并应用。
+    // CLI --column / --since 只影响本次进程启动时的 bootstrap。
+    try {
+      await loadConfigPanel();
+      await loadStatuses(true);
+    } catch (_) {
+      /* 旧服务端或首次运行：退回 bootstrap 值 */
+    }
+    const configured = (draft() && draft().view && draft().view.columns) || [];
+    if (configured.length) {
+      applyConfiguredView();
+    } else {
+      await autodiscover();
+      tick();
+    }
+
+    // 诊断钩子：暴露闭包内的状态，便于在 DevTools 里排查同步/渲染问题
+    window.__looplog = {
+      state,
+      panes,
+      allPanes,
+      topTs,
+      lineAtTs,
+      firstPane,
+      syncFrom,
+      get syncing() { return syncing; },
+      get scrollRaf() { return scrollRaf; },
+      get store() { return store; },
+      paint,
+    };
+
+    setInterval(tick, POLL_MS);
+    // 配置面板打开时刷新运行状态（启停/崩溃可及时看到）
+    setInterval(() => {
+      if ($("cfg").classList.contains("open")) loadStatuses().catch(() => {});
+    }, 4000);
+    // 来源可能崩溃/停止：定期刷新，空栏的提示要跟着变
+    setInterval(() => loadStatuses(true).catch(() => {}), 15000);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

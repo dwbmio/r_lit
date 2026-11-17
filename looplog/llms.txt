@@ -5,7 +5,19 @@ storage: SQLite database, default path from platform state/data directory
 retention: default maximum 24 hours; cleanup runs during serve, write, query, and clean commands
 network: local only; HTTP server refuses non-loopback bind addresses in MVP
 primary_mvp: WeChat Mini Program debugging logs
-commands: serve, run, push, list, show, grep, clean
+commands: serve, run, push, tail, view, config, list, show, grep, clean
+config: single source of truth ~/.config/looplog/config.toml (--config override, honours XDG_CONFIG_HOME); [view] since/autostart/columns, [serve] addr/allow_lan/allow_cidrs, [[source]] name/tag/from/remote/unit/path/since/lines/sudo/reconnect/enabled
+config_api: the view page gear uses GET /api/config, PUT /api/config, GET /api/sources, POST /api/sources/{name}/start|stop|restart; saving writes the file (with .bak) and restarts running sources; tokens are never written to the file
+config_semantics: start/stop is runtime only; enabled drives autostart and save-and-apply; view --column/--since only override the first process
+tail: structured log sources without HTTP; --from journald (journalctl -o json: us timestamps, PRIORITY, pid/unit), --from nginx (parses time_local/status/request_time/upstream_time), --from logcat (adb epoch time, level, pid/tid/tag; --serial selects a device), --from file, --from cmd (any command); --remote runs over ssh, --sudo prepends sudo -n; --reconnect with exponential backoff into the same run
+tail_time_semantics: ts_ms holds the source timestamp, ingest_ms holds the receive time; the viewer shows a lag badge when |lag|>=250ms, negative means clock skew
+tail_cleanup: journald PRIORITY=6 with WARN/ERROR in the message is raised (never lowered); ANSI escapes stripped
+view: local read-only multi-column log window (loopback HTTP + embedded single page); tag columns, merged timeline, level filter, regex highlight, pause/freeze, click-to-copy, timeline alignment (on by default: scrolling one column binary-searches the others to the first row with ts >= anchor), top-bar time cursor plus per-column latest timestamp; --open starts a chromeless Chrome --app window on macOS
+journald_resume: reconnect uses the highest stored ts_ms as --since @<epoch>.<usec> (+1us) so nothing is lost or duplicated; nginx/file have no anchor and replay --lines on reconnect
+view_endpoints: GET /; GET /api/lines?after_ms=&tags=&limit=&tail=1; GET /api/tags?since_ms=; GET /healthz
+concurrent_writers: multiple tail processes may share one database (WAL + busy_timeout + journal_mode switch retry)
+level_inference: tail infers ERROR/FATAL/PANIC->error, WARN->warn, nginx 5xx->error/4xx->warn, stderr->error
+real_device_example: examples/picboo-dev.sh starts client/edge/api/gql tails plus the viewer in one command
 json_output: global --json flag for query and status commands
 http_endpoints: GET /healthz; POST /v1/runs; POST /v1/runs/{run_id}/lines; PATCH /v1/runs/{run_id}
 line_ingest_format: application/x-ndjson with ts, stream, level, event, text, meta

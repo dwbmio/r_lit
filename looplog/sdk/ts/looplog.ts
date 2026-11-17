@@ -3,6 +3,8 @@ export type LoopLogMeta = Record<string, unknown>;
 export interface LoopLogClientOptions {
   endpoint?: string;
   timeoutMs?: number;
+  /** Shared secret for `looplog serve --allow-lan --token`. */
+  token?: string;
 }
 
 export interface StartRunInput {
@@ -32,10 +34,12 @@ export interface FinishRunInput {
 export class LoopLogClient {
   private endpoint: string;
   private timeoutMs: number;
+  private token?: string;
 
   constructor(options: LoopLogClientOptions = {}) {
     this.endpoint = (options.endpoint ?? "http://127.0.0.1:3768").replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? 800;
+    this.token = options.token;
   }
 
   async startRun(input: StartRunInput): Promise<LoopLogRun> {
@@ -69,8 +73,13 @@ export class LoopLogClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
+      const headers: Record<string, string> = {
+        ...((init.headers as Record<string, string> | undefined) ?? {}),
+      };
+      if (this.token) headers["x-looplog-token"] = this.token;
       const response = await fetch(`${this.endpoint}${path}`, {
         ...init,
+        headers,
         signal: controller.signal,
       });
       if (!response.ok) {
