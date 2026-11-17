@@ -1,7 +1,7 @@
 name: deskpet
 type: rust-binary-crate
 purpose: 无边框透明置顶的 3D 桌面萌宠，常驻系统托盘 / macOS 菜单栏，用 Bevy 编写。
-engine: bevy 0.18(裁剪 feature), bevy_egui 0.39, bevy_tray_icon 0.3
+engine: bevy 0.18(裁剪 feature), bevy_tray_icon 0.3（egui/bevy_egui 已移除）
 entrypoint: src/main.rs
 binary: deskpet
 
@@ -9,7 +9,7 @@ mascot 萌宠:
 - 3D 绑骨 GLB + Idle 动画，从 assets/block.glb 加载（场景0、动画0）
 - 由图片经 fal.ai 托管的 Meshy 6 image-to-3d 生成（绑骨+动画）
 - 回退：无 GLB 时用内置程序化史莱姆（Sphere 网格）
-- HUD "Switch" 在 assets/block.glb 与 assets/blast.glb 间切换
+- RPC `set_glb` 切换当前萌宠 GLB
 - Mascot 资源 { use_glb, glb }，PetAnim { graph, node } 组件
 - setup_mascot_animation: Added<AnimationPlayer> 时循环播放 node（静态 GLB 无 player = 空操作）
 
@@ -24,11 +24,10 @@ window 窗口:
 - ClearColor(Color::NONE), transparent=true, composite_alpha_mode=PostMultiplied
 - decorations=false, resizable=false, has_shadow=false, WindowLevel::AlwaysOnTop, 初始 visible=false
 - AssetPlugin.file_path = 当前目录/assets（直跑二进制也能找到资源，而非 exe 目录）
-- 相机渲染整窗（不切 viewport：bevy_egui 把 egui 画布绑相机 viewport）
-- 相机 +x 偏移使萌宠落在左侧 pet 区，HUD 在右；Msaa::Off
+- 相机渲染整窗，萌宠居中（world x=0）；Msaa::Off
 
 passthrough 穿透:
-- hit_test = (光标在身体圆内, 圆心(PET_W/2,WIN_H/2), HIT_R) OR (光标在 HUD 矩形) OR 拖拽中
+- hit_test = (光标在身体圆内, 圆心(PET_W/2,WIN_H/2), HIT_R) OR 拖拽中
 - 光标位置取操作系统全局（macOS core-graphics CGEvent；Windows GetCursorPos）-> global_cursor_physical(scale)
 - 按键走 Bevy ButtonInput（点击有意义时 hit_test 一定开）
 - focus_on_hover: hover.near 上升沿 + 启动时聚焦窗口，否则 macOS 不给无边框 overlay 发事件
@@ -45,22 +44,20 @@ reminders 提醒协议 (src/notify.rs):
   - {"type":"notify","title":?,"body":"...","level":"info|success|warn|error","duration_ms":?}
   - {"type":"clear"}
 - level: serde de_level 容错（warn/warning、error/err 同义；未知 -> info）
-- Level::accent() -> 按级别返回气泡描边/标题色
+- Level 仅存 severity 语义（影响默认时长）；原 accent() 配色随气泡移除删除
 - Notice::from_parts: 显式 duration_ms 钳制 800..120000；否则按级别派生 base(info/success 4500, warn 6500, error 9000)+28ms/字，上限 20000
 - NotifyInbox(Arc<Mutex<VecDeque<Incoming>>>): 监听线程 push（上限 CAP 256，超出丢最旧），drain_inbox 每帧取
 - NotifyState { current, timer, queue }: showing()、dismiss()；同一时刻只显示一条，按到达顺序
 - drain_inbox: Notify -> 入队 + window.visible=true + 蹦跳吸引注意(pet.vy=JUMP_V)；Clear -> dismiss + 清队列
 - advance_notify: tick 计时器、当前到期清除、从队列提升下一条
-- notify_bubble (EguiPrimaryContextPass, 在 hud 之前): 顶部 egui::Area 气泡，按级别描边，body 自动换行，穿透状态下也照常绘制
-- drive_input: 展示时把 BUBBLE_H=WIN_H*0.5 顶部条带并入 hit_test+near；左键点气泡 -> NotifyState.dismiss()（优先于身体拖拽）
+- 展示: 经 os_notify 派发的 OS 系统通知（去重 + 节流）；应用内 egui 气泡已移除
 - CLI: `deskpet send [OPTS] [BODY...]` (notify::send_cli) -> 连 127.0.0.1:<port> 写一行 NDJSON；参数 -t/--title -m/--body -l/--level -d/--duration --clear -h；body 优先级: -m > 位置参数 > stdin(非 tty)；连接被拒 -> 友好提示并 exit 1
-- 文档入口: 托盘菜单 "Reminder Protocol Docs" + HUD "Protocol Docs" 按钮 -> open_protocol_docs() (main.rs)：按 locale 选 PROTOCOL_CN.md/PROTOCOL.md，优先本地文件(CWD/exe目录/../Resources)否则 DOCS_URL_BASE github 回退，shell 调 open/start/xdg-open（无额外依赖）
+- 文档入口: 托盘菜单 "Reminder Protocol Docs" -> open_protocol_docs() (main.rs)：按 locale 选 PROTOCOL_CN.md/PROTOCOL.md，优先本地文件(CWD/exe目录/../Resources)否则 DOCS_URL_BASE github 回退，shell 调 open/start/xdg-open（无额外依赖）
 - 完整线格式参考: PROTOCOL.md / PROTOCOL_CN.md
 - 测试: src/notify.rs #[cfg(test)] 覆盖解析(完整/最小/未知level/未知字段/clear) + TTL 钳制/派生
 
 dependencies 依赖:
 - bevy = { default-features=false, features=[default_app, multi_threaded, bevy_winit, 3d_bevy_render, scene, png, x11, wayland] }
-- bevy_egui = { default-features=false, features=[render, default_fonts] }
 - bevy_tray_icon = "0.3"
 - rand 0.8, thiserror 2, log 0.4
 - serde 1 (derive) + serde_json 1（提醒协议）
@@ -69,7 +66,7 @@ dependencies 依赖:
 
 memory 内存优化:
 - 萌宠贴图 2048->128 降采样（显存 16MB->64KB），用 tools/glb_shrink_texture.py
-- 裁 bevy + bevy_egui feature（去 audio/picking/bevy_ui/gilrs/sysinfo/剪贴板/webbrowser）
+- 裁 bevy feature（去 audio/picking/bevy_ui/gilrs/sysinfo）；bevy_egui 整体移除
 - Msaa::Off
 - 实测：~120MB 私有, ~290MB 含 GPU（原 ~150/~460），二进制 ~44MB
 
@@ -80,12 +77,12 @@ tools 工具:
 - tools/glb_backup/: 原始全分辨率 GLB（block.full.glb, blast.full.glb）
 
 tunables 顶部常量:
-- PET_W=150, WIN_H=200, HUD_W=160, WIN_W=PET_W+HUD_W
+- PET_W=150, WIN_H=200, WIN_W=PET_W
 - UI_SCALE=1.2, HIT_R=WIN_H*0.45, NEAR_R=PET_W*1.4, GEAR_W/H=30*UI_SCALE
 - WALK_SPEED=90, JUMP_V=3.2, GRAVITY=14.0, FACE_YAW=0.45, BODY_W=1.0
 - ACTIVE_WAIT~16.7ms, NEAR_WAIT=33ms, IDLE_WAIT=120ms
 - MASCOT_GLB="block.glb"
-- BUBBLE_H=WIN_H*0.5, notify::DEFAULT_PORT=47800
+- notify::DEFAULT_PORT=47800
 
 build 构建:
 - cd deskpet && cargo run [--release]   # 启动萌宠 + 提醒监听

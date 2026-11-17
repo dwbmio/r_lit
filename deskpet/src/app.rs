@@ -3,20 +3,24 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
+use bevy::asset::AssetEventSystems;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::window::{
-    CompositeAlphaMode, CursorOptions, Monitor, PrimaryWindow, WindowLevel, WindowPosition,
-    WindowResolution,
+    CompositeAlphaMode, CursorOptions, ExitCondition, Monitor, PrimaryWindow, WindowLevel,
+    WindowPosition, WindowResolution,
 };
 use bevy::asset::AssetPlugin;
 use bevy::ecs::system::NonSendMarker;
 use bevy::gltf::GltfAssetLabel;
 use bevy::winit::{UpdateMode, WinitSettings, WINIT_WINDOWS};
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{
+    egui, input::EguiWantsInput, EguiContexts, EguiPlugin, EguiPostUpdateSet,
+    EguiPrimaryContextPass,
+};
 use bevy_tray_icon::plugin::menu_event::MenuMessage;
 use bevy_tray_icon::plugin::TrayIconPlugin;
-use bevy_tray_icon::resource::{Menu, MenuItem, TrayIcon};
+use bevy_tray_icon::resource::{Menu, MenuIconKind, MenuItem, TrayIcon};
 use bevy_tray_icon::{
     MouseButton as TrayMouseButton, MouseButtonState as TrayMouseButtonState, TrayIconEvent,
 };
@@ -26,6 +30,7 @@ use crate::notify::NotifyState;
 use crate::os_notify::{OsNotifyPlugin, make_notifier};
 use crate::rpc::bevy_bridge::RpcTaskInbox;
 use bevy::log::LogPlugin;
+use bevy_spine::{SpinePlugin, SpineSet};
 
 // ============================================================================
 //  SIZE / LAYOUT KNOBS — tune these to taste while debugging the pet.
@@ -36,20 +41,19 @@ use bevy::log::LogPlugin;
 // dragging the mascot moves the HUD with it.
 
 /// Visible mascot area width (logical px). Shrink this to shrink the slime.
-const PET_W: f32 = 150.0;
+pub(crate) const PET_W: f32 = 150.0;
 /// Window height (logical px).
-const WIN_H: f32 = 200.0;
-/// Expanded HUD panel width (logical px). The HUD area is transparent and
-/// click-through while collapsed, so it costs no screen space until opened.
-const HUD_W: f32 = 160.0;
-/// HUD widget/text size multiplier (buttons, sliders, gear, labels).
+pub(crate) const WIN_H: f32 = 200.0;
+/// Expanded HUD panel width (logical px). Spine 动画名需稍宽。
+const HUD_W: f32 = 172.0;
+/// HUD widget/text size multiplier.
 const UI_SCALE: f32 = 1.2;
 // ============================================================================
 
 /// Total logical window dimensions (pixels).
-const WIN_W: f32 = PET_W + HUD_W;
-/// Mascot grab radius (logical px), centered on the left pet area where the
-/// camera frames the mascot (offset left, clear of the right-side HUD).
+pub(crate) const WIN_W: f32 = PET_W + HUD_W;
+/// Mascot grab radius (logical px), centered on the window where the camera
+/// frames the mascot.
 const HIT_R: f32 = PET_W * 0.45;
 /// Horizontal walking speed, physical px/sec.
 const WALK_SPEED: f32 = 90.0;
@@ -77,8 +81,8 @@ fn mascot_glb_exists(assets_dir: &std::path::Path) -> bool {
 // `Reactive`, and a system rewrites the wait interval every tick based on
 // activity, so an idle, untouched mascot costs almost nothing.
 
-/// ~60 fps while moving / dragging / hovered / animating.
-const ACTIVE_WAIT: Duration = Duration::from_micros(16_667);
+/// ~30 fps while moving / dragging / hovered / animating (省 CPU/GPU).
+const ACTIVE_WAIT: Duration = Duration::from_millis(33);
 /// ~30 fps when the pointer is approaching the window (snappy to grab).
 const NEAR_WAIT: Duration = Duration::from_millis(33);
 /// ~8 fps idle heartbeat: just enough to poll the global cursor for hover and
@@ -88,22 +92,14 @@ const IDLE_WAIT: Duration = Duration::from_millis(120);
 /// pointer counts as "approaching".
 const NEAR_R: f32 = PET_W * 1.4;
 
-/// Collapsed HUD: a gear button sits at the top-right corner of the pet area.
-/// Click-region dimensions scale with `UI_SCALE` so they track the gear size.
 const GEAR_W: f32 = 30.0 * UI_SCALE;
 const GEAR_H: f32 = 30.0 * UI_SCALE;
+const BUBBLE_H: f32 = WIN_H * 0.5;
 
-/// Logical center of the mascot body within the window (top-left origin). The
-/// camera renders the full window but is offset so the mascot sits in the left
-/// pet area, clear of the right-side HUD.
+/// Logical center of the mascot body within the window (top-left origin): left pet area.
 fn pet_center() -> Vec2 {
     Vec2::new(PET_W * 0.5, WIN_H * 0.5)
 }
-
-/// Reminder bubble: a top-anchored speech bubble drawn over the upper part of
-/// the window when a reminder is active. Its zone is added to the interactive
-/// hit-test so a click anywhere on it dismisses the reminder.
-const BUBBLE_H: f32 = WIN_H * 0.5;
 
 const HELP: &str = "\
 deskpet — frameless transparent always-on-top 3D mascot (Bevy)
@@ -145,6 +141,24 @@ pub fn try_cli(args: &[String]) -> Option<i32> {
     }
 }
 
+/// 菜单栏托盘行为模式。
+#[derive(Debug, Clone)]
+pub enum TrayMode {
+    /// deskpet 默认：左键显隐萌宠，右键 Show/Hide/Docs/Quit。
+    Deskpet,
+    /// starlink-dev serve：RMB 风格菜单栏，左键弹出菜单。
+    StarlinkDev {
+        /// admin HTTP 实际监听端口写入此文件（如 `8901` 一行）。
+        admin_port_file: std::path::PathBuf,
+    },
+}
+
+impl Default for TrayMode {
+    fn default() -> Self {
+        Self::Deskpet
+    }
+}
+
 /// 启动参数（starlink-dev serve 等同进程嵌入时可定制）。
 #[derive(Debug, Clone)]
 pub struct LaunchConfig {
@@ -154,8 +168,12 @@ pub struct LaunchConfig {
     pub start_rpc_listeners: bool,
     /// 启动时直接显示萌宠窗口（默认隐藏，靠菜单栏图标显隐）。
     pub start_visible: bool,
+    /// `notification/show` 时是否自动弹出萌宠窗口（默认 false，仅手动显示）。
+    pub auto_show_on_notify: bool,
     /// starlink-dev `serve` 写入 pid 文件路径；退出时删除，避免残留锁。
     pub serve_pid_file: Option<std::path::PathBuf>,
+    /// 菜单栏图标与菜单行为。
+    pub tray_mode: TrayMode,
 }
 
 impl Default for LaunchConfig {
@@ -164,15 +182,56 @@ impl Default for LaunchConfig {
             assets_dir: None,
             start_rpc_listeners: true,
             start_visible: false,
+            auto_show_on_notify: false,
             serve_pid_file: None,
+            tray_mode: TrayMode::default(),
         }
     }
 }
 
+#[derive(Resource, Clone)]
+pub(crate) struct LaunchTrayConfig {
+    pub(crate) mode: TrayMode,
+    pub(crate) start_visible: bool,
+    pub(crate) auto_show_on_notify: bool,
+}
+
 /// 立即结束进程（跳过 Bevy/winit 慢速 teardown，避免主线程卡住）。
+fn append_serve_exit_log(line: &str) {
+    let Some(path) = LAUNCH_PID_FILE.get() else {
+        return;
+    };
+    let log = path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|h| h.join("log/serve.log"));
+    if let Some(log) = log {
+        if let Some(parent) = log.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 pub(crate) fn shutdown_now() -> ! {
     log::info!("deskpet: shutting down");
+    if LAUNCH_PID_FILE.get().is_some() {
+        append_serve_exit_log(&format!(
+            "[serve] deskpet 正常退出 pid={}",
+            std::process::id()
+        ));
+    }
     if let Some(path) = LAUNCH_PID_FILE.get() {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(path) = LAUNCH_ADMIN_PORT_FILE.get() {
         let _ = std::fs::remove_file(path);
     }
     std::process::exit(0);
@@ -190,11 +249,15 @@ pub(crate) fn shutdown_after_rpc() {
 }
 
 static LAUNCH_PID_FILE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+static LAUNCH_ADMIN_PORT_FILE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// 启动萌宠 GUI + 可选 RPC 监听。
 pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
     if let Some(path) = config.serve_pid_file {
         let _ = LAUNCH_PID_FILE.set(path);
+    }
+    if let TrayMode::StarlinkDev { admin_port_file } = &config.tray_mode {
+        let _ = LAUNCH_ADMIN_PORT_FILE.set(admin_port_file.clone());
     }
     if config.start_rpc_listeners {
         try_spawn_rpc_listeners(&rpc_inbox);
@@ -212,13 +275,34 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
     apply_macos_accessory_early();
 
     let start_visible = config.start_visible;
+    let tray_config = LaunchTrayConfig {
+        mode: config.tray_mode.clone(),
+        start_visible,
+        auto_show_on_notify: config.auto_show_on_notify,
+    };
+    // starlink-dev 菜单栏模式：进程生命周期只由菜单 Quit 决定；宠物窗口的
+    // 显隐/关闭都不应退出进程（否则双击/右键隐藏会连带杀掉菜单栏图标）。
+    // 桌面模式保持原默认（所有窗口关闭即退出）。
+    let tray_exit_condition = match &tray_config.mode {
+        TrayMode::StarlinkDev { .. } => ExitCondition::DontExit,
+        TrayMode::Deskpet => ExitCondition::OnAllClosed,
+    };
 
-    App::new()
-        // Fully transparent background — only the mascot is painted.
-        .insert_resource(ClearColor(Color::NONE))
-        // Event-driven loop: animate at ~60 fps when focused, throttle to
-        // ~30 fps otherwise. This is what keeps an idle mascot cheap.
-        // Start active; `adaptive_frame_rate` rewrites this every tick.
+    let use_spine = crate::spine_pet::spine_enabled(&assets_dir);
+    if use_spine {
+        log::info!("deskpet: 启动 Spine 模式（mascot.json 内 6 序列，HUD 选播）");
+    }
+    let (init_win_w, init_win_h) = if use_spine {
+        (
+            crate::spine_pet::SPINE_WIN_W as u32,
+            crate::spine_pet::SPINE_WIN_H as u32,
+        )
+    } else {
+        (WIN_W as u32, WIN_H as u32)
+    };
+
+    let mut app = App::new();
+    app.insert_resource(ClearColor(Color::NONE))
         .insert_resource(WinitSettings {
             focused_mode: UpdateMode::reactive(ACTIVE_WAIT),
             unfocused_mode: UpdateMode::reactive(ACTIVE_WAIT),
@@ -230,11 +314,10 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
         .init_resource::<Hover>()
         .init_resource::<Settings>()
         .init_resource::<Mascot>()
+        .init_resource::<crate::spine_pet::SpineHud>()
         .init_resource::<NotifyState>()
         .insert_resource(DeskpetAssetsDir(assets_dir.clone()))
-        // RPC: register every method + share the inbox the listener threads
-        // are pushing into. The Bevy drain system below pulls requests out
-        // and dispatches them with full World access.
+        .insert_resource(tray_config)
         .insert_resource(crate::rpc_methods::register_all())
         .insert_resource(rpc_inbox)
         .add_plugins(
@@ -244,13 +327,9 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "deskpet".into(),
-                        resolution: WindowResolution::new(WIN_W as u32, WIN_H as u32),
-                        // Start hidden unless --show: lives in menu bar; click tray icon to toggle.
+                        resolution: WindowResolution::new(init_win_w, init_win_h),
                         visible: start_visible,
                         transparent: true,
-                        // Required for a transparent window to actually show
-                        // through on macOS (and the safe choice on Windows);
-                        // without it the 3D background composites to black.
                         composite_alpha_mode: CompositeAlphaMode::PostMultiplied,
                         decorations: false,
                         resizable: false,
@@ -259,31 +338,67 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
                         position: WindowPosition::Centered(MonitorSelection::Primary),
                         ..default()
                     }),
+                    exit_condition: tray_exit_condition,
                     ..default()
                 })
-                // Pixel-art friendly default sampling for any future sprites.
                 .set(ImagePlugin::default_nearest())
-                // Resolve `assets/` relative to the *current working directory*
-                // so it works whether launched via `cargo run` (manifest dir)
-                // or directly as `./target/debug/deskpet` (exe dir would
-                // otherwise be used, missing the assets).
                 .set(AssetPlugin {
                     file_path: assets_dir.to_string_lossy().into_owned(),
                     ..default()
                 }),
         )
-        .add_plugins(EguiPlugin::default())
         .add_plugins(TrayIconPlugin)
-        // OS-level desktop notifications (Notification Center / Action Center).
-        // Noop backend unless built with `--features os-notify`; see
-        // src/os_notify/mod.rs for the feature/target matrix.
+        .add_plugins(EguiPlugin::default())
         .add_plugins(OsNotifyPlugin {
             notifier: make_notifier(),
-        })
-        .add_systems(Startup, (spawn_scene, create_tray))
+        });
+    if use_spine {
+        app.add_plugins(SpinePlugin)
+            .add_systems(
+                Update,
+                (
+                    crate::spine_pet::on_spine_ready.in_set(SpineSet::OnReady),
+                    crate::spine_pet::apply_spine_hud_requests.in_set(SpineSet::OnReady),
+                    crate::spine_pet::advance_spine_auto_play.in_set(SpineSet::OnEvent),
+                    crate::spine_pet::sync_spine_visual,
+                    crate::spine_pet::log_spine_draw_ready,
+                    crate::spine_pet::log_spine_layout_once,
+                    crate::spine_pet::sync_spine_window_layout,
+                    crate::spine_pet::sync_spine_pet_camera_viewport,
+                ),
+            );
+    } else {
+        app.add_systems(
+            Update,
+            (
+                crate::pet_render::patch_gltf_materials,
+                setup_mascot_animation,
+                sync_mascot_visual,
+                crate::pet_render::apply_bright_materials,
+                crate::pet_render::sync_material_tuning,
+                crate::pet_render::sync_toon_camera,
+            )
+                .chain()
+                .after(AssetEventSystems),
+        );
+    }
+    app.init_resource::<PetClickTracker>()
+        .add_systems(
+            Startup,
+            (
+                spawn_scene,
+                create_tray,
+                crate::pet_render::init_render_resources,
+            ),
+        )
         .add_systems(
             Update,
-            (tray_menu, tray_clicks, apply_platform_tweaks),
+            (
+                tray_menu,
+                sync_starlink_tray_pet_check,
+                tray_clicks,
+                apply_platform_tweaks,
+            ),
         )
         .add_systems(
             Update,
@@ -291,9 +406,9 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
                 init_screen,
                 crate::rpc::bevy_bridge::drain_rpc_tasks, // exclusive: dispatches RPC with World access
                 advance_notify, // promote queued reminders, expire the current
-                drive_input,    // global cursor: hit_test + drag + click + quit
-                focus_on_hover, // activate window when hovered so egui gets events
-                consume_hop,    // HUD "Hop" button -> jump
+                drive_input,    // global cursor: hit_test + hover + drag move
+                focus_on_hover, // activate window when hovered so mouse events flow
+                consume_hop,    // RPC "Hop" action -> jump
                 walk,           // idle random walk
                 apply_window_pos,
                 animate,
@@ -301,21 +416,13 @@ pub fn launch_with_inbox(rpc_inbox: RpcTaskInbox, config: LaunchConfig) -> ! {
             )
                 .chain(),
         )
-        // GLB：挂动画图；idle / walk 由 sync_mascot_visual 驱动；Toon 材质由 pet_render 处理。
-        .add_systems(
-            Update,
-            (
-                setup_mascot_animation,
-                sync_mascot_visual,
-                crate::pet_render::apply_bright_materials,
-                crate::pet_render::sync_material_tuning,
-            )
-                .chain(),
-        )
-        // egui HUD + reminder bubble are drawn in the egui pass on the primary
-        // window's context.
         .add_systems(EguiPrimaryContextPass, (notify_bubble, hud_system).chain())
-        .run();
+        // 宠物点击/跳跃须在 egui 之后，并用 EguiWantsInput 避免与 HUD 争抢。
+        .add_systems(
+            PostUpdate,
+            drive_pet_clicks.after(EguiPostUpdateSet::ProcessOutput),
+        );
+    app.run();
     std::process::exit(0);
 }
 
@@ -406,13 +513,15 @@ struct Drag {
 /// dragging, and the adaptive frame rate.
 #[derive(Resource, Default)]
 struct Hover {
-    /// Pointer is over an interactive region (mascot body OR HUD panel). This
-    /// is what `hit_test` follows.
+    /// 窗口应接收鼠标（body / HUD / 气泡），用于 `hit_test` 与 passthrough。
     inside: bool,
-    /// Pointer is over the grabbable mascot body specifically. Only the body
-    /// starts a window drag — the HUD belongs to egui.
+    /// 指针在可拖拽的萌宠身体上（不含 HUD 条带）。
     on_body: bool,
-    /// Pointer is approaching the window (within `NEAR_R`) or over the HUD.
+    /// 指针在 HUD 条带（展开侧栏或 ⚙ 区）。
+    in_hud: bool,
+    /// 指针在通知气泡区。
+    in_bubble: bool,
+    /// Pointer is approaching the window (within `NEAR_R`).
     near: bool,
 }
 
@@ -421,13 +530,13 @@ struct Hover {
 pub(crate) struct Settings {
     pub(crate) walk_speed: f32,
     pub(crate) wander: bool,
-    /// Set by the HUD "Hop" button; consumed by `consume_hop`.
+    /// Set by RPC `pet/control` Hop action; consumed by `consume_hop`.
     pub(crate) hop_request: bool,
-    /// HUD collapsed (just a gear) vs expanded (full panel).
-    pub(crate) hud_open: bool,
     /// 是否显示萌宠（关 = 隐藏 3D 模型；开 = idle / 行走动画）.
     pub(crate) show_animation: bool,
-    /// 卡通 Toon 渲染（关 = 柔和 PBR；开 = 色阶量化）.
+    /// HUD 侧栏是否展开（折叠时仅显示 ⚙）。
+    pub(crate) hud_open: bool,
+    /// Toon 动漫渲染（开 = Unlit 烘焙色 + 描边 mesh；关 = 柔和 PBR 实验）.
     pub(crate) toon_shading: bool,
 }
 
@@ -437,9 +546,9 @@ impl Default for Settings {
             walk_speed: WALK_SPEED,
             wander: true,
             hop_request: false,
-            hud_open: false,
             show_animation: true,
-            toon_shading: false,
+            hud_open: false,
+            toon_shading: true,
         }
     }
 }
@@ -473,16 +582,18 @@ impl Default for Pet {
 #[derive(Component)]
 struct Eye;
 
-/// The 3D camera, so we can constrain its viewport to the left pet sub-area.
+/// The 3D camera marker.
 #[derive(Component)]
-struct PetCamera;
+pub(crate) struct PetCamera;
 
 /// Which mascot is in use this run.
 #[derive(Resource, Default)]
 pub(crate) struct Mascot {
     /// True when a rigged GLB model was loaded instead of the procedural slime.
     pub(crate) use_glb: bool,
-    /// Currently loaded GLB filename (under `assets/`); toggled by the HUD.
+    /// True when Spine 2D rig replaces GLB (`DESKPET_SPINE=1`).
+    pub(crate) use_spine: bool,
+    /// Currently loaded GLB filename (under `assets/`); switched via RPC `set_glb`.
     pub(crate) glb: String,
 }
 
@@ -503,9 +614,31 @@ fn spawn_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    skeletons: Option<ResMut<Assets<bevy_spine::SkeletonData>>>,
     mut mascot: ResMut<Mascot>,
+    mut settings: ResMut<Settings>,
     assets_dir: Res<DeskpetAssetsDir>,
 ) {
+    let use_spine = crate::spine_pet::spine_enabled(&assets_dir.0);
+    mascot.use_spine = use_spine;
+    if use_spine {
+        settings.hud_open = false;
+        settings.show_animation = true;
+        settings.wander = false;
+        log::info!(
+            "deskpet: Spine — {}（单文件 6 序列，HUD 选播）",
+            crate::spine_pet::SPINE_JSON,
+        );
+        mascot.use_glb = false;
+        let Some(mut skeletons) = skeletons else {
+            log::error!("deskpet: SpinePlugin 未加载，无法 spawn Spine 萌宠");
+            return;
+        };
+        crate::spine_pet::spawn_spine_camera(&mut commands);
+        crate::spine_pet::spawn_spine_pet(&mut commands, &asset_server, &mut skeletons);
+        return;
+    }
+
     let use_glb = mascot_glb_exists(&assets_dir.0);
     mascot.use_glb = use_glb;
     if use_glb {
@@ -528,24 +661,23 @@ fn spawn_scene(
     }
 
     // Camera framing differs: the rigged GLB stands ~1.7m tall on y=0, the
-    // procedural slime is a unit sphere at the origin. The camera is shifted
-    // sideways (look-x = cam-x) so the mascot at world x=0 lands in the left
-    // pet area (~24% across the window), leaving the right side for the HUD.
+    // procedural slime is a unit sphere at the origin. The mascot at world x=0
+    // lands at the window center (the window *is* the pet area).
     let cam_tf = if use_glb {
-        Transform::from_xyz(1.03, 0.95, 3.1).looking_at(Vec3::new(1.03, 0.9, 0.0), Vec3::Y)
+        Transform::from_xyz(0.0, 0.95, 3.1).looking_at(Vec3::new(0.0, 0.9, 0.0), Vec3::Y)
     } else {
-        Transform::from_xyz(1.19, 0.18, 3.6).looking_at(Vec3::new(1.19, 0.05, 0.0), Vec3::Y)
+        Transform::from_xyz(0.0, 0.18, 3.6).looking_at(Vec3::new(0.0, 0.05, 0.0), Vec3::Y)
     };
     commands.spawn((
         PetCamera,
         Camera3d::default(),
         cam_tf,
         Msaa::Off,
-        Tonemapping::AcesFitted,
-        Exposure { ev100: 12.5 },
+        Tonemapping::None,
+        Exposure { ev100: 0.0 },
         AmbientLight {
             color: Color::srgb(0.96, 0.98, 1.0),
-            brightness: 2_200.0,
+            brightness: 0.0,
             affects_lightmapped_meshes: true,
         },
     ));
@@ -558,20 +690,20 @@ fn spawn_scene(
         return;
     }
 
-    // ---- Fallback: procedural slime --------------------------------------
+    // ---- Fallback: procedural slime (Toon Unlit，与 GLB 管线一致) ------
     let body = materials.add(StandardMaterial {
         base_color: Color::srgb(0.46, 0.76, 1.0),
-        perceptual_roughness: 0.35,
+        unlit: true,
         ..default()
     });
     let dark = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.07, 0.09, 0.16),
-        perceptual_roughness: 0.4,
+        base_color: Color::srgb(0.015, 0.015, 0.025),
+        unlit: true,
         ..default()
     });
     let shine = materials.add(StandardMaterial {
         base_color: Color::WHITE,
-        emissive: LinearRgba::rgb(1.0, 1.0, 1.0),
+        unlit: true,
         ..default()
     });
 
@@ -671,10 +803,14 @@ fn apply_platform_tweaks(_main_thread: NonSendMarker, mut logged: Local<bool>) {
 
 /// Attach animation graph once the GLB's `AnimationPlayer` appears.
 fn setup_mascot_animation(
+    mascot: Res<Mascot>,
     mut commands: Commands,
     pet_anim: Query<&PetAnim>,
     players: Query<Entity, Added<AnimationPlayer>>,
 ) {
+    if mascot.use_spine {
+        return;
+    }
     let Ok(pa) = pet_anim.single() else {
         return;
     };
@@ -688,12 +824,16 @@ fn setup_mascot_animation(
 
 /// HUD「显示动画」+ 行走状态：控制萌宠显隐与 idle / walk 切换。
 fn sync_mascot_visual(
+    mascot: Res<Mascot>,
     settings: Res<Settings>,
     walk: Res<Walk>,
     mut pets: Query<(&PetAnim, &mut Visibility), With<Pet>>,
     mut anim: Query<(&mut AnimationTransitions, &mut AnimationPlayer)>,
     mut last_clip: Local<Option<AnimationNodeIndex>>,
 ) {
+    if mascot.use_spine {
+        return;
+    }
     let Ok((pa, mut vis)) = pets.single_mut() else {
         return;
     };
@@ -727,6 +867,8 @@ fn sync_mascot_visual(
 /// Resolve the monitor bounds once the windowing backend reports them, and
 /// seat the mascot on the bottom-center of the desktop.
 fn init_screen(
+    mascot: Res<Mascot>,
+    settings: Res<Settings>,
     mut screen: ResMut<Screen>,
     mut petwin: ResMut<PetWin>,
     mut walk: ResMut<Walk>,
@@ -740,20 +882,30 @@ fn init_screen(
         return; // monitors not enumerated yet; try again next frame.
     };
 
-    // Force the window to WIN_W x WIN_H *logical* pixels regardless of the
-    // display's DPI scale, so the mascot and HUD (sized in logical units) fit
-    // on Retina/HiDPI screens too. The camera renders the *full* window (no
-    // viewport split) — bevy_egui ties egui's screen rect to the camera's
-    // viewport, so restricting it would squeeze the HUD over the mascot.
+    let win_w = if mascot.use_spine {
+        crate::spine_pet::SPINE_WIN_W
+    } else {
+        WIN_W
+    };
+    let win_h = if mascot.use_spine {
+        crate::spine_pet::SPINE_WIN_H
+    } else {
+        WIN_H
+    };
+
     if let Ok(mut window) = window.single_mut() {
-        window.resolution.set(WIN_W, WIN_H);
+        if !mascot.use_spine {
+            window.resolution.set(win_w, win_h);
+        } else {
+            window.resolution.set(crate::spine_pet::SPINE_WIN_W, crate::spine_pet::SPINE_WIN_H);
+        }
     }
 
     let scale = m.scale_factor as f32;
     let origin = Vec2::new(m.physical_position.x as f32, m.physical_position.y as f32);
     let size = Vec2::new(m.physical_width as f32, m.physical_height as f32);
-    let win_w_px = WIN_W * scale;
-    let win_h_px = WIN_H * scale;
+    let win_w_px = win_w * scale;
+    let win_h_px = win_h * scale;
 
     screen.origin = origin;
     screen.size = size;
@@ -767,23 +919,27 @@ fn init_screen(
     walk.target_x = petwin.pos.x;
 }
 
-/// Drive passthrough hit-test, drag, click-to-hop, and right-click-to-quit.
-///
-/// The pointer *position* is read from the OS (permission-free), because once
-/// `hit_test` is false the window receives no Bevy cursor events. The button
-/// *state* comes from Bevy: whenever a click actually matters, the pointer is
-/// over the body or HUD, so `hit_test` is on and the window gets the events.
+/// 萌宠左键连击检测（starlink-dev：双击隐藏）。
+#[derive(Resource, Default)]
+struct PetClickTracker {
+    last_at: Option<std::time::Instant>,
+    last_on_body: bool,
+}
+
+const PET_DOUBLE_CLICK_MS: u128 = 450;
+
+/// 每帧更新指针分区与 passthrough；拖拽进行中也在此推进。
+/// 左键/右键对萌宠的语义（跳、拖、隐藏）在 [`drive_pet_clicks`]，且晚于 egui。
 fn drive_input(
     screen: Res<Screen>,
+    mascot: Res<Mascot>,
     settings: Res<Settings>,
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     mut petwin: ResMut<PetWin>,
     mut drag: ResMut<Drag>,
     mut hover: ResMut<Hover>,
-    mut notify_state: ResMut<NotifyState>,
-    mut q: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
-    mut pets: Query<&mut Pet>,
+    notify_state: Res<NotifyState>,
+    mut q: Query<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
     if !screen.ready {
         return;
@@ -791,13 +947,13 @@ fn drive_input(
     let Ok((window, mut cursor)) = q.single_mut() else {
         return;
     };
-    // Use the window's *own* scale factor for all conversions, so the math
-    // matches egui and Bevy exactly (avoids monitor-vs-window scale drift).
+    // Use the window's *own* scale factor for all conversions (avoids
+    // monitor-vs-window scale drift).
     let scale = window.resolution.scale_factor();
     let global = global_cursor_physical(scale);
 
     // Pointer position within the window in logical pixels (top-left origin).
-    // Prefer Bevy's reported position (exact, same source egui uses); fall back
+    // Prefer Bevy's reported position (exact, same source the engine uses); fall back
     // to the OS-global pointer only while the window is in passthrough and thus
     // receives no Bevy cursor events.
     let bevy_cursor = window.cursor_position();
@@ -809,50 +965,73 @@ fn drive_input(
         },
     };
 
-    let dist = local.distance(pet_center());
-    let on_body = dist <= HIT_R;
-    // Interactive HUD region: the full right panel when expanded, or just the
-    // gear button when collapsed — so the empty right area passes through.
-    let in_hud = if settings.hud_open {
-        // Expanded: the right-side panel occupies the rightmost HUD_W.
+    let win_w = if mascot.use_spine {
+        crate::spine_pet::SPINE_WIN_W
+    } else {
+        WIN_W
+    };
+    let win_h = if mascot.use_spine {
+        crate::spine_pet::SPINE_WIN_H
+    } else {
+        WIN_H
+    };
+    let center = if mascot.use_spine {
+        crate::spine_pet::spine_pet_center()
+    } else {
+        pet_center()
+    };
+    let hit_r = if mascot.use_spine {
+        crate::spine_pet::spine_hit_r()
+    } else {
+        HIT_R
+    };
+
+    let dist = local.distance(center);
+    // Spine：HUD 在 x>=SPINE_PET_W；身体命中仅限左侧宠物视口，避免与侧栏几何重叠。
+    let on_body = dist <= hit_r
+        && (!mascot.use_spine || local.x < crate::spine_pet::SPINE_PET_W)
+        && (!mascot.use_spine || local.y >= crate::spine_pet::spine_pet_viewport_top());
+    let in_hud = if mascot.use_spine {
+        if settings.hud_open {
+            crate::spine_pet::spine_point_in_hud_panel(local.x, local.y)
+        } else {
+            crate::spine_pet::spine_point_in_gear(local.x, local.y)
+        }
+    } else if settings.hud_open {
         local.x >= WIN_W - HUD_W && local.x <= WIN_W && local.y >= 0.0 && local.y <= WIN_H
     } else {
-        // Collapsed: just the gear button at the window's top-right corner.
         local.x >= WIN_W - GEAR_W && local.x <= WIN_W && local.y >= 0.0 && local.y <= GEAR_H
     };
-    // Active reminder bubble: a top strip that captures clicks (to dismiss).
-    let in_bubble = notify_state.showing()
-        && local.x >= 0.0
-        && local.x <= WIN_W
-        && local.y >= 0.0
-        && local.y <= BUBBLE_H;
+    let in_bubble = if mascot.use_spine {
+        notify_state.showing()
+            && !settings.hud_open
+            && crate::spine_pet::spine_point_in_notify(local.x, local.y)
+    } else {
+        notify_state.showing()
+            && local.x >= 0.0
+            && local.x <= win_w
+            && local.y >= 0.0
+            && local.y <= BUBBLE_H
+    };
     let inside = on_body || in_hud || in_bubble;
     hover.on_body = on_body;
+    hover.in_hud = in_hud;
+    hover.in_bubble = in_bubble;
     hover.inside = inside;
-    hover.near = dist <= NEAR_R || in_hud || in_bubble;
+    let near_r = if mascot.use_spine {
+        crate::spine_pet::SPINE_PET_W * 1.15
+    } else {
+        NEAR_R
+    };
+    hover.near = dist <= near_r || in_hud || in_bubble;
 
-    // Intercept the mouse over the body or the HUD (or mid-drag); everywhere
-    // else the click falls through to whatever is behind the window.
+    // Intercept the mouse over the body (or mid-drag); everywhere else the
+    // click falls through to whatever is behind the window.
     let want_hit = inside || drag.active;
     if cursor.hit_test != want_hit {
         cursor.hit_test = want_hit;
     }
 
-    // A left click on the reminder bubble dismisses it (takes priority over the
-    // body drag, since the bubble overlaps the mascot's upper area).
-    if in_bubble && mouse.just_pressed(MouseButton::Left) {
-        notify_state.dismiss();
-    } else if mouse.just_pressed(MouseButton::Left) && on_body {
-        // Left press on the *body* (not the HUD) starts a window drag + hop.
-        // HUD clicks are left for egui.
-        if let Some(g) = global {
-            drag.active = true;
-            drag.offset = g - petwin.pos;
-        }
-        if let Ok(mut pet) = pets.single_mut() {
-            pet.vy = JUMP_V;
-        }
-    }
     if drag.active {
         if mouse.pressed(MouseButton::Left) {
             if let Some(g) = global {
@@ -862,10 +1041,104 @@ fn drive_input(
             drag.active = false;
         }
     }
+}
 
-    // Right click on body -> quit. Esc also quits (once the window is focused).
-    if (mouse.just_pressed(MouseButton::Right) && on_body) || keys.just_pressed(KeyCode::Escape) {
-        shutdown_now();
+/// 萌宠鼠标语义：在 egui HUD 处理完后再执行，避免与动画侧栏/⚙ 争抢。
+fn drive_pet_clicks(
+    mascot: Res<Mascot>,
+    hover: Res<Hover>,
+    mut settings: ResMut<Settings>,
+    tray_cfg: Res<LaunchTrayConfig>,
+    egui_wants: Res<EguiWantsInput>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut petwin: ResMut<PetWin>,
+    mut drag: ResMut<Drag>,
+    mut notify_state: ResMut<NotifyState>,
+    mut click_tracker: ResMut<PetClickTracker>,
+    mut q: Query<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+    mut pets: Query<&mut Pet>,
+) {
+    let scale = q
+        .single()
+        .map(|(w, _)| w.resolution.scale_factor())
+        .unwrap_or(1.0);
+    let global = global_cursor_physical(scale);
+
+    // Spine 收起：点 ⚙ 条带展开（与几何 in_hud 一致）。
+    if mascot.use_spine
+        && !settings.hud_open
+        && hover.in_hud
+        && mouse.just_pressed(MouseButton::Left)
+    {
+        settings.hud_open = true;
+        return;
+    }
+
+    if hover.in_bubble && mouse.just_pressed(MouseButton::Left) {
+        notify_state.dismiss();
+        return;
+    }
+
+    // egui 已展开侧栏时，让 HUD 控件优先（动画列表 / 收起）。
+    if settings.hud_open && egui_wants.wants_any_pointer_input() {
+        if mouse.just_pressed(MouseButton::Left) && !hover.on_body {
+            click_tracker.last_on_body = false;
+        }
+        return;
+    }
+
+    // 收起态 ⚙ 条带：上面已处理展开，此处不再触发萌宠跳/拖。
+    if mascot.use_spine && !settings.hud_open && hover.in_hud {
+        return;
+    }
+
+    if egui_wants.wants_any_pointer_input() {
+        if mouse.just_pressed(MouseButton::Left) && !hover.on_body {
+            click_tracker.last_on_body = false;
+        }
+        return;
+    }
+
+    if mouse.just_pressed(MouseButton::Left) && hover.on_body {
+        let now = std::time::Instant::now();
+        let double_click = click_tracker.last_on_body
+            && click_tracker
+                .last_at
+                .is_some_and(|t| now.duration_since(t).as_millis() <= PET_DOUBLE_CLICK_MS);
+        click_tracker.last_at = Some(now);
+        click_tracker.last_on_body = true;
+
+        if double_click && matches!(tray_cfg.mode, TrayMode::StarlinkDev { .. }) {
+            if let Ok((mut window, _)) = q.single_mut() {
+                window.visible = false;
+            }
+            drag.active = false;
+            click_tracker.last_at = None;
+            return;
+        }
+
+        if let Some(g) = global {
+            drag.active = true;
+            drag.offset = g - petwin.pos;
+        }
+        if let Ok(mut pet) = pets.single_mut() {
+            pet.vy = JUMP_V;
+        }
+    } else if mouse.just_pressed(MouseButton::Left) && !hover.on_body {
+        click_tracker.last_on_body = false;
+    }
+
+    if (mouse.just_pressed(MouseButton::Right) && hover.on_body) || keys.just_pressed(KeyCode::Escape)
+    {
+        match &tray_cfg.mode {
+            TrayMode::StarlinkDev { .. } => {
+                if let Ok((mut window, _)) = q.single_mut() {
+                    window.visible = false;
+                }
+            }
+            TrayMode::Deskpet => shutdown_now(),
+        }
     }
 }
 
@@ -939,6 +1212,26 @@ fn open_protocol_docs() {
     open_path_or_url(&target);
 }
 
+/// 打开 starlink-dev admin 页面（端口从 serve 写入的文件读取）。
+fn open_starlink_admin(port_file: &std::path::Path) {
+    let port = match std::fs::read_to_string(port_file) {
+        Ok(raw) => raw.trim().to_string(),
+        Err(e) => {
+            warn!(
+                "deskpet: 无法读取 admin 端口文件 {}: {e}，回退 8901",
+                port_file.display()
+            );
+            "8901".into()
+        }
+    };
+    if port.is_empty() {
+        warn!("deskpet: admin 端口文件为空，回退 8901");
+    }
+    let port = if port.is_empty() { "8901" } else { &port };
+    let url = format!("http://127.0.0.1:{port}/");
+    open_path_or_url(&url);
+}
+
 /// Hand a file path or URL to the OS's default handler (no extra deps).
 fn open_path_or_url(target: &str) {
     #[cfg(target_os = "macos")]
@@ -956,18 +1249,61 @@ fn open_path_or_url(target: &str) {
     }
 }
 
-/// Create the system-tray / macOS menu-bar icon. Left-click toggles the
-/// mascot; right-click opens a Show / Hide / Quit menu.
+/// Create the system-tray / macOS menu-bar icon.
 fn create_tray(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     assets_dir: Res<DeskpetAssetsDir>,
+    tray_cfg: Res<LaunchTrayConfig>,
 ) {
-    let tray_path = assets_dir.0.join("tray.png");
+    let (tray_filename, tooltip, menu, show_menu_on_left_click) = match &tray_cfg.mode {
+        TrayMode::StarlinkDev { .. } => (
+            "tray-starlink-dev.png",
+            "Starlink-dev".into(),
+            Menu::new(vec![
+                MenuItem::icon(
+                    "admin",
+                    "Starlink-dev running",
+                    true,
+                    MenuIconKind::GreenStatusDot,
+                ),
+                MenuItem::separator(),
+                MenuItem::check(
+                    "show_pet",
+                    "显示桌面宠",
+                    true,
+                    tray_cfg.start_visible,
+                ),
+                MenuItem::separator(),
+                MenuItem::common("quit", "Quit Starlink-dev", true, None),
+            ]),
+            true,
+        ),
+        TrayMode::Deskpet => (
+            "tray.png",
+            "deskpet — click to show/hide".into(),
+            Menu::new(vec![
+                MenuItem::common("show", "Show", true, None),
+                MenuItem::common("hide", "Hide", true, None),
+                MenuItem::separator(),
+                MenuItem::common("docs", "Reminder Protocol Docs", true, None),
+                MenuItem::separator(),
+                MenuItem::common("quit", "Quit", true, None),
+            ]),
+            false,
+        ),
+    };
+
+    let tray_path = assets_dir.0.join(tray_filename);
     let handle = match crate::tray_icon::preload_tray_png(&tray_path, &mut images) {
         Ok(h) => {
+            let hint = if show_menu_on_left_click {
+                "左键打开菜单"
+            } else {
+                "左键显隐萌宠，右键菜单"
+            };
             log::info!(
-                "deskpet: 菜单栏图标已加载 {}（macOS 若在 « 溢出区请展开；左键显隐萌宠，右键菜单）",
+                "deskpet: 菜单栏图标已加载 {}（macOS 若在 « 溢出区请展开；{hint}）",
                 tray_path.display()
             );
             Some(h)
@@ -979,26 +1315,18 @@ fn create_tray(
     };
     commands.insert_resource(TrayIcon {
         icon: handle,
-        tooltip: Some("deskpet — click to show/hide".into()),
-        menu: Menu::new(vec![
-            MenuItem::common("show", "Show", true, None),
-            MenuItem::common("hide", "Hide", true, None),
-            MenuItem::separator(),
-            // Entry point to the reminder protocol reference (PROTOCOL.md).
-            MenuItem::common("docs", "Reminder Protocol Docs", true, None),
-            MenuItem::separator(),
-            MenuItem::common("quit", "Quit", true, None),
-        ]),
-        // Left-click should toggle the mascot, not open the menu (macOS only
-        // flag); the menu is reserved for right-click.
-        show_menu_on_left_click: false,
+        tooltip: Some(tooltip),
+        menu,
+        show_menu_on_left_click,
     });
 }
 
-/// Right-click tray menu actions.
+/// Tray menu actions.
 fn tray_menu(
     mut reader: MessageReader<MenuMessage>,
     mut window: Query<&mut Window, With<PrimaryWindow>>,
+    mut tray: ResMut<TrayIcon>,
+    tray_cfg: Res<LaunchTrayConfig>,
 ) {
     let Ok(mut window) = window.single_mut() else {
         return;
@@ -1008,16 +1336,50 @@ fn tray_menu(
             "show" => window.visible = true,
             "hide" => window.visible = false,
             "docs" => open_protocol_docs(),
+            "admin" => {
+                if let TrayMode::StarlinkDev { admin_port_file } = &tray_cfg.mode {
+                    open_starlink_admin(admin_port_file);
+                }
+            }
+            "show_pet" => {
+                // MenuMessage 触发时 bevy 侧 checkbox 尚未更新，取反即为用户意图。
+                let show = !tray.menu.is_checked("show_pet").unwrap_or(false);
+                window.visible = show;
+                let _ = tray.menu.set_checked("show_pet", show);
+            }
             "quit" => shutdown_now(),
             _ => {}
         }
     }
 }
 
+/// 萌宠显隐与菜单 checkbox 保持一致（notify 弹出、双击隐藏等）。
+fn sync_starlink_tray_pet_check(
+    tray_cfg: Res<LaunchTrayConfig>,
+    mut tray: ResMut<TrayIcon>,
+    window: Query<&Window, (With<PrimaryWindow>, Changed<Window>)>,
+) {
+    if !matches!(tray_cfg.mode, TrayMode::StarlinkDev { .. }) {
+        return;
+    }
+    let Ok(w) = window.single() else {
+        return;
+    };
+    if tray.menu.is_checked("show_pet") != Some(w.visible) {
+        let _ = tray.menu.set_checked("show_pet", w.visible);
+    }
+}
+
 /// Left-click toggles the mascot's visibility; a Windows double-click hides it.
 /// `bevy_tray_icon` only bridges *menu* events into Bevy, so we poll the
 /// tray-icon click channel directly here.
-fn tray_clicks(mut window: Query<&mut Window, With<PrimaryWindow>>) {
+fn tray_clicks(
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
+    tray_cfg: Res<LaunchTrayConfig>,
+) {
+    if matches!(tray_cfg.mode, TrayMode::StarlinkDev { .. }) {
+        return;
+    }
     let Ok(mut window) = window.single_mut() else {
         return;
     };
@@ -1045,11 +1407,11 @@ fn tray_clicks(mut window: Query<&mut Window, With<PrimaryWindow>>) {
 
 /// macOS (and some compositors) only deliver mouse events to the *active*
 /// application's key window. A frameless always-on-top overlay launched from a
-/// terminal is not active, so it never receives cursor/click events and egui
-/// can't be interacted with. When the pointer moves onto the body or HUD we
-/// focus the window (which activates the app on macOS), so the events start
-/// flowing. `NonSendMarker` pins this system to the main thread, which is
-/// required to touch the `WINIT_WINDOWS` thread-local.
+/// terminal is not active, so it never receives cursor/click events and the
+/// mascot can't be grabbed. When the pointer approaches the window we focus it
+/// (which activates the app on macOS), so the events start flowing.
+/// `NonSendMarker` pins this system to the main thread, which is required to
+/// touch the `WINIT_WINDOWS` thread-local.
 fn focus_on_hover(
     _main_thread: NonSendMarker,
     hover: Res<Hover>,
@@ -1060,7 +1422,7 @@ fn focus_on_hover(
     let near = hover.near;
     // Focus once at startup (so the app is active from launch), then again on
     // each rising edge of "pointer approaching" — early enough that events are
-    // already flowing by the time the pointer reaches the body or gear.
+    // already flowing by the time the pointer reaches the body.
     let trigger = !*started || (near && !*was_near);
     if trigger {
         if let Ok(entity) = windows.single() {
@@ -1125,6 +1487,8 @@ fn walk(
 /// Push the logical mascot position to the actual window, clamped on-screen.
 fn apply_window_pos(
     screen: Res<Screen>,
+    mascot: Res<Mascot>,
+    settings: Res<Settings>,
     mut petwin: ResMut<PetWin>,
     mut window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
@@ -1134,8 +1498,13 @@ fn apply_window_pos(
     let Ok(mut window) = window.single_mut() else {
         return;
     };
-    let win_w_px = WIN_W * screen.scale;
-    let win_h_px = WIN_H * screen.scale;
+    let (win_w, win_h) = if mascot.use_spine {
+        (crate::spine_pet::SPINE_WIN_W, crate::spine_pet::SPINE_WIN_H)
+    } else {
+        (WIN_W, WIN_H)
+    };
+    let win_w_px = win_w * screen.scale;
+    let win_h_px = win_h * screen.scale;
     petwin.pos.x = petwin
         .pos
         .x
@@ -1150,7 +1519,7 @@ fn apply_window_pos(
 /// Breathing squash, click hop, and blinking.
 fn animate(
     time: Res<Time>,
-    mut pets: Query<(&mut Pet, &mut Transform), Without<Eye>>,
+    mut pets: Query<(&mut Pet, &mut Transform), (Without<Eye>, Without<crate::spine_pet::SpinePet>)>,
     mut eyes: Query<&mut Transform, With<Eye>>,
 ) {
     let dt = time.delta_secs();
@@ -1224,7 +1593,7 @@ fn adaptive_frame_rate(
     }
 }
 
-/// Turn a HUD "Hop" request into an actual jump impulse.
+/// Turn an RPC `pet/control` Hop request into an actual jump impulse.
 fn consume_hop(mut settings: ResMut<Settings>, mut pets: Query<&mut Pet>) {
     if !settings.hop_request {
         return;
@@ -1276,85 +1645,189 @@ fn advance_notify(time: Res<Time>, mut state: ResMut<NotifyState>) {
     }
 }
 
-/// Draw the active reminder as a top-anchored speech bubble over the mascot,
-/// accent-colored by severity. Text wraps within the window width; a click
-/// anywhere on it dismisses (handled in `drive_input` via the bubble hit zone).
-fn notify_bubble(mut contexts: EguiContexts, state: Res<NotifyState>) {
+fn notify_bubble(
+    mut contexts: EguiContexts,
+    mascot: Res<Mascot>,
+    settings: Res<Settings>,
+    state: Res<NotifyState>,
+) {
     let Some(notice) = state.current.as_ref() else {
         return;
     };
+    if mascot.use_spine && settings.hud_open {
+        return;
+    }
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
 
     let [r, g, b] = notice.level.accent();
     let accent = egui::Color32::from_rgb(r, g, b);
-    let glass = egui::Color32::from_rgba_unmultiplied(18, 20, 28, 230);
+    let glass = egui::Color32::from_rgba_unmultiplied(18, 20, 28, 235);
     let body_col = egui::Color32::from_rgb(228, 231, 238);
+    let (bubble_pos, bubble_w, bubble_h, title_size, body_size, max_body_chars) = if mascot.use_spine {
+        let n = crate::spine_pet::spine_notify_rect();
+        (egui::pos2(n.x, n.y), n.w, n.h, 10.0_f32, 9.0_f32, 52_usize)
+    } else {
+        (egui::pos2(6.0, 6.0), WIN_W - 12.0, WIN_H * 0.5, 12.0_f32, 11.0_f32, 120_usize)
+    };
 
     egui::Area::new(egui::Id::new("notify_bubble"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(6.0, 6.0))
+        .order(egui::Order::Background)
+        .fixed_pos(bubble_pos)
         .show(ctx, |ui| {
-            ui.set_max_width(WIN_W - 12.0);
+            ui.set_max_width(bubble_w);
+            if mascot.use_spine {
+                ui.set_max_height(bubble_h);
+            }
             egui::Frame::new()
                 .fill(glass)
-                .stroke(egui::Stroke::new(1.5, accent))
-                .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(8)
+                .stroke(egui::Stroke::new(1.0, accent))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(6, 4))
                 .show(ui, |ui| {
-                    // Wrap text to the bubble's inner width.
-                    ui.set_max_width(WIN_W - 28.0);
+                    ui.set_max_width(bubble_w - 10.0);
                     if let Some(title) = &notice.title {
-                        ui.label(egui::RichText::new(title).strong().color(accent));
+                        ui.label(
+                            egui::RichText::new(title)
+                                .strong()
+                                .color(accent)
+                                .size(title_size),
+                        );
                     }
-                    ui.label(egui::RichText::new(&notice.body).color(body_col));
+                    let body = truncate_notify_body(&notice.body, max_body_chars);
+                    ui.label(egui::RichText::new(body).color(body_col).size(body_size));
                 });
         });
 }
 
-/// The egui HUD, drawn over the same (transparent) window as the mascot, in
-/// `EguiPrimaryContextPass`. Collapsed by default to just a gear button so it
-/// doesn't obstruct the view; click the gear to expand a semi-transparent
-/// side panel. The hit-test region in `drive_input` tracks this open/closed
-/// state so the empty area always passes clicks through.
+fn truncate_notify_body(body: &str, max_chars: usize) -> String {
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    trimmed
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>()
+        + "…"
+}
+
+/// egui 默认字体不含 CJK，侧边栏中文会显示为「□」乱码；加载系统字体。
+fn install_egui_cjk_font(ctx: &egui::Context) {
+    let Some(bytes) = load_system_cjk_font() else {
+        log::warn!("deskpet: 未找到系统中文字体，HUD 中文可能显示为方框");
+        return;
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    let mut font_data = egui::FontData::from_owned(bytes);
+    font_data.index = 0;
+    fonts.font_data.insert("cjk".to_owned(), font_data.into());
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "cjk".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "cjk".to_owned());
+    ctx.set_fonts(fonts);
+}
+
+fn load_system_cjk_font() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        for path in [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                log::info!("deskpet: HUD 中文字体 → {path}");
+                return Some(bytes);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for path in [
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                return Some(bytes);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for path in [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
 fn hud_system(
     mut contexts: EguiContexts,
+    mascot: Res<Mascot>,
     mut settings: ResMut<Settings>,
+    mut spine_hud: Option<ResMut<crate::spine_pet::SpineHud>>,
     mut styled: Local<bool>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
 
-    // Scale all egui text/widgets by UI_SCALE once. We do this via the style
-    // (not zoom_factor) on purpose: zoom changes egui's coordinate space and
-    // would desync from the hit-test regions we compute in logical pixels.
     if !*styled {
         *styled = true;
+        install_egui_cjk_font(ctx);
         let mut style = (*ctx.style()).clone();
+        let scale = if mascot.use_spine {
+            crate::spine_pet::SPINE_UI_SCALE
+        } else {
+            UI_SCALE
+        };
         for (_text_style, font_id) in style.text_styles.iter_mut() {
-            font_id.size *= UI_SCALE;
+            font_id.size *= scale;
         }
-        style.spacing.button_padding = style.spacing.button_padding * UI_SCALE;
-        style.spacing.interact_size.y *= UI_SCALE;
-        style.spacing.item_spacing = style.spacing.item_spacing * UI_SCALE;
+        style.spacing.button_padding = egui::vec2(3.0, 2.0);
+        style.spacing.interact_size.y *= scale;
+        style.spacing.item_spacing = egui::vec2(3.0, 2.0);
         ctx.set_style(style);
     }
 
-    // Semi-transparent dark fill so the HUD blends with the desktop behind it.
+    if mascot.use_spine {
+        crate::spine_pet::spine_hud_panel(ctx, &mut settings, spine_hud.as_deref_mut());
+        return;
+    }
+
     let glass = egui::Color32::from_rgba_unmultiplied(18, 20, 28, 205);
 
     if !settings.hud_open {
+        let gear_pos = egui::pos2(WIN_W - GEAR_W + 4.0, 4.0);
         egui::Area::new(egui::Id::new("hud_gear"))
-            .fixed_pos(egui::pos2(WIN_W - GEAR_W + 4.0, 4.0))
+            .fixed_pos(gear_pos)
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(glass)
-                    .corner_radius(egui::CornerRadius::same(6))
-                    .inner_margin(4)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(72, 78, 96)))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(2)
                     .show(ui, |ui| {
-                        if ui.button("⚙").on_hover_text("Open HUD").clicked() {
+                        if ui
+                            .button(egui::RichText::new("⚙").size(11.0))
+                            .on_hover_text("动画面板")
+                            .clicked()
+                        {
                             settings.hud_open = true;
                         }
                     });
@@ -1364,8 +1837,9 @@ fn hud_system(
 
     let style = ctx.style();
     let frame = egui::Frame::side_top_panel(&style).fill(glass);
+    let hud_w = HUD_W;
     egui::SidePanel::right("hud")
-        .exact_width(HUD_W)
+        .exact_width(hud_w)
         .resizable(false)
         .frame(frame)
         .show(ctx, |ui| {
@@ -1383,7 +1857,10 @@ fn hud_system(
                 &mut settings.show_animation,
                 "显示动画（关则隐藏桌面萌宠）",
             );
-            ui.checkbox(&mut settings.toon_shading, "柔和提亮（实验）");
+            ui.checkbox(
+                &mut settings.toon_shading,
+                "柔和提亮（实验）",
+            );
             ui.horizontal(|ui| {
                 if ui.button("Hop").clicked() {
                     settings.hop_request = true;

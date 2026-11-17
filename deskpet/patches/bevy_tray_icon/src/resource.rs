@@ -4,7 +4,7 @@ use bevy::asset::{Assets, Handle};
 use bevy::prelude::{Deref, DerefMut, Image, Resource};
 use tray_icon::{menu, Icon};
 
-pub use menu_item::MenuItem;
+pub use menu_item::{MenuIconKind, MenuItem};
 
 mod menu_item;
 
@@ -12,7 +12,7 @@ mod menu_item;
 ///
 /// When you change a field in this resource, the system tray is also updated.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Resource)]
+#[derive(Debug, Clone, PartialEq, Default, Resource)]
 pub struct TrayIcon {
     /// The image handle of icon.
     pub icon: Option<Handle<Image>>,
@@ -37,7 +37,7 @@ impl TrayIcon {
 }
 
 /// The system tray's menu.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deref, DerefMut)]
+#[derive(Debug, Clone, PartialEq, Default, Deref, DerefMut)]
 pub struct Menu(Vec<MenuItem>);
 
 impl Menu {
@@ -51,7 +51,9 @@ impl Menu {
     pub fn set_enable(&mut self, menu_id: &str, enable: bool) -> crate::error::Result {
         for menu in self.0.iter_mut() {
             match menu {
-                MenuItem::Common { id, enabled, .. } => {
+                MenuItem::Common { id, enabled, .. }
+                | MenuItem::Check { id, enabled, .. }
+                | MenuItem::Icon { id, enabled, .. } => {
                     if id.0 == menu_id {
                         *enabled = enable;
                         return Ok(());
@@ -73,6 +75,41 @@ impl Menu {
         Err(crate::error::Error::NotFoundMenu(menu_id.to_string()))
     }
 
+    /// Sets the checked state of a checkbox menu item.
+    pub fn set_checked(&mut self, menu_id: &str, checked: bool) -> crate::error::Result {
+        for menu in self.0.iter_mut() {
+            match menu {
+                MenuItem::Check { id, checked: c, .. } if id.0 == menu_id => {
+                    *c = checked;
+                    return Ok(());
+                }
+                MenuItem::SubMenu { menu, .. } => {
+                    if menu.set_checked(menu_id, checked).is_ok() {
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(crate::error::Error::NotFoundMenu(menu_id.to_string()))
+    }
+
+    /// Returns the checked state of a checkbox menu item, if present.
+    pub fn is_checked(&self, menu_id: &str) -> Option<bool> {
+        for menu in self.0.iter() {
+            match menu {
+                MenuItem::Check { id, checked, .. } if id.0 == menu_id => return Some(*checked),
+                MenuItem::SubMenu { menu, .. } => {
+                    if let Some(v) = menu.is_checked(menu_id) {
+                        return Some(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub(crate) fn as_context(&self) -> Option<Box<dyn menu::ContextMenu>> {
         if self.0.is_empty() {
             None
@@ -89,6 +126,45 @@ impl Menu {
 #[repr(transparent)]
 #[derive(Deref)]
 pub(crate) struct RealTrayIcon(pub(crate) tray_icon::TrayIcon);
+
+/// macOS 菜单内「运行中」绿点（RMB 风格）。
+pub fn green_status_dot_icon() -> menu::Icon {
+    use std::sync::OnceLock;
+    static ICON: OnceLock<menu::Icon> = OnceLock::new();
+    ICON.get_or_init(|| {
+        const S: u32 = 18;
+        let mut rgba = vec![0u8; (S * S * 4) as usize];
+        let cx = (S as f32 - 1.0) / 2.0;
+        let r = 7.0_f32;
+        for y in 0..S {
+            for x in 0..S {
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cx;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d > r {
+                    continue;
+                }
+                let t = (d / r).clamp(0.0, 1.0);
+                let hl = (1.0 - t * 0.55)
+                    * (1.0 - ((dx + 2.5).powi(2) + (dy + 2.5).powi(2)).sqrt() / r * 0.35)
+                        .clamp(0.0, 1.0);
+                let g = (48.0 + 190.0 * hl) as u8;
+                let rd = (24.0 + 50.0 * hl) as u8;
+                let i = ((y * S + x) * 4) as usize;
+                rgba[i] = rd;
+                rgba[i + 1] = g;
+                rgba[i + 2] = 36;
+                rgba[i + 3] = if d <= r - 0.6 {
+                    255
+                } else {
+                    ((r - d) * 400.0).clamp(0.0, 255.0) as u8
+                };
+            }
+        }
+        menu::Icon::from_rgba(rgba, S, S).expect("green status dot")
+    })
+    .clone()
+}
 
 #[cfg(test)]
 mod tests {

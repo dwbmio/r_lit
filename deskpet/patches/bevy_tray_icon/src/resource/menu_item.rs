@@ -1,11 +1,17 @@
 use tray_icon::menu;
 use tray_icon::menu::accelerator::Accelerator;
-use tray_icon::menu::{IsMenuItem, MenuId, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, IconMenuItem, IsMenuItem, MenuId, PredefinedMenuItem, Submenu};
 
 use crate::resource::Menu;
 
+/// Built-in menu-leading icons resolved at render time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MenuIconKind {
+    GreenStatusDot,
+}
+
 /// System Tray Menu Item.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum MenuItem {
     /// The menu common item.
@@ -34,6 +40,22 @@ pub enum MenuItem {
 
     /// The menu separator.
     Separator,
+
+    /// Checkbox menu item (toggle).
+    Check {
+        id: MenuId,
+        text: String,
+        enabled: bool,
+        checked: bool,
+    },
+
+    /// Menu item with a leading icon (e.g. status green dot).
+    Icon {
+        id: MenuId,
+        text: String,
+        enabled: bool,
+        icon: MenuIconKind,
+    },
 }
 
 impl MenuItem {
@@ -64,6 +86,38 @@ impl MenuItem {
     #[inline]
     pub const fn separator() -> Self {
         Self::Separator
+    }
+
+    /// Creates a checkbox item.
+    #[inline]
+    pub fn check(
+        id: impl Into<MenuId>,
+        text: impl Into<String>,
+        enabled: bool,
+        checked: bool,
+    ) -> Self {
+        Self::Check {
+            id: id.into(),
+            text: text.into(),
+            enabled,
+            checked,
+        }
+    }
+
+    /// Creates an item with a leading icon.
+    #[inline]
+    pub fn icon(
+        id: impl Into<MenuId>,
+        text: impl Into<String>,
+        enabled: bool,
+        icon: MenuIconKind,
+    ) -> Self {
+        Self::Icon {
+            id: id.into(),
+            text: text.into(),
+            enabled,
+            icon,
+        }
     }
 
     /// Creates the submenu.
@@ -112,6 +166,35 @@ impl MenuItem {
             } => {
                 let item = menu::MenuItem::with_id(&id.0, text, *enabled, *accelerator);
                 Box::new(item)
+            }
+            MenuItem::Check {
+                id,
+                text,
+                enabled,
+                checked,
+            } => Box::new(CheckMenuItem::with_id(
+                &id.0,
+                text,
+                *enabled,
+                *checked,
+                None,
+            )),
+            MenuItem::Icon {
+                id,
+                text,
+                enabled,
+                icon,
+            } => {
+                let resolved = match icon {
+                    MenuIconKind::GreenStatusDot => super::green_status_dot_icon(),
+                };
+                Box::new(IconMenuItem::with_id(
+                    &id.0,
+                    text,
+                    *enabled,
+                    Some(resolved),
+                    None,
+                ))
             }
         }
     }

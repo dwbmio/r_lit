@@ -5,7 +5,7 @@ with [Bevy](https://bevyengine.org). It lives in the **system tray / macOS menu
 bar**; click the tray icon to show or hide the mascot. The mascot is a rigged,
 idle-animated 3D model (generated from an image via Meshy / fal.ai), wanders
 your desktop, can be dragged, hops when clicked, and lets clicks fall through
-everywhere it isn't drawn. A small egui HUD provides quick controls.
+everywhere it isn't drawn.
 
 ## Features
 
@@ -14,21 +14,19 @@ everywhere it isn't drawn. A small egui HUD provides quick controls.
   as an *accessory* app (menu-bar only, no Dock icon).
 - **3D mascot from an image**: loads a rigged, idle-animated `.glb`
   (`assets/block.glb`, generated via fal.ai's hosted Meshy image-to-3d). Falls
-  back to a built-in procedural slime if no `.glb` is present. Switchable
-  between the two generated models (`block` / `blast`) from the HUD.
+  back to a built-in procedural slime if no `.glb` is present. The active
+  mascot can be switched via RPC (`set_glb`).
 - **Transparent, frameless, always-on-top** window (`ClearColor(Color::NONE)` +
   `CompositeAlphaMode::PostMultiplied`).
 - **Per-pixel-feel passthrough**: clicks on the transparent area fall through to
-  whatever is behind; clicks on the mascot body / HUD are captured.
-- **Collapsible egui HUD**: a small gear that expands into a semi-transparent
-  panel (walk speed, wander toggle, Hop, Switch, Quit).
+  whatever is behind; clicks on the mascot body are captured.
 - **Protocol-driven reminders**: a loopback socket turns the mascot into a
   *custom reminder surface* — any process sends a one-line JSON message and the
   pet pops up and shows it (see [Reminders](#reminders)).
 - Random idle wandering, click-to-hop, drag-to-move, right-click / Esc to quit.
 - **Lazy rendering**: adaptive frame rate — ~60 fps while interacting, ~8 fps
   idle heartbeat when perched. CPU is ~0% when truly still.
-- **Lean memory**: trimmed Bevy/egui features (no audio/picking/bevy_ui/gamepad/
+- **Lean memory**: trimmed Bevy features (no audio/picking/bevy_ui/gamepad/
   sysinfo), 128² mascot texture, MSAA off. ~120 MB RSS / ~290 MB incl. GPU.
 
 ## Controls
@@ -40,9 +38,6 @@ everywhere it isn't drawn. A small egui HUD provides quick controls.
 | Left click on mascot body | Greeting hop |
 | Left drag on body | Move the mascot window |
 | Right click on body / Esc | Quit |
-| Gear (mascot's top-right) | Open the HUD panel |
-| HUD "Switch" | Swap block ↔ blast mascot |
-| Click on a reminder bubble | Dismiss the reminder early |
 | Click on transparent area | Falls through to what's behind |
 
 ## Build & Run
@@ -88,14 +83,13 @@ To use your own model: drop a humanoid rigged `.glb` at `assets/block.glb`
 deskpet doubles as a **protocol-driven reminder surface**: in the same shape as
 an LSP client talking to a server, any process sends it a one-line JSON message
 and the mascot pops up (revealing itself if hidden in the tray), hops for
-attention, and shows the text in a speech bubble that auto-dismisses (click it
-to dismiss early). This makes it a natural target for *system-info / custom
+attention, and posts the text as an OS system notification (dedup + throttled). This makes it a natural target for *system-info / custom
 reminders* — build results, long-job completion, battery/disk warnings, "stand
 up" nudges, anything you can `echo` from a script.
 
 The full wire reference is in **[`PROTOCOL.md`](PROTOCOL.md)** (中文：
 [`PROTOCOL_CN.md`](PROTOCOL_CN.md)) — also reachable in-app from the tray
-right-click menu (*Reminder Protocol Docs*) or the HUD's *Protocol Docs* button.
+right-click menu (*Reminder Protocol Docs*).
 
 ### Quick start
 
@@ -128,7 +122,7 @@ printf '%s\n' '{"type":"notify","title":"CI","body":"green","level":"success"}' 
 | Field | Required | Notes |
 |-------|:--------:|-------|
 | `type` | yes | `"notify"` to show, `"clear"` to dismiss |
-| `body` | yes (notify) | the reminder text (wraps in the bubble) |
+| `body` | yes (notify) | the reminder text |
 | `title` | no | bold accent-colored title line |
 | `level` | no | `info` (default) / `success` / `warn` / `error` — sets the color |
 | `duration_ms` | no | display time; default derived from level + length |
@@ -143,7 +137,7 @@ off the host).
 is `false` the window receives no Bevy cursor events. deskpet polls the
 **OS-global cursor position** every frame (permission-free: CGEvent on macOS,
 GetCursorPos on Windows) and flips `hit_test` based on whether the pointer is
-over the mascot body or the HUD. Mouse buttons come from Bevy, since `hit_test`
+over the mascot body. Mouse buttons come from Bevy, since `hit_test`
 is always on whenever a click matters. The window is also focused on approach so
 macOS delivers events to it (a frameless overlay otherwise gets none).
 
@@ -153,12 +147,11 @@ macOS delivers events to it (a frameless overlay otherwise gets none).
 |-------|--------|
 | Mascot texture 2048² → 128² | VRAM 16 MB → 64 KB |
 | Trim Bevy features (drop audio/picking/bevy_ui/gilrs/sysinfo) | smaller binary + fewer threads |
-| Trim bevy_egui (`render` + `default_fonts` only) | drops clipboard/url + bevy_ui_render/picking |
 | `Msaa::Off` | frees multisample targets |
 | Adaptive frame rate | ~0% CPU idle |
 
-Tunable constants are at the top of `src/main.rs` (`PET_W`, `WIN_H`, `HUD_W`,
-`UI_SCALE`, walk/jump/frame-rate values).
+Tunable constants are at the top of `src/main.rs` (`PET_W`, `WIN_H`,
+walk/jump/frame-rate values).
 
 ## Platform Support
 

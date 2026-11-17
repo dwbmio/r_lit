@@ -10,12 +10,14 @@ mod notify;
 mod os_notify;
 pub mod rpc;
 mod pet_render;
+mod spine_pet;
+mod spine_layout;
 mod rpc_methods;
 mod tray_icon;
 
 mod in_process;
 
-pub use app::{LaunchConfig, launch_with_inbox, try_cli};
+pub use app::{LaunchConfig, TrayMode, launch_with_inbox, try_cli};
 pub(crate) use app::{Mascot, PetWin, Screen, Settings, Walk};
 pub use in_process::call_via_inbox;
 pub use rpc::bevy_bridge::RpcTaskInbox;

@@ -7,6 +7,7 @@ use bevy::window::PrimaryWindow;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::app::LaunchTrayConfig;
 use crate::notify::{make_notice, Level, Notice, NotificationAction, NotifyState};
 use crate::os_notify::{NotificationThrottle, ThrottleDecision};
 use crate::rpc::{Method, RpcError};
@@ -126,12 +127,23 @@ impl Method for ShowMethod {
         }
         drop(state);
 
-        // Make the window visible — same effect as the legacy `Incoming::Notify`.
-        if let Ok(mut window) = world
-            .query_filtered::<&mut bevy::window::Window, With<PrimaryWindow>>()
-            .single_mut(world)
-        {
-            window.visible = true;
+        // 默认不自动弹出萌宠；须菜单栏「显示桌面宠」或 `pet/control` show 手动显隐。
+        // 设 DESKPET_AUTO_SHOW_ON_NOTIFY=1 或 LaunchConfig.auto_show_on_notify 可恢复旧行为。
+        let auto_show = std::env::var("DESKPET_AUTO_SHOW_ON_NOTIFY")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "TRUE" | "YES"))
+            .unwrap_or_else(|_| {
+                world
+                    .get_resource::<LaunchTrayConfig>()
+                    .map(|c| c.auto_show_on_notify)
+                    .unwrap_or(false)
+            });
+        if auto_show {
+            if let Ok(mut window) = world
+                .query_filtered::<&mut bevy::window::Window, With<PrimaryWindow>>()
+                .single_mut(world)
+            {
+                window.visible = true;
+            }
         }
 
         Ok(serde_json::to_value(ShowResult {

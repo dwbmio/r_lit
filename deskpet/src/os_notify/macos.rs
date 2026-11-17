@@ -74,6 +74,11 @@ impl Default for MacOsNotifier {
 
 impl OsNotifier for MacOsNotifier {
     fn fire(&self, notice: &Notice) -> Result<(), OsNotifyError> {
+        // starlink-dev 嵌入二进制无 .app bundle 时 set_application 失败；
+        // 仍调用 send_notification 会导致 NSUserNotification 路径崩溃/SIGKILL。
+        if !self.initialized {
+            return Ok(());
+        }
         let title = notice.title.as_deref().unwrap_or("Deskpet");
         let body = &notice.body;
         // v1: log action labels but don't render buttons — mac-notification-sys

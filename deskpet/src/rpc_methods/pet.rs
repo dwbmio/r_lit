@@ -117,8 +117,6 @@ pub enum PetAction {
     SetGlb,
     /// 开关 HUD「显示动画」（false = 隐藏桌面萌宠模型）.
     SetShowAnimation,
-    /// Toggle the HUD panel open/closed.
-    ToggleHud,
     /// Reset the pet window to the center of the primary monitor.
     ResetPosition,
     /// Cleanly shut down the deskpet process. Replies first, then exits.
@@ -328,24 +326,12 @@ impl Method for ControlMethod {
                 })
                 .map_err(|e| RpcError::Internal(e.to_string()))?)
             }
-            PetAction::ToggleHud => {
-                let mut settings = world
-                    .get_resource_mut::<Settings>()
-                    .ok_or_else(|| RpcError::Internal("Settings resource missing".into()))?;
-                settings.hud_open = !settings.hud_open;
-                let now = settings.hud_open;
-                Ok(serde_json::to_value(ControlResult {
-                    applied: true,
-                    note: Some(format!("hud_open={now}")),
-                })
-                .map_err(|e| RpcError::Internal(e.to_string()))?)
-            }
             PetAction::ResetPosition => {
                 // Center on primary monitor using cached Screen geometry.
                 // Window dims are the same constants main.rs uses to construct
                 // the WindowResolution. Duplicated here so this method doesn't
                 // need a back-reference into main.rs.
-                const WIN_W: f32 = 310.0;
+                const WIN_W: f32 = 150.0;
                 const WIN_H: f32 = 200.0;
                 let (origin, size) = world
                     .get_resource::<Screen>()
