@@ -6,6 +6,7 @@
 resolver = "2"
 members = ["deskpet"]
 exclude = [
+    "artifact-inspect",
     "audiogen",
     "bulk_upload",
     "crates/murmur",
