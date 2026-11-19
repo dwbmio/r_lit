@@ -5,17 +5,49 @@ use std::io::Write;
 use std::path::Path;
 use zip::{CompressionMethod, write::SimpleFileOptions};
 
-fn zip_file(path: &Path, entries: &[(&str, &[u8])]) {
+fn zip_file_with_compression(
+    path: &Path,
+    entries: &[(&str, &[u8])],
+    compression: CompressionMethod,
+) {
     let file = fs::File::create(path).unwrap();
     let mut writer = zip::ZipWriter::new(file);
     let options = SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Deflated)
+        .compression_method(compression)
         .unix_permissions(0o644);
     for (name, bytes) in entries {
         writer.start_file(*name, options).unwrap();
         writer.write_all(bytes).unwrap();
     }
     writer.finish().unwrap();
+}
+
+fn zip_file(path: &Path, entries: &[(&str, &[u8])]) {
+    zip_file_with_compression(path, entries, CompressionMethod::Deflated);
+}
+
+fn tar_gz_file(path: &Path, entries: &[(&str, &[u8])]) {
+    let encoder = GzEncoder::new(fs::File::create(path).unwrap(), Compression::default());
+    let mut builder = tar::Builder::new(encoder);
+    for (name, bytes) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, *name, &bytes[..]).unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap();
+}
+
+fn assert_suppressed(file: &artifact_inspect::FileEntry) {
+    assert_eq!(
+        file.preview.kind, "suppressed_sensitive",
+        "{}",
+        file.relative_path
+    );
+    assert!(file.preview.text.is_none(), "{}", file.relative_path);
+    assert!(file.preview.data_uri.is_none(), "{}", file.relative_path);
+    assert!(file.preview.media_type.is_none(), "{}", file.relative_path);
 }
 
 #[test]
@@ -207,4 +239,144 @@ fn godot_and_unity_formats_are_explicitly_not_parsed() {
     assert!(files[0].preview.limitation.contains("not parsed"));
     assert_eq!(files[1].kind, "unity_scene");
     assert!(files[1].preview.limitation.contains("not parsed"));
+}
+
+#[test]
+fn truncated_gzip_trailer_is_an_input_error_even_after_complete_tar_members() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("truncated.tar.gz");
+    tar_gz_file(&path, &[("out/readme.txt", b"ordinary fixture")]);
+    let healthy = fs::read(&path).unwrap();
+    assert!(healthy.len() > 8);
+    fs::write(&path, &healthy[..healthy.len() - 8]).unwrap();
+
+    let error = inspect_path(&path, &Limits::default()).unwrap_err();
+    assert!(error.is_input(), "{error}");
+    assert!(error.to_string().contains("gzip"), "{error}");
+}
+
+#[test]
+fn zip_payload_crc_is_validated_beyond_the_preview_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("crc.zip");
+    let payload = vec![b'X'; 128 * 1024];
+    zip_file_with_compression(&path, &[("large.bin", &payload)], CompressionMethod::Stored);
+    let mut bytes = fs::read(&path).unwrap();
+    let marker = &payload[96 * 1024..96 * 1024 + 64];
+    let offset = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("stored payload marker");
+    bytes[offset] ^= 1;
+    fs::write(&path, bytes).unwrap();
+
+    let error = inspect_path(&path, &Limits::default()).unwrap_err();
+    assert!(error.is_input(), "{error}");
+}
+
+#[test]
+fn corrupt_nested_zip_is_an_explicit_issue_not_a_silent_container() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = tmp.path().join("inner.zip");
+    let payload = vec![b'Z'; 128 * 1024];
+    zip_file_with_compression(
+        &inner,
+        &[("large.bin", &payload)],
+        CompressionMethod::Stored,
+    );
+    let mut bytes = fs::read(&inner).unwrap();
+    let marker = &payload[96 * 1024..96 * 1024 + 64];
+    let offset = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("stored payload marker");
+    bytes[offset] ^= 1;
+    fs::write(&inner, bytes).unwrap();
+    let inner_bytes = fs::read(&inner).unwrap();
+    let outer = tmp.path().join("outer.zip");
+    zip_file(&outer, &[("nested.zip", &inner_bytes)]);
+
+    let report = inspect_path(&outer, &Limits::default()).unwrap();
+    assert_eq!(report.containers.len(), 1);
+    assert_eq!(report.containers[0].issues.len(), 1);
+    assert_eq!(report.containers[0].issues[0].kind, "nested_zip_invalid");
+    assert!(report.containers[0].issues[0].message.contains("ZIP"));
+}
+
+#[test]
+fn env_variants_and_sensitive_nested_containers_never_emit_preview_content() {
+    const OUTER_SECRET: &[u8] = b"FICTIONAL_OUTER_ENV_PLACEHOLDER";
+    const NESTED_SECRET: &[u8] = b"FICTIONAL_NESTED_ENV_PLACEHOLDER";
+    const INHERITED_SECRET: &[u8] = b"FICTIONAL_INHERITED_CONTAINER_PLACEHOLDER";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("dist");
+    fs::create_dir(&input).unwrap();
+    for name in [
+        ".env",
+        ".env.local",
+        "runtime.env",
+        "SETTINGS.ENV",
+        ".envrc",
+    ] {
+        fs::write(input.join(name), OUTER_SECRET).unwrap();
+    }
+    fs::write(input.join("ordinary.txt"), b"ordinary").unwrap();
+
+    let env_zip = tmp.path().join("env.zip");
+    zip_file(&env_zip, &[("nested/production.env", NESTED_SECRET)]);
+    fs::copy(&env_zip, input.join("env.zip")).unwrap();
+    let private_zip = tmp.path().join("private.zip");
+    zip_file(
+        &private_zip,
+        &[
+            ("docs/readme.txt", INHERITED_SECRET),
+            ("normal.txt", b"normal"),
+        ],
+    );
+    fs::create_dir(input.join("private")).unwrap();
+    fs::copy(&private_zip, input.join("private/bundle.zip")).unwrap();
+
+    let report = inspect_path(&input, &Limits::default()).unwrap();
+    let files: Vec<_> = report
+        .containers
+        .iter()
+        .flat_map(|c| c.files.iter())
+        .collect();
+    for name in [
+        ".env",
+        ".env.local",
+        "runtime.env",
+        "SETTINGS.ENV",
+        ".envrc",
+    ] {
+        assert_suppressed(files.iter().find(|f| f.relative_path == name).unwrap());
+    }
+    assert_suppressed(
+        files
+            .iter()
+            .find(|f| f.relative_path == "nested/production.env")
+            .unwrap(),
+    );
+    for name in ["docs/readme.txt", "normal.txt"] {
+        let inherited = files.iter().find(|f| f.relative_path == name).unwrap();
+        assert_suppressed(inherited);
+        assert_eq!(
+            inherited.raw_bytes,
+            if name == "normal.txt" {
+                6
+            } else {
+                INHERITED_SECRET.len() as u64
+            }
+        );
+    }
+
+    let serialized = serde_json::to_string(&report).unwrap();
+    let html = render_html(&report).unwrap();
+    for placeholder in [OUTER_SECRET, NESTED_SECRET, INHERITED_SECRET] {
+        let placeholder = std::str::from_utf8(placeholder).unwrap();
+        assert!(!serialized.contains(placeholder));
+        assert!(!html.contains(placeholder));
+    }
+    assert!(serialized.contains("ordinary.txt"));
 }

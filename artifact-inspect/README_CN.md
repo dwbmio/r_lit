@@ -24,7 +24,7 @@ artifact-inspect package.tar.gz -o inspection/ --max-depth 4
 artifact-inspect __schema
 ```
 
-输出目录不能是输入目录本身或其后代。重复运行会覆盖同名报告，但绝不会修改输入文件。
+输出目录不能是输入目录本身或其后代。既存 JSON/HTML/log 目标必须是普通文件：符号链接、硬链接、非普通文件以及任何与输入文件相同的目标都会在检查前以退出码 2 拒绝。普通报告在重复运行时原子替换；绝不跟随目标链接，也绝不修改输入文件。
 
 ### 输出文件
 
@@ -55,10 +55,11 @@ Godot 包/资源和 Unity 场景/资产只做类型分类，不做专有格式�
 
 - PNG、JPEG、GIF、WebP 在预览前检查尺寸、验证解码并限制像素数，最终以惰性 `data:` URI 嵌入。
 - UTF-8 文本受字节限额约束并进行 HTML 转义。HTML、JavaScript、SVG 只显示转义后的文本，绝不激活。
-- 文件名或路径疑似 private/secret/credential/token 配置，以及 `.env`、私钥、密钥库等敏感文件，仍列出路径和字节，但 `preview.kind = "suppressed_sensitive"`，不含文本或图像内容。
+- 文件名或路径疑似 private/secret/credential/token 配置，任意 `*.env`、`.env.*`、`.envrc`，以及私钥、密钥库等敏感文件，仍列出路径和字节，但 `preview.kind = "suppressed_sensitive"`，不含文本或图像内容。敏感嵌套 ZIP 的成员继承抑制，同时保留各自路径和大小口径。
 - HTML 的内容安全策略为 `default-src 'none'`，仅允许 `data:` 图像和报告内联样式。
 - 不跟随输入符号链接或归档链接。特殊文件会跳过并记录问题，危险归档路径会被拒绝。
-- 嵌套 ZIP 只在有界内存中处理，不抽取到输入旁。损坏的嵌套 ZIP 记录为问题；损坏的外层输入以输入错误退出，不伪造空的成功报告。
+- 嵌套 ZIP 只在有界内存中处理，不抽取到输入旁。每个普通 ZIP 成员都用固定大小缓冲区读取到末尾，在预览前缀之外继续验证解压、声明大小和 CRC。损坏的嵌套 ZIP 记录为 `nested_zip_invalid`；损坏的外层 ZIP 以输入错误退出，不生成成功报告。
+- 读取 TAR 成员后，继续用固定大小缓冲区排空 gzip 解码器直至 gzip 尾部，避免 TAR 提前结束标记掩盖截断或校验和错误。损坏的外层 TAR.GZ 以退出码 3 和 `error.kind = "input"` 失败，不写 JSON/HTML 成功报告，并保留错误日志。
 
 默认限额：
 
@@ -90,7 +91,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-隔离测试覆盖目录、ZIP、TAR.GZ、按签名发现嵌套 ZIP、分层大小口径、损坏输入、符号链接、输出位置、限额、离线转义预览、敏感内容抑制、CLI 信封和 `__schema`。
+隔离测试覆盖目录、ZIP、TAR.GZ、按签名发现嵌套 ZIP、分层大小口径、gzip 尾部截断、预览范围之外的 ZIP CRC 损坏、显式嵌套 ZIP 失败、符号链接与硬链接输出目标、普通输出替换、输出位置、限额、离线转义预览、环境文件与敏感容器抑制、CLI 信封和 `__schema`。
 
 对冻结的本地 Zuma C4 做回归时，指定两个路径，运行与 Lead 独立清单的可选逐路径比较：
 
@@ -100,4 +101,4 @@ C4_REFERENCE="$HOME/Documents/Zuma-B-C/C4-Inventory/C4-文件清单.json" \
 cargo test --test c4_reference -- --ignored --nocapture
 ```
 
-该测试逐项比较 `(layer, path)`、原始字节和 ZIP 压缩字节，并核对独立基线：外层 25 文件 / 7,696,698 B，内层 139 文件 / 2,093,130 B 原始 / 1,979,382 B ZIP 条目数据。它还验证真实私有配置没有任何预览内容字段。
+该测试逐项比较 `(layer, path)`、原始字节和 ZIP 压缩字节，并核对独立基线：外层 25 文件 / 7,696,698 B，内层 139 文件 / 2,093,130 B 原始 / 1,979,382 B ZIP 条目数据。它还验证 `out/project.private.config.json` 与 `env/runtime.env` 都为 `suppressed_sensitive`，没有文本、媒体类型或图像内容；只打印这些元数据状态，绝不打印值。

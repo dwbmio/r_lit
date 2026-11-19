@@ -9,10 +9,13 @@ use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::fs::File;
-use std::io::{Cursor, Read, Seek};
+use std::fs::{File, OpenOptions};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use walkdir::WalkDir;
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 pub const TOOL_NAME: &str = "artifact-inspect";
@@ -211,6 +214,7 @@ struct PendingNested {
     parent_path: String,
     relative_path: String,
     depth: usize,
+    inherited_sensitive: bool,
     bytes: Vec<u8>,
 }
 
@@ -261,7 +265,7 @@ pub fn inspect_path(input: &Path, limits: &Limits) -> Result<Report, InspectErro
         }
         "zip" => {
             let file = File::open(&canonical).map_err(|e| io_error("open ZIP", &canonical, e))?;
-            pending.extend(inspector.inspect_zip(file, source.clone(), 0, None)?);
+            pending.extend(inspector.inspect_zip(file, source.clone(), 0, None, false)?);
         }
         "tar.gz" => {
             let file =
@@ -286,6 +290,7 @@ pub fn inspect_path(input: &Path, limits: &Limits) -> Result<Report, InspectErro
                 container_id: item.parent_container_id.clone(),
                 relative_path: item.relative_path.clone(),
             }),
+            item.inherited_sensitive,
         ) {
             Ok(children) => pending.extend(children),
             Err(error) => {
@@ -438,8 +443,8 @@ impl Inspector {
                 .len();
             let mut file =
                 File::open(entry.path()).map_err(|e| io_error("open file", entry.path(), e))?;
-            let (record, nested, mut file_issues) =
-                self.process_file(&id, source, 0, relative, raw_bytes, None, &mut file)?;
+            let (record, nested, mut file_issues, _) =
+                self.process_file(&id, source, 0, relative, raw_bytes, None, false, &mut file)?;
             files.push(record);
             issues.append(&mut file_issues);
             pending.extend(nested);
@@ -495,12 +500,14 @@ impl Inspector {
                 .header()
                 .size()
                 .map_err(|e| io_error("read TAR.GZ member size in", source, e))?;
-            let (record, nested, mut file_issues) =
-                self.process_file(&id, source, 0, relative, raw_bytes, None, &mut entry)?;
+            let (record, nested, mut file_issues, _) =
+                self.process_file(&id, source, 0, relative, raw_bytes, None, false, &mut entry)?;
             files.push(record);
             issues.append(&mut file_issues);
             pending.extend(nested);
         }
+        let mut decoder = archive.into_inner();
+        drain_to_end(&mut decoder).map_err(|e| io_error("validate gzip trailer in", source, e))?;
         files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         pending.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         self.push_container(id, source.to_string(), "tar.gz", 0, None, files, issues)?;
@@ -513,6 +520,7 @@ impl Inspector {
         source: String,
         depth: usize,
         parent: Option<NestedParent>,
+        inherited_sensitive: bool,
     ) -> Result<Vec<PendingNested>, InspectError> {
         let mut archive =
             zip::ZipArchive::new(reader).map_err(|source_error| InspectError::Zip {
@@ -556,9 +564,22 @@ impl Inspector {
             }
             let raw_bytes = entry.size();
             let compressed = Some(entry.compressed_size());
-            let (record, nested, mut file_issues) = self.process_file(
-                &id, &source, depth, relative, raw_bytes, compressed, &mut entry,
+            let (record, nested, mut file_issues, consumed) = self.process_file(
+                &id,
+                &source,
+                depth,
+                relative,
+                raw_bytes,
+                compressed,
+                inherited_sensitive,
+                &mut entry,
             )?;
+            if consumed > raw_bytes {
+                return Err(InspectError::Input(format!(
+                    "ZIP member size mismatch in {source}: read {consumed} bytes, declared {raw_bytes}"
+                )));
+            }
+            drain_zip_remainder(&mut entry, raw_bytes - consumed, &source)?;
             files.push(record);
             issues.append(&mut file_issues);
             pending.extend(nested);
@@ -578,8 +599,9 @@ impl Inspector {
         relative_path: String,
         raw_bytes: u64,
         zip_compressed_bytes: Option<u64>,
+        inherited_sensitive: bool,
         reader: &mut R,
-    ) -> Result<(FileEntry, Option<PendingNested>, Vec<Issue>), InspectError> {
+    ) -> Result<(FileEntry, Option<PendingNested>, Vec<Issue>, u64), InspectError> {
         self.total_entries = self
             .total_entries
             .checked_add(1)
@@ -601,7 +623,7 @@ impl Inspector {
             )));
         }
 
-        let sensitive = is_sensitive_path(&relative_path);
+        let sensitive = inherited_sensitive || is_sensitive_path(&relative_path);
         let preview_cap = if sensitive {
             4
         } else {
@@ -609,6 +631,7 @@ impl Inspector {
         };
         let prefix = read_at_most(&mut *reader, preview_cap)
             .map_err(|e| io_error("read file bytes from", &relative_path, e))?;
+        let mut bytes_consumed = prefix.len() as u64;
         let kind = classify_file(&relative_path, &prefix);
         let mut issues = Vec::new();
         let looks_nested = is_zip_name(&relative_path) || is_zip_magic(&prefix);
@@ -634,6 +657,7 @@ impl Inspector {
                 let chained = Cursor::new(prefix.clone()).chain(reader);
                 let bytes = read_at_most(chained, self.limits.max_nested_bytes.saturating_add(1))
                     .map_err(|e| io_error("read nested ZIP", &relative_path, e))?;
+                bytes_consumed = bytes.len() as u64;
                 if bytes.len() as u64 > self.limits.max_nested_bytes {
                     issues.push(Issue {
                         kind: "nested_size_skipped".to_string(),
@@ -659,6 +683,7 @@ impl Inspector {
                             parent_path: container_path.to_string(),
                             relative_path: relative_path.clone(),
                             depth: depth + 1,
+                            inherited_sensitive: sensitive,
                             bytes,
                         })
                     }
@@ -668,7 +693,7 @@ impl Inspector {
             None
         };
 
-        let preview = self.make_preview(&relative_path, &kind, raw_bytes, &prefix);
+        let preview = self.make_preview(&kind, raw_bytes, &prefix, sensitive);
         Ok((
             FileEntry {
                 container_id: container_id.to_string(),
@@ -681,17 +706,18 @@ impl Inspector {
             },
             nested,
             issues,
+            bytes_consumed,
         ))
     }
 
     fn make_preview(
         &mut self,
-        relative_path: &str,
         file_kind: &str,
         raw_bytes: u64,
         prefix: &[u8],
+        sensitive: bool,
     ) -> Preview {
-        if is_sensitive_path(relative_path) {
+        if sensitive {
             return Preview::unavailable(
                 "suppressed_sensitive",
                 "sensitive-looking configuration/key content is not previewed; path and byte size remain listed",
@@ -868,6 +894,46 @@ fn read_at_most<R: Read>(reader: R, limit: u64) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn drain_to_end<R: Read>(reader: &mut R) -> std::io::Result<()> {
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn drain_zip_remainder<R: Read>(
+    reader: &mut R,
+    expected: u64,
+    source: &str,
+) -> Result<(), InspectError> {
+    let limit = expected
+        .checked_add(1)
+        .ok_or_else(|| InspectError::Input(format!("ZIP member size overflow in {source}")))?;
+    let mut limited = reader.take(limit);
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut actual = 0_u64;
+    loop {
+        let count = limited
+            .read(&mut buffer)
+            .map_err(|e| io_error("validate ZIP member in", source, e))?;
+        if count == 0 {
+            break;
+        }
+        actual = actual
+            .checked_add(count as u64)
+            .ok_or_else(|| InspectError::Input(format!("ZIP member size overflow in {source}")))?;
+    }
+    if actual != expected {
+        return Err(InspectError::Input(format!(
+            "ZIP member size mismatch in {source}: expected {expected} remaining bytes, read {actual}"
+        )));
+    }
+    Ok(())
+}
+
 fn safe_relative_path(path: &Path) -> Result<String, InspectError> {
     let normalized = path.to_string_lossy().replace('\\', "/");
     if normalized.starts_with('/') || normalized.contains('\0') {
@@ -926,8 +992,64 @@ pub fn validate_output_dir(input: &Path, output: &Path) -> Result<PathBuf, Inspe
                 resolved_output.display()
             )));
         }
+        validate_output_targets(&resolved_output, None)?;
+    } else {
+        let canonical_input =
+            std::fs::canonicalize(input).map_err(|e| io_error("resolve input file", input, e))?;
+        validate_output_targets(&resolved_output, Some(&canonical_input))?;
     }
     Ok(resolved_output)
+}
+
+fn validate_output_targets(
+    output_dir: &Path,
+    canonical_input: Option<&Path>,
+) -> Result<(), InspectError> {
+    for name in [
+        "artifact-inspect.json",
+        "artifact-inspect.html",
+        "artifact-inspect.log",
+    ] {
+        validate_output_target(&output_dir.join(name), canonical_input)?;
+    }
+    Ok(())
+}
+
+fn validate_output_target(path: &Path, canonical_input: Option<&Path>) -> Result<(), InspectError> {
+    if canonical_input.is_some_and(|input| input == path) {
+        return Err(InspectError::Usage(format!(
+            "output target {} aliases the input file",
+            path.display()
+        )));
+    }
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error("read output target metadata for", path, error)),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(InspectError::Usage(format!(
+            "refusing symlink output target {}",
+            path.display()
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(InspectError::Usage(format!(
+            "output target {} is not a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() > 1 {
+            return Err(InspectError::Usage(format!(
+                "refusing hard-linked output target {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_output_candidate(output: &Path) -> Result<PathBuf, InspectError> {
@@ -974,20 +1096,99 @@ fn resolve_output_candidate(output: &Path) -> Result<PathBuf, InspectError> {
 }
 
 /// Write the full versioned JSON report and its standalone offline HTML view.
+/// Existing ordinary reports are atomically replaced; links are never followed.
 pub fn write_reports(
     report: &Report,
     output_dir: &Path,
 ) -> Result<(PathBuf, PathBuf), InspectError> {
     std::fs::create_dir_all(output_dir)
         .map_err(|e| io_error("create output directory", output_dir, e))?;
+    validate_output_targets(output_dir, None)?;
     let json_path = output_dir.join("artifact-inspect.json");
     let html_path = output_dir.join("artifact-inspect.html");
     let mut json = serde_json::to_vec_pretty(report)?;
     json.push(b'\n');
-    std::fs::write(&json_path, json).map_err(|e| io_error("write JSON report", &json_path, e))?;
+    write_output_atomically(&json_path, &json)?;
     let html = render_html(report)?;
-    std::fs::write(&html_path, html).map_err(|e| io_error("write HTML report", &html_path, e))?;
+    write_output_atomically(&html_path, html.as_bytes())?;
     Ok((json_path, html_path))
+}
+
+/// Flush the shared run log through a same-directory temporary file and rename.
+/// This preserves the normal overwrite behavior without following a destination link.
+pub fn flush_runlog(path: &Path, header: &[String]) -> Result<(), InspectError> {
+    validate_output_target(path, None)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| io_error("create run log directory", parent, e))?;
+    }
+    let (temporary, file) = create_temporary_output(path)?;
+    drop(file);
+    rlit_cli::runlog::flush(&temporary, header);
+    let metadata = std::fs::symlink_metadata(&temporary)
+        .map_err(|e| io_error("read temporary run log", &temporary, e))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(InspectError::Io {
+            action: "flush run log to",
+            path: temporary,
+            source: std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "shared runlog did not produce a regular non-empty log",
+            ),
+        });
+    }
+    replace_temporary_output(temporary, path)
+}
+
+fn write_output_atomically(path: &Path, bytes: &[u8]) -> Result<(), InspectError> {
+    validate_output_target(path, None)?;
+    let (temporary, mut file) = create_temporary_output(path)?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.flush()) {
+        drop(file);
+        let _ = std::fs::remove_file(&temporary);
+        return Err(io_error("write temporary output for", path, error));
+    }
+    drop(file);
+    replace_temporary_output(temporary, path)
+}
+
+fn create_temporary_output(path: &Path) -> Result<(PathBuf, File), InspectError> {
+    let parent = path.parent().ok_or_else(|| {
+        InspectError::Usage(format!(
+            "output target {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "artifact-inspect-output".into());
+    for _ in 0..100 {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(".{name}.tmp-{}-{sequence}", std::process::id()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(io_error("create temporary output for", path, error)),
+        }
+    }
+    Err(InspectError::Usage(format!(
+        "could not allocate a unique temporary output for {}",
+        path.display()
+    )))
+}
+
+fn replace_temporary_output(temporary: PathBuf, path: &Path) -> Result<(), InspectError> {
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(io_error("atomically replace output", path, error));
+    }
+    Ok(())
 }
 
 /// Render a self-contained report without scripts, network references, or raw active content.
@@ -1112,17 +1313,19 @@ fn is_zip_magic(bytes: &[u8]) -> bool {
 fn is_sensitive_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let file_name = lower.rsplit('/').next().unwrap_or(&lower);
-    if [
-        ".env",
-        ".netrc",
-        ".npmrc",
-        ".pypirc",
-        "id_rsa",
-        "id_dsa",
-        "id_ecdsa",
-        "id_ed25519",
-    ]
-    .contains(&file_name)
+    if file_name.ends_with(".env")
+        || file_name.starts_with(".env.")
+        || file_name == ".envrc"
+        || [
+            ".netrc",
+            ".npmrc",
+            ".pypirc",
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+        ]
+        .contains(&file_name)
     {
         return true;
     }

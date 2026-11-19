@@ -90,15 +90,22 @@ fn matches_independent_c4_reference_path_for_path_and_byte_for_byte() {
         Some(1_979_382)
     );
 
-    let private = report.containers[0]
-        .files
-        .iter()
-        .find(|file| file.relative_path == "out/project.private.config.json")
-        .unwrap();
-    assert_eq!(private.preview.kind, "suppressed_sensitive");
-    assert!(private.preview.text.is_none());
-    assert!(private.preview.data_uri.is_none());
+    for path in ["out/project.private.config.json", "env/runtime.env"] {
+        let private = report
+            .containers
+            .iter()
+            .flat_map(|container| container.files.iter())
+            .find(|file| file.relative_path == path)
+            .unwrap();
+        assert_eq!(private.preview.kind, "suppressed_sensitive");
+        assert!(private.preview.text.is_none());
+        assert!(private.preview.data_uri.is_none());
+        assert!(private.preview.media_type.is_none());
+        println!(
+            "C4 private row {path}: kind={}, text_present=false, image_present=false",
+            private.preview.kind
+        );
+    }
     println!("C4 reference match: 164/164 paths, raw bytes, and ZIP compressed-byte values");
     println!("C4 layer totals: outer=25/7696698 B; nested=139/2093130 B raw/1979382 B ZIP payload");
-    println!("C4 private configuration preview: suppressed_sensitive, no content fields");
 }

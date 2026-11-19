@@ -1,4 +1,6 @@
-use artifact_inspect::{InspectError, Limits, inspect_path, validate_output_dir, write_reports};
+use artifact_inspect::{
+    InspectError, Limits, flush_runlog, inspect_path, validate_output_dir, write_reports,
+};
 use clap::Parser;
 use rlit_cli::{CommandSpec, Contract, Effects, ErrorKind, Io, runlog};
 use std::path::{Path, PathBuf};
@@ -69,7 +71,7 @@ fn main() {
         .as_ref()
         .ok()
         .map(|dir| dir.join("artifact-inspect.log"));
-    let result = match validated_output {
+    let mut result = match validated_output {
         Ok(output_dir) => run(&cli, &output_dir),
         Err(error) => Err(error),
     };
@@ -77,8 +79,15 @@ fn main() {
         log::error!("{error}");
     }
     if let Some(log_path) = &log_path {
-        runlog::flush(log_path, &runlog::standard_header());
-        rlit_cli::add_artifact(log_path, "log");
+        match flush_runlog(log_path, &runlog::standard_header()) {
+            Ok(()) => rlit_cli::add_artifact(log_path, "log"),
+            Err(error) => {
+                eprintln!("[artifact-inspect ERROR] {error}");
+                if result.is_ok() {
+                    result = Err(error);
+                }
+            }
+        }
     }
     rlit_cli::finish(result, |error| {
         if error.is_usage() {

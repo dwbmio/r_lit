@@ -6,9 +6,10 @@
 - binary: artifact-inspect
 - build: cd artifact-inspect && cargo build --release
 - input: directory, ZIP, TAR.GZ, TGZ; symlink input rejected
-- nested_input: any regular file with .zip name or ZIP signature; bounded memory; default max depth 4
+- nested_input: any regular file with .zip name or ZIP signature; bounded memory; default max depth 4; corrupt nested ZIP emits nested_zip_invalid
+- archive_integrity: regular ZIP members are streamed to EOF for size/decompression/CRC validation; TAR.GZ decoder is drained through the gzip trailer; corrupt outer input exits 3 without JSON/HTML success reports
 - output: artifact-inspect.json, artifact-inspect.html, artifact-inspect.log under required --output-dir
-- output_guard: output must be outside a directory input; rejected output receives no report or log
+- output_guard: output must be outside a directory input; JSON/HTML/log symlinks, hard links, non-regular targets, and input-file aliases are rejected with exit 2; ordinary files are atomically replaced without following links
 - network: none
 - execution: never executes archived/build content
 - extraction: no archive extraction to disk; no input writes
@@ -42,7 +43,7 @@ artifact-inspect __schema
 - bitmap: PNG/JPEG/GIF/WebP; dimension and decode validation; pixel and byte limits; inert data URI
 - text: bounded UTF-8; HTML escaped
 - active_content: HTML/JavaScript/SVG shown as escaped text only
-- sensitive: private/secret/credential/token paths, .env, keys and keystores have suppressed_sensitive preview with no content
+- sensitive: private/secret/credential/token paths, any *.env, .env.*, .envrc, keys and keystores have suppressed_sensitive preview with no content; sensitive nested containers inherit suppression while keeping paths/sizes
 - html: standalone offline; CSP default-src none; no script or external resources
 - links: input/archive symlinks and TAR hard links not followed
 
@@ -62,5 +63,5 @@ cd artifact-inspect && cargo test
 cd artifact-inspect && cargo clippy --all-targets -- -D warnings
 C4_INPUT=/path/c4-zuma-wechat-qa.tar.gz C4_REFERENCE=/path/C4-文件清单.json cargo test --test c4_reference -- --ignored --nocapture
 ```
-- c4_reference: exact 164-row path/raw-byte/ZIP-compressed-byte comparison; verifies 25/7696698 outer and 139/2093130/1979382 nested baselines; private preview suppressed
+- c4_reference: exact 164-row path/raw-byte/ZIP-compressed-byte comparison; verifies 25/7696698 outer and 139/2093130/1979382 nested baselines; out/project.private.config.json and env/runtime.env both suppressed with no text/media/image content
 - release: local-only delivery; no Jenkins/cross-platform artifact claimed

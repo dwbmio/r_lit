@@ -24,7 +24,7 @@ artifact-inspect package.tar.gz -o inspection/ --max-depth 4
 artifact-inspect __schema
 ```
 
-The output directory must not be the input directory or one of its descendants. Reports are overwritten on a repeated run; input files are never modified.
+The output directory must not be the input directory or one of its descendants. Existing JSON/HTML/log destinations must be ordinary files: symbolic links, hard links, non-regular files, and any destination that is the input file itself are rejected with exit 2 before inspection. Ordinary reports are atomically replaced on a repeated run; destination links are never followed and input files are never modified.
 
 ### Output files
 
@@ -55,10 +55,11 @@ Godot packages/resources and Unity scenes/assets are classified but not parsed. 
 
 - PNG, JPEG, GIF, and WebP previews are dimension-checked, decode-validated, pixel-limited, and embedded as inert `data:` URIs.
 - UTF-8 text is byte-bounded and HTML-escaped. HTML, JavaScript, and SVG are shown only as escaped text, never activated.
-- Sensitive-looking files such as private/secret/credential/token configuration, `.env`, private keys, and keystores retain path and byte rows but have `preview.kind = "suppressed_sensitive"` and no text or image content.
+- Sensitive-looking files such as private/secret/credential/token configuration, any `*.env`, `.env.*`, `.envrc`, private keys, and keystores retain path and byte rows but have `preview.kind = "suppressed_sensitive"` and no text or image content. Members of a sensitive nested ZIP inherit that suppression while retaining their own paths and sizes.
 - The HTML CSP is `default-src 'none'`; only `data:` images and inline report styling are allowed.
 - Input symlinks and archive links are not followed. Special files are skipped with an issue. Unsafe archive paths are rejected.
-- Nested ZIPs are held in bounded memory, never extracted beside the input. Corrupt nested ZIPs are recorded as issues; a corrupt outer input exits with an input error instead of producing an empty success report.
+- Nested ZIPs are held in bounded memory, never extracted beside the input. Every regular ZIP member is streamed to its end with a fixed-size buffer to validate decompression, declared size, and CRC beyond the preview prefix. A corrupt nested ZIP is recorded as `nested_zip_invalid`; a corrupt outer ZIP exits with an input error instead of producing a success report.
+- After TAR members are read, the gzip decoder is drained with a fixed-size buffer through the gzip trailer so truncation and checksum failures cannot be hidden by an early TAR end marker. A corrupt outer TAR.GZ exits 3 with `error.kind = "input"`, writes no JSON/HTML success report, and retains an error log.
 
 Default limits:
 
@@ -90,7 +91,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-The isolated test suite covers directory, ZIP and TAR.GZ inputs; nested ZIP discovery by signature; stable per-layer sizes; corrupt input; symlinks; output placement; limits; offline/escaped previews; sensitive-content suppression; the CLI envelope; and `__schema`.
+The isolated test suite covers directory, ZIP and TAR.GZ inputs; nested ZIP discovery by signature; stable per-layer sizes; truncated gzip trailers; ZIP CRC corruption beyond previews; explicit nested-ZIP failures; symlinks and hard-linked output targets; ordinary output replacement; output placement; limits; offline/escaped previews; environment-file and sensitive-container suppression; the CLI envelope; and `__schema`.
 
 For the frozen local Zuma C4 regression, set both paths and run the opt-in comparison against the Lead's independently generated inventory:
 
@@ -100,4 +101,4 @@ C4_REFERENCE="$HOME/Documents/Zuma-B-C/C4-Inventory/C4-文件清单.json" \
 cargo test --test c4_reference -- --ignored --nocapture
 ```
 
-That test compares every `(layer, path)` with raw and ZIP compressed bytes and checks the independent totals: 25 outer files / 7,696,698 B and 139 nested files / 2,093,130 B raw / 1,979,382 B ZIP entry payload. It also verifies that the real private configuration has no preview content fields.
+That test compares every `(layer, path)` with raw and ZIP compressed bytes and checks the independent totals: 25 outer files / 7,696,698 B and 139 nested files / 2,093,130 B raw / 1,979,382 B ZIP entry payload. It also verifies that `out/project.private.config.json` and `env/runtime.env` are both `suppressed_sensitive` with no text, media type, or image content; only those metadata states are printed, never their values.

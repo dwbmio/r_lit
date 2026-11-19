@@ -6,9 +6,10 @@
 - 二进制：artifact-inspect
 - 构建：cd artifact-inspect && cargo build --release
 - 输入：目录、ZIP、TAR.GZ、TGZ；拒绝符号链接输入
-- 嵌套输入：任意路径下带 .zip 名称或 ZIP 签名的普通文件；有界内存；默认最大深度 4
+- 嵌套输入：任意路径下带 .zip 名称或 ZIP 签名的普通文件；有界内存；默认最大深度 4；损坏嵌套 ZIP 记录 nested_zip_invalid
+- 归档完整性：普通 ZIP 成员读取至 EOF 验证大小/解压/CRC；TAR.GZ 解码器排空至 gzip 尾部；损坏外层输入退出 3 且不写 JSON/HTML 成功报告
 - 输出：指定 --output-dir 下的 artifact-inspect.json、artifact-inspect.html、artifact-inspect.log
-- 输出保护：目录输入的后代不可作为输出；被拒绝的位置不会收到报告或日志
+- 输出保护：目录输入的后代不可作为输出；JSON/HTML/log 符号链接、硬链接、非普通目标和输入文件别名以退出码 2 拒绝；普通文件原子替换且不跟随链接
 - 网络：不访问
 - 执行：绝不执行归档或构建产物内容
 - 抽取：不向磁盘抽取归档，不写输入目录
@@ -42,7 +43,7 @@ artifact-inspect __schema
 - 位图：PNG/JPEG/GIF/WebP；检查尺寸并验证解码；限制像素和字节；使用惰性 data URI
 - 文本：有界 UTF-8；HTML 转义
 - 主动内容：HTML/JavaScript/SVG 只显示转义文本
-- 敏感内容：private/secret/credential/token 路径、.env、私钥和密钥库使用 suppressed_sensitive，不含内容
+- 敏感内容：private/secret/credential/token 路径、任意 *.env、.env.*、.envrc、私钥和密钥库使用 suppressed_sensitive，不含内容；敏感嵌套容器继承抑制并保留路径/大小
 - HTML：独立离线；CSP default-src none；无脚本或外部资源
 - 链接：不跟随输入/归档符号链接及 TAR 硬链接
 
@@ -62,5 +63,5 @@ cd artifact-inspect && cargo test
 cd artifact-inspect && cargo clippy --all-targets -- -D warnings
 C4_INPUT=/path/c4-zuma-wechat-qa.tar.gz C4_REFERENCE=/path/C4-文件清单.json cargo test --test c4_reference -- --ignored --nocapture
 ```
-- C4 对照：精确比较 164 行路径、原始字节、ZIP 压缩字节；核对外层 25/7696698 与内层 139/2093130/1979382；私有配置预览被抑制
+- C4 对照：精确比较 164 行路径、原始字节、ZIP 压缩字节；核对外层 25/7696698 与内层 139/2093130/1979382；out/project.private.config.json 和 env/runtime.env 均抑制且无文本/媒体/图像内容
 - 发布：仅本地交付，不声称已有 Jenkins 或跨平台制品
