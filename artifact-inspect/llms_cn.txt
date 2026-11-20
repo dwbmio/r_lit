@@ -6,6 +6,7 @@
 - 二进制：artifact-inspect
 - 构建：cd artifact-inspect && cargo build --release
 - 输入：目录、ZIP、TAR.GZ、TGZ；拒绝符号链接输入
+- TAR 根项：仅原始名称严格为 . 或 ./ 的目录条目免于空路径拒绝且不进入清单；其他目录仍校验路径；拒绝空路径非目录；根标记可选；ZIP 检查不变
 - 嵌套输入：任意路径下带 .zip 名称或 ZIP 签名的普通文件；有界内存；默认最大深度 4；损坏嵌套 ZIP 记录 nested_zip_invalid
 - 归档完整性：普通 ZIP 成员读取至 EOF 验证大小/解压/CRC；TAR.GZ 解码器排空至 gzip 尾部；损坏外层输入退出 3 且不写 JSON/HTML 成功报告
 - 输出：指定 --output-dir 下的 artifact-inspect.json、artifact-inspect.html、artifact-inspect.log

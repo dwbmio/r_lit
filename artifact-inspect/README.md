@@ -2,6 +2,8 @@
 
 `artifact-inspect` is a local Rust CLI for repeatable, offline inventories of game build outputs. It accepts a directory, ZIP, TAR.GZ, or TGZ and writes a versioned JSON report, a standalone HTML report, and one run log. Nested ZIP files are discovered by filename or signature at any path, including `out/engine/godot.zip`; no C4-specific path is hard-coded.
 
+Canonical TAR root directory entries named exactly `.` or `./` are accepted but do not become inventory rows. Other directory paths are still validated; empty normalized non-directory paths remain input errors. No root marker is required, and ZIP path handling is unchanged.
+
 The tool lists files only. It does not run game code, execute archived scripts, extract archives into the input, access the network, or claim Godot/Unity asset provenance.
 
 ## Build

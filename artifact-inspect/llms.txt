@@ -6,6 +6,7 @@
 - binary: artifact-inspect
 - build: cd artifact-inspect && cargo build --release
 - input: directory, ZIP, TAR.GZ, TGZ; symlink input rejected
+- tar_root: only directory entries spelled exactly . or ./ bypass empty-path rejection and are omitted from inventory; other directory paths validated; non-directory empty paths rejected; root marker optional; ZIP checks unchanged
 - nested_input: any regular file with .zip name or ZIP signature; bounded memory; default max depth 4; corrupt nested ZIP emits nested_zip_invalid
 - archive_integrity: regular ZIP members are streamed to EOF for size/decompression/CRC validation; TAR.GZ decoder is drained through the gzip trailer; corrupt outer input exits 3 without JSON/HTML success reports
 - output: artifact-inspect.json, artifact-inspect.html, artifact-inspect.log under required --output-dir

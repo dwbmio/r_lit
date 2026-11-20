@@ -475,8 +475,13 @@ impl Inspector {
                 .path()
                 .map_err(|e| io_error("read TAR.GZ member path in", source, e))?
                 .into_owned();
-            let relative = safe_relative_path(&path)?;
             let entry_type = entry.header().entry_type();
+            // Only canonical TAR root directory markers are not inventory items.
+            // Match the original spelling: Path equality normalizes extra `.` parts.
+            if entry_type.is_dir() && matches!(entry.path_bytes().as_ref(), b"." | b"./") {
+                continue;
+            }
+            let relative = safe_relative_path(&path)?;
             if entry_type.is_dir() {
                 continue;
             }
