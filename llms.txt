@@ -6,8 +6,13 @@
 - install_base: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
 - release_tracker: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>
 
+- release_scope: install_base/release_tracker apply only to published tools; artifact-inspect is built from source, with local macOS arm64 and Jenkins pilot Linux x86_64 validation; no registered release or installer claimed
+- artifact_inspect_routes: root .justfile generic build/install_loc can route to the crate; fixed test-cli/lint-cli omit it; generic routing is not CI toolMap/HFrog registration
+- artifact_inspect_contract: hierarchical containers[].files[] JSON, HTML metadata/text/image previews, one artifact-inspect.log; name/path suppression is not a secret scan or confidentiality guarantee; sizes are not network transfer estimates
+
 ## Directory
 
+- artifact-inspect/ — Offline build inventories (directory/ZIP/TAR.GZ/TGZ), per-layer JSON and HTML metadata/image previews; docs: artifact-inspect/README.md, artifact-inspect/llms.txt
 - audiogen/ — Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs)
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
 - deskpet/ — Frameless transparent always-on-top 3D/Spine desktop mascot (Bevy + tray / menu-bar resident)
@@ -29,7 +34,7 @@
 ## Machine Call Contract
 
 - spec: docs/cli-contract.md; shared crate: crates/rlit_cli
-- adopted_by: mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
+- adopted_by: artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
 - json: `--json` -> exactly one envelope {contract, ok, tool, version, command, data, artifacts, error} on stdout
 - exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial
 - schema: `<tool> __schema` -> JSON Schema per subcommand + x-cli / x-effects / x-env / x-stdin

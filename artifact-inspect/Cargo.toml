@@ -1,0 +1,29 @@
+[package]
+name = "artifact-inspect"
+version = "0.1.0"
+edition = "2024"
+description = "Offline, bounded inspection of build directories, ZIP, and TAR.GZ artifacts"
+license = "MIT"
+
+[dependencies]
+rlit_cli = { path = "../crates/rlit_cli" }
+base64 = "0.22"
+clap = { version = "4", features = ["cargo", "derive"] }
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+thiserror = "2"
+walkdir = "2"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+panic = "abort"
+strip = true
+opt-level = "z"

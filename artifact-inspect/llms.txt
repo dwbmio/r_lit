@@ -1,0 +1,74 @@
+# artifact-inspect
+- purpose: Bounded offline inventories of game build outputs; per-layer JSON, HTML metadata/text/image previews, one run log
+- version: 0.1.0; Rust edition 2024; independent Cargo.toml and committed Cargo.lock; excluded from root workspace
+- package_binary: artifact-inspect
+- build: from repository root, cd artifact-inspect && cargo build --release --locked; requires edition-2024-capable Rust/Cargo and approved adequate worker, never controller/production/service or <=2-core/<=4-GiB host
+- local_binary: artifact-inspect/target/release/artifact-inspect; retained copy artifact-inspect/out/<target-triple>/artifact-inspect; add binary directory to PATH for examples
+- accepted_platform: local macOS arm64 and Jenkins pilot Linux x86_64 (arcrate/package-analysis-pilot #1); Windows not accepted
+- release_status: build from source; no registered release or installer claimed
+- just_routes: generic root build/install_loc route works for this directory, without explicit --locked; fixed test-cli/lint-cli lists omit artifact-inspect; not release registration
+- dependencies: rlit_cli path dependency, clap, thiserror, serde/serde_json, log, base64, flate2, image, tar, walkdir, zip; Cargo.lock pins versions
+- zip_features: default features disabled, deflate enabled; encrypted/other compression support not promised
+- input: directory, ZIP, TAR.GZ, TGZ; CLI symlink input rejected with usage exit 2
+- TAR root marker: only a directory entry named exactly `.` or `./` is omitted; other paths remain validated, and ZIP handling is unchanged
+- nested_input: ZIP name/signature at any path; bounded memory; no recursive TAR/GZIP/Brotli/engine-container expansion
+- integrity: regular ZIP entries streamed to EOF for decompression/size/CRC; TAR.GZ decoder drained through gzip trailer; corrupt outer input exits 3 without new success reports; nested_zip_invalid is nonfatal issue/warning
+- output: required --output-dir/-o; artifact-inspect.json, artifact-inspect.html, artifact-inspect.log
+- output_guard: outside directory input; output directory symlink and JSON/HTML/log symlinks/nonregular/input aliases rejected; hard-linked targets rejected on Unix; normal targets replaced atomically per file, not three-file transaction
+- read_only_boundary: no input writes, archive extraction, artifact-code execution or network access; requires stable input/controlled output, not adversarial concurrent filesystem sandbox
+- stale_reports: failed reruns do not remove old JSON/HTML; use fresh output directory and current exit/envelope/artifact receipts
+
+## Commands
+```
+artifact-inspect dist/ --output-dir inspection/
+artifact-inspect game.zip -o inspection/ --json
+artifact-inspect package.tar.gz -o inspection/ --max-depth 4
+artifact-inspect __schema
+```
+
+## Defaults and Runtime Limits
+- --max-entries: 100000; shared regular-file count; additionally directory walk entries including root/directories and each ZIP central-directory entry count including directories
+- --max-total-raw-bytes: 2000000000; shared cross-layer raw-byte processing workload, not report byte total
+- --max-nested-bytes: 67108864; nested ZIP file bytes before member expansion, not sum of expanded members
+- --max-depth: 4; 0 disables nested expansion
+- --max-preview-bytes: 65536; bounded source bytes per preview; 0 disables nonempty text/image previews
+- --max-total-preview-bytes: 8388608; source-byte preview budget
+- --max-image-pixels: 16777216; bitmap pixel limit
+- validation: entry/total-raw/total-preview/image-pixel limits must be positive; depth/nested-byte/per-preview-byte limits may be zero; schema minimum 0 does not replace runtime checks
+
+## Report and Preview Contract
+- report_schema_version: 1
+- hierarchy: containers[].files[]; no flat top-level file list
+- container: id, path, kind, depth, parent, files, issues, summary
+- file: container_id, container, relative_path, kind, raw_bytes, zip_compressed_bytes, preview
+- summary: file_count, raw_bytes, zip_compressed_bytes, preview_count, suppressed_preview_count
+- ordering: relative_path lexicographic within container, not size descending; sorted pending children within each parent queued breadth-first, not global path order
+- accounting: independent container totals; no cross-layer sum; ZIP compressed entry payload excludes headers/central-directory overhead and is not network transfer measurement; directory/TAR.GZ compressed fields null
+- engine_formats: Godot/Unity classified but not parsed; no asset provenance/dependency/runtime-transfer claim
+- bitmap: PNG/JPEG/GIF/WebP dimension/decode validated with pixel/byte limits; inert data URI
+- text: bounded UTF-8; HTML/JavaScript/SVG escaped in HTML, never activated
+- sensitive: name/path heuristic for private/secret/credential/token segments, *.env, .env.*, .envrc, known credential files/keys/keystores; suppressed_sensitive omits text/media/image; nested ZIP members inherit suppression
+- confidentiality: not a content secret scan or confidentiality guarantee; paths/sizes and unsuppressed text/images remain; review before sharing
+- html: standalone metadata/text/image view, not engine viewer; CSP default-src 'none', img-src data:, inline report style only; no scripts/external resources
+- links: input/archive symlinks and TAR hard links not followed
+- log: one artifact-inspect.log overwritten per run; flush attempted on later failures; no sidecar for parsing/output-validation failures; read log before debugging; timestamps not deterministic
+
+## Machine Call Contract
+- spec: ../docs/cli-contract.md relative to this directory
+- json: --json emits one rlit_cli envelope, human logs to stderr
+- envelope: contract=1, tool=artifact-inspect, version=0.1.0, command="", ok, data, artifacts, error, warnings
+- data: input, report_json, report_html, schema_version, issue_count, container summaries, size_semantics, engine_formats; full file list only in report
+- artifacts: inventory-json, inventory-html, log; absolute path/bytes/sha256
+- schema: __schema exports CLI parameters, not report schema; sole leaf name=artifact-inspect, argv_prefix=[], x-effects=pure, required=input/output_dir
+- effects: pure means declared output writes, not no filesystem writes; absolute paths prevent portable byte-identical reports
+- exit_codes: 0 ok including nonfatal report issues/warnings; 1 remaining runtime/serialization/I/O; 2 usage/limits/input symlink/output rejection; 3 input/corruption/unsafe/outer limits and I/O NotFound/PermissionDenied/InvalidData/InvalidInput/UnexpectedEof even during output/log writes; 4 external and 5 partial shared reserved, not normally emitted
+
+## Developer Tests (from artifact-inspect directory; not a release claim)
+```
+cargo test
+cargo clippy --all-targets -- -D warnings
+C4_INPUT=/path/to/frozen-c4.tar.gz C4_REFERENCE=/path/to/independent-c4-inventory.json cargo test --test c4_reference -- --ignored --nocapture
+```
+- fixtures: replace example input paths with existing local files; C4 paths are operator-supplied, no private fixtures bundled
+- historical_c4: local macOS arm64 2026-11-20 regression compared 164 rows, 25/7696698 outer and 139/2093130/1979382 nested; not a current cross-platform result
+- c4_reference: validates out/project.private.config.json and env/runtime.env suppressed with no text/media/image values printed

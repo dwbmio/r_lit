@@ -8,6 +8,7 @@ A collection of independent Rust CLI tools and companion desktop utilities maint
 
 | Directory | Description |
 |-----------|-------------|
+| [artifact-inspect](artifact-inspect/README.md) | Offline directory/ZIP/TAR.GZ inventories; per-layer JSON and HTML metadata/image previews; validated on macOS arm64 and in a Linux x86_64 pilot |
 | [audiogen](audiogen/) | Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs) |
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |
 | [deskpet](deskpet/) | Frameless transparent always-on-top 3D/Spine desktop mascot (Bevy + tray / menu-bar resident) |
@@ -30,7 +31,9 @@ See each subdirectory's README for detailed usage.
 
 ## Install (pre-built binaries)
 
-Every CLI tool is published (by the internal Jenkins cross-compile service) to:
+Registered, released tools use the internal Jenkins cross-compile service to publish to the locations below. `artifact-inspect` can be [built from source](artifact-inspect/README.md#build). Its Linux x86_64 pilot artifact is not a registered release or installer.
+
+Release locations for published tools:
 - **Cloudflare R2 (stable URL, primary)** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
 - **HFrog tracker** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
 

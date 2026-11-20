@@ -6,8 +6,13 @@
 - 安装通道: https://r2.gamesci-lite.com/r_lit/<tool>/install.sh
 - 制品中心: https://hfrog.gamesci-lite.com/api/release/softwares/<tool>
 
+- 发布范围: 安装通道/制品中心仅适用于已发布工具；artifact-inspect 从源码构建，通过本地 macOS arm64 和 Jenkins 试点 Linux x86_64 验证，未登记为正式发布或安装器
+- artifact-inspect 路由: 根 .justfile 通用 build/install_loc 可路由到本 crate，固定 test-cli/lint-cli 未包含；通用路由不等于 CI toolMap/HFrog 登记
+- artifact-inspect 契约: JSON 为 containers[].files[] 分层结构，HTML 元数据/文本/图像预览及单份 artifact-inspect.log；路径/名称抑制不是保密扫描或保密保证，大小不是网络量估算
+
 ## 目录
 
+- artifact-inspect/ — 离线构建产物盘点（目录/ZIP/TAR.GZ/TGZ），按层 JSON 与 HTML 元数据/图像预览；文档：artifact-inspect/README_CN.md、artifact-inspect/llms_cn.txt
 - audiogen/ — 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务）
 - bulk_upload/ — 从 JSON 批量提取 URL 并上传至 S3 兼容存储
 - deskpet/ — 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻）
@@ -29,7 +34,7 @@
 ## 机器调用契约
 
 - 规范: docs/cli-contract.md；共享 crate: crates/rlit_cli
-- 已接入: mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
+- 已接入: artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
 - JSON: `--json` → stdout 只输出一个 envelope {contract, ok, tool, version, command, data, artifacts, error}
 - 退出码: 0 成功, 1 运行时, 2 参数, 3 输入, 4 外部服务, 5 部分失败
 - schema: `<工具> __schema` → 每个子命令的 JSON Schema + x-cli / x-effects / x-env / x-stdin
