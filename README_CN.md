@@ -8,6 +8,7 @@
 
 | 目录 | 说明 |
 |------|------|
+| [artifact-inspect](artifact-inspect/README_CN.md) | 离线目录/ZIP/TAR.GZ 清单；按层 JSON 与 HTML 元数据/图像预览；通过本地 macOS arm64 和 Linux x86_64 试点验证 |
 | [audiogen](audiogen/) | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [deskpet](deskpet/) | 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻） |
@@ -30,7 +31,9 @@
 
 ## 安装预编译二进制
 
-所有 CLI 工具由内网 Jenkins 交叉编译服务发布到：
+已登记且已发布的工具通过内网 Jenkins 交叉编译服务使用以下位置。`artifact-inspect` 可[从源码构建](artifact-inspect/README_CN.md#构建)；Linux x86_64 试点制品不等于已登记的正式发布或安装器。
+
+已发布工具的制品位置：
 - **Cloudflare R2（稳定 URL，主通道）** — `https://r2.gamesci-lite.com/r_lit/<tool>/`
 - **HFrog 制品中心** — `https://hfrog.gamesci-lite.com/api/release/softwares/<tool>`
 

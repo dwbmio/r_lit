@@ -12,10 +12,14 @@ TAR 中原始名称严格为 `.` 或 `./` 的规范根目录条目可以读取�
 
 ```bash
 cd artifact-inspect
-cargo build --release
+cargo build --release --locked
 ```
 
-Cargo 输出为 `target/release/artifact-inspect`。本地保留的 binary 可复制到 `out/<target-triple>/artifact-inspect`；`out/` 按仓库规则不入库。正式 CI 和跨平台发布登记不属于本次本地交付范围。
+需要支持 edition 2024 的 Rust 和 Cargo。[Cargo.toml](Cargo.toml) 声明版本 0.1.0，独立的 [Cargo.lock](Cargo.lock) 锁定依赖；根 workspace 已排除此 crate。只能在获准且规格足够的开发/CI worker 构建，禁止在 Jenkins controller、生产/服务机或不超过 2 核/4 GiB 内存的主机编译。
+
+Cargo 输出为 `target/release/artifact-inspect`；下方示例需用该路径调用，或先将其所在目录加入 `PATH`。保留的本地二进制放在 `out/<target-triple>/artifact-inspect`，`out/` 不入库。已在本地 macOS arm64 及 Jenkins 试点 `arcrate/package-analysis-pilot #1` 的 Linux x86_64 验证；试点二进制不是正式登记的发布或安装器，Windows 未验收。
+
+根 `.justfile` 的通用路由会将 `just build artifact-inspect release`、`just install_loc artifact-inspect release` 委派到 Cargo（不显式带 `--locked`）；固定的 `test-cli`/`lint-cli` 清单尚不包含本工具。通用路由不等于发布登记，不要假设存在 R2 安装 URL。
 
 ## 使用
 
@@ -26,7 +30,7 @@ artifact-inspect package.tar.gz -o inspection/ --max-depth 4
 artifact-inspect __schema
 ```
 
-输出目录不能是输入目录本身或其后代。既存 JSON/HTML/log 目标必须是普通文件：符号链接、硬链接、非普通文件以及任何与输入文件相同的目标都会在检查前以退出码 2 拒绝。普通报告在重复运行时原子替换；绝不跟随目标链接，也绝不修改输入文件。
+输出目录不能是输入目录本身或其后代。既存 JSON/HTML/log 目标必须是普通文件：符号链接、硬链接（Unix）、非普通文件以及任何与输入文件相同的目标都会在检查前以退出码 2 拒绝。普通报告在重复运行时原子替换；绝不跟随目标链接，也绝不修改输入文件。
 
 ### 输出文件
 
@@ -36,7 +40,9 @@ artifact-inspect __schema
 | `artifact-inspect.html` | 离线逐行浏览页面，不含 JavaScript、外部资源或激活的归档 HTML |
 | `artifact-inspect.log` | 本次运行的单份 `rlit_cli::runlog` 边车日志；输出位置校验通过后的失败也会落盘 |
 
-使用 `--json` 时，标准输出遵循 `rlit_cli` 信封。`data` 包含容器汇总与报告路径，`artifacts` 包含 JSON、HTML、日志的大小和 SHA-256。完整清单只放在 JSON 报告中，不在标准输出重复一份。
+使用 `--json` 时，标准输出遵循 [`rlit_cli` 信封](../docs/cli-contract.md)（`contract: 1`，运行时 `command: ""`）。`data` 包含容器汇总与报告路径，`artifacts` 包含 JSON、HTML、日志的大小和 SHA-256。完整清单按层放在 `containers[].files[]`，不是顶层扁平文件数组，也不在标准输出重复。`__schema` 导出 CLI 参数而非报告结构；唯一叶子为 `name: "artifact-inspect"`、`argv_prefix: []`，必填 `input`/`output_dir`，`x-effects: "pure"` 表示写声明的输出而不是完全不写文件。
+
+HTML 提供分层元数据、有界转义文本和支持的图像预览，不是交互式引擎查看器。输出校验失败及参数解析错误没有边车日志，后续失败会尝试落盘 `artifact-inspect.log`；JSON 模式的人类日志进入 stderr。排障先读日志。三种输出逐文件替换，不是三文件事务；重跑失败不会删除旧 JSON/HTML，应使用新输出目录或核对本次退出码/信封与产物回执，不把陈旧报告视作本次成功。日志时间戳和绝对输入/输出路径不保证跨机器确定性。容器内文件按相对路径字典序而非大小降序排列；待处理 ZIP 子项在各父容器内排序后按广度优先排队，不是跨父容器全局排序。
 
 ### 文件与大小口径
 
@@ -69,20 +75,24 @@ Godot 包/资源和 Unity 场景/资产只做类型分类，不做专有格式�
 |---|---:|---|
 | `--max-entries` | 100000 | 各层处理的普通文件总数 |
 | `--max-total-raw-bytes` | 2000000000 | 跨层处理工作量上限，不是报告汇总口径 |
-| `--max-nested-bytes` | 67108864 | 单个嵌套 ZIP 的最大未压缩字节 |
+| `--max-nested-bytes` | 67108864 | 展开前单个嵌套 ZIP 文件自身的最大字节数 |
 | `--max-depth` | 4 | 嵌套 ZIP 深度；0 表示不展开 |
 | `--max-preview-bytes` | 65536 | 单个预览最多嵌入的源字节 |
 | `--max-total-preview-bytes` | 8388608 | 所有预览最多嵌入的源字节 |
 | `--max-image-pixels` | 16777216 | 位图预览像素上限 |
 
-超过限额或跳过内容会明确表现为错误或容器级问题，不生成替代数据。
+超过限额或跳过内容会明确表现为错误或容器级问题，不生成替代数据。`max_entries` 还限制目录遍历条目（含根与目录）及外层/每个嵌套 ZIP 中央目录条目数（含目录）。普通文件计数和原始字节工作量跨层共享。`max_nested_bytes` 限制待展开的嵌套 ZIP 文件自身字节，不是成员字节总和。条目、总原始字节、总预览字节、像素限额必须为正；深度、嵌套文件字节、单预览字节限额可为零。schema 中整数最小值为零，仍须遵守上述运行期额外检查。
+
+只递归展开 ZIP；嵌套 TAR/GZIP/Brotli 及引擎专有容器不展开。ZIP 支持受已提交 `zip` 依赖特性限制（仅启用 `deflate`，禁用默认特性）；不承诺加密或其他压缩格式支持。
+
+敏感抑制仅为路径/名称启发式，不是内容保密扫描或保密保证。报告仍包含路径、大小及未被抑制的文本/图像，外发前须人工审阅，工具不能证明报告可安全公开。使用稳定的本地输入和受控输出目录，不把恶意并发修改的文件系统视为安全沙箱。
 
 ## 退出码
 
 - `0`：成功；非致命跳过项（如有）写入报告和信封警告。
-- `1`：运行期、输出序列化或写入失败。
-- `2`：参数、限额或输出位置不合法。
-- `3`：输入缺失、不可读、不支持、损坏、路径危险或超过限额。
+- `1`：其余运行期、序列化或 I/O 错误（并非所有输出写入错误都归此类）。
+- `2`：参数/限额/输出位置非法、输入为符号链接或输出目标被拒绝。
+- `3`：外层输入缺失、不可读、不支持、损坏、路径危险或超限。I/O 的 `NotFound`、`PermissionDenied`、`InvalidData`、`InvalidInput`、`UnexpectedEof` 也归此类，即使发生在输出/日志写入阶段。
 - `4` / `5`：共享契约保留值；本离线单输入工具通常不产生这两类退出码。
 
 ## 测试
@@ -95,12 +105,12 @@ cargo clippy --all-targets -- -D warnings
 
 隔离测试覆盖目录、ZIP、TAR.GZ、按签名发现嵌套 ZIP、分层大小口径、gzip 尾部截断、预览范围之外的 ZIP CRC 损坏、显式嵌套 ZIP 失败、符号链接与硬链接输出目标、普通输出替换、输出位置、限额、离线转义预览、环境文件与敏感容器抑制、CLI 信封和 `__schema`。
 
-对冻结的本地 Zuma C4 做回归时，指定两个路径，运行与 Lead 独立清单的可选逐路径比较：
+对冻结的本地 Zuma C4 做回归时，将两个占位路径换成操作者提供的现存输入，并在 `artifact-inspect/` 执行。不附带 C4 样本或私密清单。以下是与 Lead 独立清单比较的可选开发测试，不是普通 CLI 使用步骤：
 
 ```bash
-C4_INPUT="$HOME/Documents/Zuma-B-C/WeChat-QA/c4-zuma-wechat-qa.tar.gz" \
-C4_REFERENCE="$HOME/Documents/Zuma-B-C/C4-Inventory/C4-文件清单.json" \
+C4_INPUT="/path/to/frozen-c4.tar.gz" \
+C4_REFERENCE="/path/to/independent-c4-inventory.json" \
 cargo test --test c4_reference -- --ignored --nocapture
 ```
 
-该测试逐项比较 `(layer, path)`、原始字节和 ZIP 压缩字节，并核对独立基线：外层 25 文件 / 7,696,698 B，内层 139 文件 / 2,093,130 B 原始 / 1,979,382 B ZIP 条目数据。它还验证 `out/project.private.config.json` 与 `env/runtime.env` 都为 `suppressed_sensitive`，没有文本、媒体类型或图像内容；只打印这些元数据状态，绝不打印值。
+以下基线来自 2026-11-20 本地 macOS arm64 历史回归，不是本轮跨平台实测。该测试逐项比较 `(layer, path)`、原始字节和 ZIP 压缩字节，并核对独立基线：外层 25 文件 / 7,696,698 B，内层 139 文件 / 2,093,130 B 原始 / 1,979,382 B ZIP 条目数据。它还验证 `out/project.private.config.json` 与 `env/runtime.env` 都为 `suppressed_sensitive`，没有文本、媒体类型或图像内容；只打印这些元数据状态，绝不打印值。

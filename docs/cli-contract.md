@@ -9,6 +9,15 @@ rlit_cli = { path = "../crates/rlit_cli" }
 
 已接入（全量 CLI binary）：`artifact-inspect` `mj_atlas` `img_resize` `ui-trim` `textexture` `bulk_upload` `audiogen` `phone_haul` `mini_reg` `looplog` `mailctl` `maquette-cli`。
 
+## artifact-inspect 的本地接入边界
+
+- 工具文档：[英文说明](../artifact-inspect/README.md)、[中文说明](../artifact-inspect/README_CN.md)、[英文机器说明](../artifact-inspect/llms.txt)、[中文机器说明](../artifact-inspect/llms_cn.txt)。CLI 0.1.0 / 契约 1 / 报告结构 1；报告结构版本与 CLI schema 不是同一概念。
+- 无子命令调用：`artifact-inspect <INPUT> --output-dir <DIR> --json`；`__schema` 的叶子 `name="artifact-inspect"`、`argv_prefix=[]`，实际信封 `command=""`。必填 `input` 和 `output_dir`，I/O 分别为 `input-path`、`output-dir`，`x-effects="pure"` 表示只写声明的输出，不是零写入。
+- 完整 JSON 清单在 `containers[].files[]`，各层独立汇总，不跨层相加；信封仅含报告路径、容器汇总与问题数。产物角色为 `inventory-json`、`inventory-html`、`log`；输出文件固定为 `artifact-inspect.json`、`artifact-inspect.html`、`artifact-inspect.log`。HTML 为元数据/有界转义文本/图像预览，非引擎查看器。
+- 输出位置通过校验后才尝试落日志，参数/输出校验失败没有边车日志。逐文件原子覆盖不是三文件事务，失败重跑可能留旧报告，调用方以本次退出码/信封回执为准。非致命跳过或损坏嵌套 ZIP 可 exit 0 + issues/warnings；损坏外层退出 3。CLI 输入符号链接/非法输出/限额参数退出 2；I/O NotFound、PermissionDenied、InvalidData、InvalidInput、UnexpectedEof 即使发生于输出/日志也映射 3，其余运行期/序列化/I/O 映射 1。4/5 为共享保留，通常不产生。
+- 路径启发式预览抑制不等于内容保密扫描；仍列路径/大小，不承诺可安全外发、不承诺资产溯源或网络量。
+- 已通过本地 macOS arm64 和 Jenkins Linux x86_64 试点验证；试点制品不等于正式发布。根 `.justfile` 通用 build/install_loc 可路由到该目录，但固定 test-cli/lint-cli 不包含本工具；未登记独立的 CI toolMap/HFrog 发布。
+
 ## 1. 调用方式
 
 - `--json` 是全局参数，任何子命令都可用。
