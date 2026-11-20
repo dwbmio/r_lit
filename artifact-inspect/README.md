@@ -10,10 +10,14 @@ Build this independent crate from its own directory, not from the repository roo
 
 ```bash
 cd artifact-inspect
-cargo build --release
+cargo build --release --locked
 ```
 
-The Cargo binary is `target/release/artifact-inspect`. A locally retained binary can be copied to `out/<target-triple>/artifact-inspect`; `out/` is intentionally ignored by Git. Formal CI and cross-platform release registration are outside the current local-delivery scope.
+Requires Rust with edition 2024 support and Cargo. The committed [Cargo.toml](Cargo.toml) declares version 0.1.0 and the independent [Cargo.lock](Cargo.lock) pins dependencies; the root workspace excludes this crate. Build only on an approved, adequately provisioned development/CI worker, never on a Jenkins controller, production/service host, or a host with at most 2 CPU cores or 4 GiB RAM.
+
+The Cargo binary is `target/release/artifact-inspect`; invoke it by that path or put its directory on `PATH` for the examples below. Retained local binaries use `out/<target-triple>/artifact-inspect`; `out/` is ignored by Git. Only macOS arm64 has been accepted locally (2026-11-20); no Linux worker artifact has been delivered and no Windows acceptance is claimed. There is no formal Jenkins/R2/HFrog release or installer claimed for this tool.
+
+The root `.justfile` generically routes `just build artifact-inspect release` and `just install_loc artifact-inspect release` to Cargo (without the explicit `--locked` flag); its fixed `test-cli`/`lint-cli` lists do not include this tool. These routes are not release registration. Do not use an assumed R2 installer URL. Jenkins hook evaluation is a later step, not an implemented integration.
 
 ## Usage
 
@@ -24,7 +28,7 @@ artifact-inspect package.tar.gz -o inspection/ --max-depth 4
 artifact-inspect __schema
 ```
 
-The output directory must not be the input directory or one of its descendants. Existing JSON/HTML/log destinations must be ordinary files: symbolic links, hard links, non-regular files, and any destination that is the input file itself are rejected with exit 2 before inspection. Ordinary reports are atomically replaced on a repeated run; destination links are never followed and input files are never modified.
+The output directory must not be the input directory or one of its descendants. Existing JSON/HTML/log destinations must be ordinary files: symbolic links, hard links (on Unix), non-regular files, and any destination that is the input file itself are rejected with exit 2 before inspection. Ordinary reports are atomically replaced on a repeated run; destination links are never followed and input files are never modified.
 
 ### Output files
 
@@ -34,7 +38,9 @@ The output directory must not be the input directory or one of its descendants. 
 | `artifact-inspect.html` | Offline per-row browser view; no JavaScript, external resources, or active archived HTML |
 | `artifact-inspect.log` | One `rlit_cli::runlog` sidecar for the current run, including failures after output validation |
 
-With `--json`, stdout is the standard `rlit_cli` envelope. Its `data` contains container summaries and report paths; `artifacts` contains the JSON, HTML, and log with sizes and SHA-256 values. The complete file inventory is in the JSON report rather than duplicated into stdout.
+With `--json`, stdout is the standard [`rlit_cli` envelope](../docs/cli-contract.md) (`contract: 1`, runtime `command: ""`). Its `data` contains container summaries and report paths; `artifacts` contains the JSON, HTML, and log with sizes and SHA-256 values. The complete inventory is hierarchical at `containers[].files[]`, not a flat top-level file list and not duplicated into stdout. `__schema` exports CLI parameters, not the report schema; its sole leaf has `name: "artifact-inspect"`, `argv_prefix: []`, required `input`/`output_dir`, and `x-effects: "pure"` (declared output writes, not zero filesystem writes).
+
+HTML provides per-layer metadata, bounded escaped text and supported image previews, not an interactive engine viewer. Output validation failures and argument parsing errors do not produce a sidecar log; later failures attempt to flush `artifact-inspect.log`. In JSON mode human logs go to stderr. Read that log first when debugging. Reports are replaced individually, not as a three-file transaction. A failed rerun does not remove old JSON/HTML; use a fresh output directory or check the current exit/envelope and artifact receipts, never treat stale reports as current success. Log timestamps and absolute input/output paths are not portable determinism guarantees. Per-container file rows use lexicographic relative-path ordering, not descending size; pending ZIP children are sorted within each parent and queued breadth-first, not globally sorted across parents.
 
 ### File and size semantics
 
@@ -67,20 +73,24 @@ Default limits:
 |---|---:|---|
 | `--max-entries` | 100000 | Regular files processed across all layers |
 | `--max-total-raw-bytes` | 2000000000 | Cross-layer processing workload bound, not a report total |
-| `--max-nested-bytes` | 67108864 | Maximum uncompressed size of one nested ZIP |
+| `--max-nested-bytes` | 67108864 | Maximum bytes of one nested ZIP file before expansion |
 | `--max-depth` | 4 | Nested ZIP depth; 0 disables expansion |
 | `--max-preview-bytes` | 65536 | Maximum source bytes embedded per preview |
 | `--max-total-preview-bytes` | 8388608 | Total source bytes embedded in previews |
 | `--max-image-pixels` | 16777216 | Bitmap preview pixel limit |
 
-Limit exceedances and skipped content are explicit errors or per-container issues; no substitute data is generated.
+Limit exceedances and skipped content are explicit errors or per-container issues; no substitute data is generated. `max_entries` also bounds directory walk entries (including the root and directories) and the outer/each nested ZIP central-directory entry count (including directories). The regular-file counter and raw-byte workload are shared across layers. `max_nested_bytes` limits the stored nested ZIP file bytes (before expanding its members), not the sum of its members. Entry, total-raw-byte, total-preview-byte and image-pixel limits must be positive; depth, nested-byte and per-preview-byte limits may be zero. Schema integer minimums are zero; these extra runtime checks still apply.
+
+Only ZIPs are expanded recursively: nested TAR/GZIP/Brotli and proprietary engine containers are not unpacked. ZIP support is limited by the committed `zip` dependency features (`deflate`, default features disabled); encrypted or unsupported compression formats are not promised.
+
+Sensitive suppression is a path/name heuristic, not a content secret scan or a confidentiality guarantee. Paths, sizes, and unsuppressed text/images remain in reports. Review reports before sharing; the tool does not prove them safe for external publication. Run on a stable local input and use a controlled output directory, not an adversarial concurrently modified filesystem.
 
 ## Exit codes
 
 - `0`: success; non-fatal skips, if any, are listed in the report and envelope warnings.
-- `1`: runtime or output serialization/write failure.
-- `2`: invalid arguments, limits, or output location.
-- `3`: missing, unreadable, unsupported, corrupt, unsafe, or limit-exceeding input.
+- `1`: remaining runtime, serialization, or I/O errors (not every output-write error is runtime).
+- `2`: invalid arguments/limits/output location, input symlinks, or rejected output targets.
+- `3`: missing, unreadable, unsupported, corrupt, unsafe, or limit-exceeding outer input. I/O `NotFound`, `PermissionDenied`, `InvalidData`, `InvalidInput`, and `UnexpectedEof` also map here, even when raised during output/log writes.
 - `4` / `5`: reserved by the shared contract; this offline single-input tool does not normally emit them.
 
 ## Tests
@@ -93,12 +103,12 @@ cargo clippy --all-targets -- -D warnings
 
 The isolated test suite covers directory, ZIP and TAR.GZ inputs; nested ZIP discovery by signature; stable per-layer sizes; truncated gzip trailers; ZIP CRC corruption beyond previews; explicit nested-ZIP failures; symlinks and hard-linked output targets; ordinary output replacement; output placement; limits; offline/escaped previews; environment-file and sensitive-container suppression; the CLI envelope; and `__schema`.
 
-For the frozen local Zuma C4 regression, set both paths and run the opt-in comparison against the Lead's independently generated inventory:
+For the frozen local Zuma C4 regression, replace both placeholder paths with existing operator-supplied inputs and run from `artifact-inspect/`. No C4 fixture or private inventory is bundled. The following is an opt-in comparison against the Lead's independently generated inventory, not part of ordinary CLI use:
 
 ```bash
-C4_INPUT="$HOME/Documents/Zuma-B-C/WeChat-QA/c4-zuma-wechat-qa.tar.gz" \
-C4_REFERENCE="$HOME/Documents/Zuma-B-C/C4-Inventory/C4-文件清单.json" \
+C4_INPUT="/path/to/frozen-c4.tar.gz" \
+C4_REFERENCE="/path/to/independent-c4-inventory.json" \
 cargo test --test c4_reference -- --ignored --nocapture
 ```
 
-That test compares every `(layer, path)` with raw and ZIP compressed bytes and checks the independent totals: 25 outer files / 7,696,698 B and 139 nested files / 2,093,130 B raw / 1,979,382 B ZIP entry payload. It also verifies that `out/project.private.config.json` and `env/runtime.env` are both `suppressed_sensitive` with no text, media type, or image content; only those metadata states are printed, never their values.
+The historical local macOS arm64 regression on 2026-11-20 used these baselines; this is not a fresh cross-platform measurement. That test compares every `(layer, path)` with raw and ZIP compressed bytes and checks the independent totals: 25 outer files / 7,696,698 B and 139 nested files / 2,093,130 B raw / 1,979,382 B ZIP entry payload. It also verifies that `out/project.private.config.json` and `env/runtime.env` are both `suppressed_sensitive` with no text, media type, or image content; only those metadata states are printed, never their values.

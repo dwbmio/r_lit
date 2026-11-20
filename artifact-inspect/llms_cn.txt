@@ -1,67 +1,73 @@
 # artifact-inspect
-- 用途：有界、离线盘点构建目录、ZIP、TAR.GZ、TGZ，支持嵌套 ZIP 和安全预览
-- 版本：0.1.0
-- 语言：Rust
-- 包名：artifact-inspect
-- 二进制：artifact-inspect
-- 构建：cd artifact-inspect && cargo build --release
-- 输入：目录、ZIP、TAR.GZ、TGZ；拒绝符号链接输入
-- 嵌套输入：任意路径下带 .zip 名称或 ZIP 签名的普通文件；有界内存；默认最大深度 4；损坏嵌套 ZIP 记录 nested_zip_invalid
-- 归档完整性：普通 ZIP 成员读取至 EOF 验证大小/解压/CRC；TAR.GZ 解码器排空至 gzip 尾部；损坏外层输入退出 3 且不写 JSON/HTML 成功报告
-- 输出：指定 --output-dir 下的 artifact-inspect.json、artifact-inspect.html、artifact-inspect.log
-- 输出保护：目录输入的后代不可作为输出；JSON/HTML/log 符号链接、硬链接、非普通目标和输入文件别名以退出码 2 拒绝；普通文件原子替换且不跟随链接
-- 网络：不访问
-- 执行：绝不执行归档或构建产物内容
-- 抽取：不向磁盘抽取归档，不写输入目录
-- 报告结构版本：1
+- 用途：有界离线盘点游戏构建产物；按层 JSON、HTML 元数据/文本/图像预览、单份运行日志
+- 版本：0.1.0；Rust edition 2024；独立 Cargo.toml 和已提交 Cargo.lock；根 workspace 排除本工具
+- 包名与二进制：artifact-inspect
+- 构建：从仓库根执行 cd artifact-inspect && cargo build --release --locked；需要支持 edition 2024 的 Rust/Cargo 和获准且足够规格的 worker，禁止 controller/生产/服务机及不超过 2 核或 4 GiB 内存的主机
+- 本地二进制：artifact-inspect/target/release/artifact-inspect；保留副本为 artifact-inspect/out/<target-triple>/artifact-inspect；示例需先将二进制目录加入 PATH
+- 已验平台：2026-11-20 本地 macOS arm64；Linux worker 制品尚未交付；Windows 未验收
+- 发布状态：仅本地交付；不声称已有正式 Jenkins/R2/HFrog 发布或安装器；Jenkins hook 待后续评估
+- just 路由：根通用 build/install_loc 可委派到本目录，不显式带 --locked；固定 test-cli/lint-cli 清单未包含本工具；不等于发布登记
+- 依赖：rlit_cli 路径依赖、clap、thiserror、serde/serde_json、log、base64、flate2、image、tar、walkdir、zip；版本由 Cargo.lock 锁定
+- ZIP 特性：禁用默认特性，仅启用 deflate；不承诺加密或其他压缩方式支持
+- 输入：目录、ZIP、TAR.GZ、TGZ；CLI 符号链接输入按 usage 退出 2
+- 嵌套输入：任意路径的 ZIP 名称/签名；有界内存；不递归展开 TAR/GZIP/Brotli/引擎专有容器
+- 完整性：普通 ZIP 成员读至 EOF 验证解压/大小/CRC；TAR.GZ 解码器排空至 gzip 尾部；损坏外层退出 3 不生成新的成功报告；nested_zip_invalid 为非致命问题/警告
+- 输出：必填 --output-dir/-o；artifact-inspect.json、artifact-inspect.html、artifact-inspect.log
+- 输出保护：目录输入之外；拒绝输出目录符号链接与 JSON/HTML/log 符号链接/非普通目标/输入别名；Unix 拒绝硬链接目标；普通文件逐文件原子替换，不是三文件事务
+- 只读边界：不写输入、不抽取归档、不执行产物代码、不访问网络；需要稳定输入和受控输出，不是恶意并发文件系统沙箱
+- 陈旧报告：重跑失败不会删除旧 JSON/HTML；使用新输出目录并核对本次退出码/信封/产物回执
 
-## 命令格式
+## 命令
 ```
-artifact-inspect <INPUT> --output-dir <DIR> [限额] [--json]
+artifact-inspect dist/ --output-dir inspection/
+artifact-inspect game.zip -o inspection/ --json
+artifact-inspect package.tar.gz -o inspection/ --max-depth 4
 artifact-inspect __schema
 ```
 
-## 限额
-- --max-entries：100000
-- --max-total-raw-bytes：2000000000
-- --max-nested-bytes：67108864
-- --max-depth：4
-- --max-preview-bytes：65536
-- --max-total-preview-bytes：8388608
-- --max-image-pixels：16777216
+## 默认值与运行期限额
+- --max-entries：100000；跨层普通文件计数，另限制目录遍历条目（含根/目录）及每个 ZIP 中央目录条目数（含目录）
+- --max-total-raw-bytes：2000000000；跨层原始字节处理工作量，不是报告合计
+- --max-nested-bytes：67108864；展开成员前嵌套 ZIP 文件自身字节，不是展开成员之和
+- --max-depth：4；0 表示不展开嵌套 ZIP
+- --max-preview-bytes：65536；单预览源字节上限；0 禁用非空文本/图像预览
+- --max-total-preview-bytes：8388608；预览源字节总预算
+- --max-image-pixels：16777216；位图像素上限
+- 校验：条目/总原始字节/总预览字节/像素限额必须为正；深度/嵌套字节/单预览字节可为零；schema 最小值 0 不替代运行期检查
 
-## 报告字段
-- 容器：id、逻辑路径、类型、深度、父容器、文件、问题、汇总
+## 报告与预览契约
+- 报告结构版本：1
+- 层次：containers[].files[]；没有顶层扁平文件列表
+- 容器：id、path、kind、depth、parent、files、issues、summary
 - 文件：container_id、container、relative_path、kind、raw_bytes、zip_compressed_bytes、preview
 - 汇总：file_count、raw_bytes、zip_compressed_bytes、preview_count、suppressed_preview_count
-- zip_compressed_bytes：ZIP 条目压缩数据量；目录和 TAR.GZ 成员为 null
-- 计数口径：容器各自独立，不提供跨层字节合计
-- 传输口径：ZIP 条目压缩数据不含归档开销，不等于网络传输量
-- 引擎格式：Godot/Unity 只分类不解析，不声称资产溯源
+- 排序：容器内 relative_path 字典序，非大小降序；各父容器待处理子项排序后按广度优先排队，非全局路径序
+- 大小：各容器独立汇总，不跨层求和；ZIP 条目压缩数据不含文件头/中央目录开销，不是网络传输实测；目录/TAR.GZ 压缩字段为 null
+- 引擎格式：Godot/Unity 仅分类，不解析；不承诺资产来源/依赖/运行时传输量
+- 位图：PNG/JPEG/GIF/WebP 检查尺寸/解码、限制像素与字节，以惰性 data URI 嵌入
+- 文本：有界 UTF-8；HTML/JavaScript/SVG 在 HTML 中转义，不激活
+- 敏感内容：按路径/名称启发式匹配 private/secret/credential/token 分段、*.env、.env.*、.envrc、已知凭据文件/私钥/密钥库；suppressed_sensitive 不含文本/媒体/图像；嵌套 ZIP 成员继承抑制
+- 保密边界：不是内容保密扫描或保密保证；仍含路径/大小及未抑制文本/图像，外发前须审阅
+- HTML：独立元数据/文本/图像页面，非引擎查看器；CSP default-src 'none'、img-src data:，仅报告内联样式；无脚本/外部资源
+- 链接：不跟随输入/归档符号链接与 TAR 硬链接
+- 日志：本次覆盖单份 artifact-inspect.log；后续失败尝试落盘；解析/输出校验失败无边车日志；排障先读日志；时间戳不保证确定性
 
-## 预览安全
-- 位图：PNG/JPEG/GIF/WebP；检查尺寸并验证解码；限制像素和字节；使用惰性 data URI
-- 文本：有界 UTF-8；HTML 转义
-- 主动内容：HTML/JavaScript/SVG 只显示转义文本
-- 敏感内容：private/secret/credential/token 路径、任意 *.env、.env.*、.envrc、私钥和密钥库使用 suppressed_sensitive，不含内容；敏感嵌套容器继承抑制并保留路径/大小
-- HTML：独立离线；CSP default-src none；无脚本或外部资源
-- 链接：不跟随输入/归档符号链接及 TAR 硬链接
+## 机器调用契约
+- 规范：相对本目录的 ../docs/cli-contract.md
+- JSON：--json 输出一个 rlit_cli 信封，人类日志进入 stderr
+- 信封：contract=1、tool=artifact-inspect、version=0.1.0、command=""、ok、data、artifacts、error、warnings
+- data：input、report_json、report_html、schema_version、issue_count、容器汇总、size_semantics、engine_formats；完整文件列表仅在报告
+- artifacts：inventory-json、inventory-html、log；绝对 path/bytes/sha256
+- schema：__schema 导出 CLI 参数而非报告结构；唯一叶子 name=artifact-inspect、argv_prefix=[]、x-effects=pure，必填 input/output_dir
+- effects：pure 表示声明的输出写入，不是无文件写入；绝对路径使报告不能保证跨机器字节相同
+- 退出码：0 成功（可含非致命问题/警告）；1 其余运行期/序列化/I/O；2 参数/限额/输入符号链接/输出拒绝；3 输入/损坏/危险路径/外层超限及 I/O NotFound/PermissionDenied/InvalidData/InvalidInput/UnexpectedEof（包括输出/日志阶段）；4 外部和 5 部分失败为共享保留，通常不产生
 
-## 机器调用契约（r_lit CLI contract v1）
-- 规范：仓库根目录 docs/cli-contract.md
-- JSON：--json 只输出一个信封；日志进入 stderr
-- 信封：{contract:1, ok, tool, version, command:"", data, artifacts, error, warnings?}
-- data：报告路径、输入、issue_count、逐容器汇总、大小口径、引擎格式限制
-- artifacts：inventory-json、inventory-html、log，含 path/bytes/sha256
-- schema：artifact-inspect __schema
-- effects：pure；只写声明的输出目录
-- 退出码：0 成功，1 运行期，2 参数，3 输入，4 外部保留，5 部分失败保留
-
-## 测试
+## 开发测试（在 artifact-inspect 目录执行，不等于发布）
 ```
-cd artifact-inspect && cargo test
-cd artifact-inspect && cargo clippy --all-targets -- -D warnings
-C4_INPUT=/path/c4-zuma-wechat-qa.tar.gz C4_REFERENCE=/path/C4-文件清单.json cargo test --test c4_reference -- --ignored --nocapture
+cargo test
+cargo clippy --all-targets -- -D warnings
+C4_INPUT=/path/to/frozen-c4.tar.gz C4_REFERENCE=/path/to/independent-c4-inventory.json cargo test --test c4_reference -- --ignored --nocapture
 ```
-- C4 对照：精确比较 164 行路径、原始字节、ZIP 压缩字节；核对外层 25/7696698 与内层 139/2093130/1979382；out/project.private.config.json 和 env/runtime.env 均抑制且无文本/媒体/图像内容
-- 发布：仅本地交付，不声称已有 Jenkins 或跨平台制品
+- 样本：示例路径须换成存在的本地输入；C4 路径由操作者提供，不内置私密样本
+- 历史 C4：2026-11-20 本地 macOS arm64 回归比较 164 行，外层 25/7696698，内层 139/2093130/1979382；不是本轮跨平台结果
+- C4 对照：验证 out/project.private.config.json 与 env/runtime.env 抑制且不打印文本/媒体/图像值
