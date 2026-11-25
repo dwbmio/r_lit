@@ -1,0 +1,17 @@
+# distill
+
+- 用途: Pure Rust 跨职能信息收集与安全蒸馏套件，让产品、测试、运营、设计等非研发角色借助本地 AI 跨 Git 分支查证业务与技术事实，绝不暴露源码原文
+- 架构: 7-crate Cargo workspace，产出 2 个独立单二进制（`distilld`、`distill`）
+- 双二进制分工:
+  - `distilld`（crates/distill-server）：部署于内网主机，`iroh` QUIC 服务端 + Ed25519 `EndpointId` 白名单 + Repo/Branch ACL + `governor` 限流 + Bare 仓/`gix` 零检出读/LRU 只读多 Worktree 池 + `oxc_parser` AST 语义抽取 + ChaCha20-Poly1305 加密 `blob_oid` 缓存 + Tantivy 分分支并发索引 + BLAKE3 6-gram DLP 防泄漏闸门 + `audit.jsonl`
+  - `distill`（crates/distill-client）：分发给跨职能成员本机，极轻 P2P CLI 与标准 stdio MCP Server（提供 `list_repos`、`list_branches`、`search_semantics`、`get_api_contracts`、`diff_branch_behavior`）
+- 传输层: `iroh` 1.5 P2P QUIC（TLS 1.3 + Ed25519 双向身份认证 + 单连接多路并发 + 内网直连/NAT 穿透），ALPN `distill/p2p/1`
+- 运行根路径:
+  - 服务端: `$HOME/.distill`（可由 `DISTILL_HOME` 或 `--home` 覆盖）
+  - 客户端: `$HOME/.distill-client`（可由 `DISTILL_CLIENT_HOME` 或 `--home` 覆盖）
+- 子包: distill-proto, distill-crypto, distill-git, distill-semantic, distill-index, distill-server, distill-client
+- 构建: `cd distill && cargo build --release`
+- 测试: `cd distill && cargo test --workspace`
+- 安全边界: 零 SSH 暴露；AST 抽取剥离全部函数体源码；出站 DLP 拦截代码块、密钥、主机路径并比对 BLAKE3 6-gram 源码指纹；全量请求写入 `audit.jsonl`
+- 扩展约束: 禁止引入 Shell/Python/Node 外部脚本；未来若需可编程抽取或自定义脱敏规则，仅考虑进程内沙箱 `mlua`（Luau）
+- 分角色手册: 服务端部署=docs/SERVER_DEPLOY_CN.md；客户端使用与MCP接入=docs/CLIENT_USAGE_CN.md

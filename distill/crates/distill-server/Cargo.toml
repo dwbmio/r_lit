@@ -1,0 +1,30 @@
+[package]
+name = "distill-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "distilld"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dashmap.workspace = true
+governor.workspace = true
+hex.workspace = true
+iroh.workspace = true
+distill-crypto.workspace = true
+distill-git.workspace = true
+distill-index.workspace = true
+distill-proto.workspace = true
+postcard.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

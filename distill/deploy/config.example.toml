@@ -1,0 +1,22 @@
+# 默认加载路径：$HOME/.distill/config.toml
+max_concurrent_builds = 4
+max_worktrees = 16
+rate_limit_per_min = 120
+allow_any_peer_dev_only = false
+
+[[repos]]
+name = "twosite"
+description = "Rigel / TwoSite 项目工作管理与流程编排平台"
+remote_url = "https://git.7k7k.com/starlink/twosite.git"
+# 若本地已有现成仓库/裸仓，可改用 local_path（优先于 remote_url）：
+# local_path = "/home/hungry/repos/twosite.git"
+default_branch = "main"
+allowed_branches = ["main", "dev/*"]
+fetch_interval_secs = 30
+
+# 为每位授权使用者添加一条 [[clients]]（由使用者运行 `distill print-id` 提供）
+[[clients]]
+endpoint_id = "<CLIENT_ENDPOINT_ID>"
+label = "pm-demo"
+allowed_repos = ["twosite"]
+allowed_branches = ["main", "dev/*"]

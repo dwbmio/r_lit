@@ -1,0 +1,19 @@
+[package]
+name = "distill-git"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+dashmap.workspace = true
+gix.workspace = true
+lru.workspace = true
+memchr.workspace = true
+distill-crypto.workspace = true
+distill-proto.workspace = true
+rayon.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

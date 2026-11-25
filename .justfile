@@ -28,6 +28,8 @@ test-cli:
     done
     echo "==> cargo test (maquette headless CLI)"
     (cd maquette && cargo test --no-default-features)
+    echo "==> cargo test (distill workspace)"
+    (cd distill && cargo test --workspace)
 
 # Run clippy checks across core CLI crates and shared libraries
 lint-cli:

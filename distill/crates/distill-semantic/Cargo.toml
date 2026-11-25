@@ -1,0 +1,16 @@
+[package]
+name = "distill-semantic"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+distill-proto.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+pulldown-cmark.workspace = true
+regex.workspace = true
+serde_json.workspace = true

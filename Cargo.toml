@@ -12,6 +12,7 @@ exclude = [
     "bulk_upload",
     "crates/murmur",
     "crates/rlit_cli",
+    "distill",
     "gamereel",
     "group_vibe_workbench",
     "img_resize",

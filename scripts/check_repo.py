@@ -15,6 +15,7 @@ TOOLS_AND_LIBS = [
     "audiogen",
     "bulk_upload",
     "deskpet",
+    "distill",
     "gamereel",
     "group_vibe_workbench",
     "img_resize",

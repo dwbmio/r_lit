@@ -13,6 +13,7 @@ A collection of independent Rust CLI tools and companion desktop utilities maint
 | [audiogen](audiogen/) | Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs) |
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |
 | [deskpet](deskpet/) | Frameless transparent always-on-top 3D/Spine desktop mascot (Bevy + tray / menu-bar resident) |
+| [distill](distill/) | Pure-Rust cross-functional knowledge distillation & P2P Q&A suite (dual binaries: `distilld` + `distill` CLI/MCP over `iroh` QUIC; zero raw source exposure) |
 | [gamereel](gamereel/) | Render game protocol replays into short videos (Cargo workspace; CUDA + FFmpeg) |
 | [group_vibe_workbench](group_vibe_workbench/) | Desktop collaboration workbench (GPUI + Murmur P2P) |
 | [img_resize](img_resize/) | Image resizing and compression |

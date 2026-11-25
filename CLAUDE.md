@@ -12,6 +12,7 @@ R_LIT 是一个中长期演进的 Rust CLI 工具与桌面工程集合仓库。�
 | `audiogen/` | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | `bulk_upload/` | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | `deskpet/` | 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / macOS 菜单栏常驻；GUI，非短时 CLI） |
+| `distill/` | Pure Rust 跨职能信息收集与安全蒸馏套件（双二进制 `distilld` + `distill` CLI/MCP；`iroh` QUIC 加密 + 多分支/多 Worktree + Tantivy 加密索引 + BLAKE3 DLP 防源码泄漏） |
 | `gamereel/` | 把游戏协议回放渲染成短视频（cargo workspace；CUDA + ffmpeg + 多游戏协议插件） |
 | `group_vibe_workbench/` | 桌面协作工作台 (GPUI + Murmur P2P) |
 | `img_resize/` | 图片缩放与压缩 |

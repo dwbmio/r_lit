@@ -1,0 +1,27 @@
+[package]
+name = "distill-client"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "distill"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+arboard.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+hex.workspace = true
+iroh.workspace = true
+distill-proto.workspace = true
+postcard.workspace = true
+pulldown-cmark.workspace = true
+ratatui.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+unicode-width.workspace = true

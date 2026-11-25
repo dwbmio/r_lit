@@ -9,6 +9,8 @@ rlit_cli = { path = "../crates/rlit_cli" }
 
 已接入（全量 CLI binary）：`archcast` `artifact-inspect` `mj_atlas` `img_resize` `ui-trim` `textexture` `bulk_upload` `audiogen` `phone_haul` `mini_reg` `looplog` `mailctl` `maquette-cli`。
 
+> 契约豁免说明：`distill/` 为双二进制 P2P QUIC + MCP/TUI/守护进程套件（`distill` + `distilld`），采用独立 JSON/MCP 协议而不接入 `rlit_cli`；已纳入根 CI 与 `ci-all-in-one` `Jenkinsfile.binary-build` 的 R2/HFrog 发布闭环。
+
 ## artifact-inspect 的本地接入边界
 
 - 工具文档：[英文说明](../artifact-inspect/README.md)、[中文说明](../artifact-inspect/README_CN.md)、[英文机器说明](../artifact-inspect/llms.txt)、[中文机器说明](../artifact-inspect/llms_cn.txt)。CLI 0.1.0 / 契约 1 / 报告结构 1；报告结构版本与 CLI schema 不是同一概念。

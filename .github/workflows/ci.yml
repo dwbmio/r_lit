@@ -166,3 +166,19 @@ jobs:
       - name: Check crates/murmur
         working-directory: crates/murmur
         run: cargo check --tests
+
+  distill-workspace:
+    name: Test distill workspace (distill + distilld)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: distill
+
+      - name: Test distill workspace
+        working-directory: distill
+        run: cargo test --workspace

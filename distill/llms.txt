@@ -1,0 +1,17 @@
+# distill
+
+- purpose: Pure-Rust cross-functional knowledge distillation and P2P Q&A suite allowing non-engineers (PM, QA, Ops, Design) to gather verified technical truth across Git branches via local AI without exposing raw source code
+- architecture: 7-crate Cargo workspace producing 2 standalone binaries (`distilld`, `distill`)
+- binaries:
+  - `distilld` (crates/distill-server): internal host daemon (`iroh` QUIC server, Ed25519 `EndpointId` allowlist, repo/branch ACL, `governor` rate limit, bare Git + `gix` zero-checkout reader + LRU detached worktree pool, `oxc_parser` AST semantic extractor, ChaCha20-Poly1305 encrypted `blob_oid` cache, per-commit Tantivy index, BLAKE3 6-gram DLP outbound gate, `audit.jsonl`)
+  - `distill` (crates/distill-client): lightweight P2P CLI and stdio MCP server (`list_repos`, `list_branches`, `search_semantics`, `get_api_contracts`, `diff_branch_behavior`)
+- transport: `iroh` 1.5 P2P QUIC (TLS 1.3, Ed25519 mutual identity, multiplexed concurrent streams, direct LAN + NAT traversal), ALPN `distill/p2p/1`
+- home_dirs:
+  - server: `$HOME/.distill` (override: `DISTILL_HOME` or `--home`)
+  - client: `$HOME/.distill-client` (override: `DISTILL_CLIENT_HOME` or `--home`)
+- crates: distill-proto, distill-crypto, distill-git, distill-semantic, distill-index, distill-server, distill-client
+- build: `cd distill && cargo build --release`
+- test: `cd distill && cargo test --workspace`
+- security_model: no SSH exposure; raw function bodies stripped during AST extraction; outbound DLP strips code fences, secrets, host paths, and matches BLAKE3 6-gram source fingerprints; all requests logged to `audit.jsonl`
+- extensibility: no shell/Python/Node scripts; any future programmable extractor or DLP hook is restricted to in-process sandboxed `mlua` (Luau)
+- guides: server=docs/SERVER_DEPLOY_CN.md; client=docs/CLIENT_USAGE_CN.md

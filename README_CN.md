@@ -13,6 +13,7 @@
 | [audiogen](audiogen/) | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | [deskpet](deskpet/) | 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / 菜单栏常驻） |
+| [distill](distill/) | Pure Rust 跨职能信息收集与安全蒸馏套件（双二进制：`distilld` + `distill` CLI/MCP，`iroh` QUIC 加密；零源码原文暴露） |
 | [gamereel](gamereel/) | 把游戏协议回放渲染成短视频（Cargo workspace；CUDA + FFmpeg） |
 | [group_vibe_workbench](group_vibe_workbench/) | 桌面协作工作台（GPUI + Murmur P2P） |
 | [img_resize](img_resize/) | 图片缩放与压缩 |

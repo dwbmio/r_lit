@@ -1,0 +1,18 @@
+[package]
+name = "distill-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+dashmap.workspace = true
+distill-crypto.workspace = true
+distill-git.workspace = true
+distill-proto.workspace = true
+distill-semantic.workspace = true
+postcard.workspace = true
+serde.workspace = true
+tantivy.workspace = true
+tokio.workspace = true
+tracing.workspace = true

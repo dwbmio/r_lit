@@ -1,0 +1,172 @@
+// distill 发布流水线（与 starlink-nebula / starlink-dev 同构）
+// 触发：手动参数化构建（输入 VERSION），或 webhook 监听 tag push（v*）
+//
+// 产物路径规则（与 scripts/install.sh、scripts/install.ps1 对齐）：
+//   s3://starlink-artifacts/distill/latest/<target>/distill.gz
+//   s3://starlink-artifacts/distill/<VERSION>/<target>/distill.gz
+//   s3://starlink-artifacts/distill/latest/x86_64-unknown-linux-gnu/distilld.gz
+//   s3://starlink-artifacts/distill/<VERSION>/x86_64-unknown-linux-gnu/distilld.gz
+//   s3://starlink-artifacts/distill/install.sh
+//   s3://starlink-artifacts/distill/install.ps1
+//
+// Agent 标签约定：linux-rust / macos-rust / windows-rust
+// 凭据：minio-publish-access-key / minio-publish-secret-key
+
+pipeline {
+    agent none
+
+    options {
+        timestamps()
+        timeout(time: 60, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'VERSION', defaultValue: 'v1.0.0', description: '发布版本号（tag 名，如 v1.0.0；传 auto 自动从 Cargo.toml 推断）')
+        string(name: 'S3_BASE', defaultValue: 'https://synology-minio.youxi123.com', description: 'MinIO endpoint')
+        string(name: 'S3_BUCKET', defaultValue: 'starlink-artifacts', description: 'MinIO bucket')
+        string(name: 'S3_PATH', defaultValue: 'distill', description: 'MinIO 下的子路径')
+        booleanParam(name: 'PUBLISH_LATEST', defaultValue: true, description: '同时更新 latest/ 指向当前版本')
+        booleanParam(name: 'PUBLISH_VERSIONED', defaultValue: true, description: '保留 <VERSION>/ 版本快照')
+    }
+
+    environment {
+        VERSION = "${params.VERSION}"
+        S3_BASE = "${params.S3_BASE}"
+        S3_BUCKET = "${params.S3_BUCKET}"
+        S3_PATH = "${params.S3_PATH}"
+        S3_ACCESS_KEY = credentials('minio-publish-access-key')
+        S3_SECRET_KEY = credentials('minio-publish-secret-key')
+        RUST_BACKTRACE = '1'
+    }
+
+    stages {
+        stage('Prepare') {
+            agent { label 'linux-rust' }
+            steps {
+                checkout scm
+                script {
+                    if (!env.VERSION || env.VERSION == 'auto') {
+                        def cargoVer = sh(returnStdout: true, script: "grep '^version' distill/Cargo.toml | head -1 | sed 's/.*\"\\(.*\\)\".*/v\\1/'").trim()
+                        env.VERSION = cargoVer ?: 'v1.0.0'
+                    }
+                    echo "Release version: ${env.VERSION}"
+                }
+            }
+        }
+
+        stage('Build') {
+            parallel {
+                stage('linux x86_64') {
+                    agent { label 'linux-rust' }
+                    steps {
+                        dir('distill') {
+                            sh 'cargo test --workspace'
+                            sh 'cargo build --release --target x86_64-unknown-linux-gnu -p distill-client -p distill-server'
+                        }
+                        sh 'mkdir -p dist/x86_64-unknown-linux-gnu'
+                        sh 'gzip -9 -c distill/target/x86_64-unknown-linux-gnu/release/distill > dist/x86_64-unknown-linux-gnu/distill.gz'
+                        sh 'gzip -9 -c distill/target/x86_64-unknown-linux-gnu/release/distilld > dist/x86_64-unknown-linux-gnu/distilld.gz'
+                        stash name: 'linux-x86_64', includes: 'dist/x86_64-unknown-linux-gnu/*.gz'
+                    }
+                }
+
+                stage('macOS x86_64') {
+                    agent { label 'macos-rust' }
+                    steps {
+                        dir('distill') {
+                            sh 'cargo build --release --target x86_64-apple-darwin -p distill-client'
+                        }
+                        sh 'mkdir -p dist/x86_64-apple-darwin'
+                        sh 'gzip -9 -c distill/target/x86_64-apple-darwin/release/distill > dist/x86_64-apple-darwin/distill.gz'
+                        stash name: 'macos-x86_64', includes: 'dist/x86_64-apple-darwin/distill.gz'
+                    }
+                }
+
+                stage('macOS aarch64') {
+                    agent { label 'macos-rust' }
+                    steps {
+                        dir('distill') {
+                            sh 'cargo build --release --target aarch64-apple-darwin -p distill-client'
+                        }
+                        sh 'mkdir -p dist/aarch64-apple-darwin'
+                        sh 'gzip -9 -c distill/target/aarch64-apple-darwin/release/distill > dist/aarch64-apple-darwin/distill.gz'
+                        stash name: 'macos-aarch64', includes: 'dist/aarch64-apple-darwin/distill.gz'
+                    }
+                }
+
+                stage('windows x86_64') {
+                    agent { label 'windows-rust' }
+                    steps {
+                        dir('distill') {
+                            bat 'cargo build --release --target x86_64-pc-windows-msvc -p distill-client'
+                        }
+                        bat 'if not exist dist\\x86_64-pc-windows-msvc mkdir dist\\x86_64-pc-windows-msvc'
+                        // 与 starlink-nebula/install.ps1 一致，S3 固定名为 distill.gz
+                        bat '''
+                            powershell -NoProfile -Command ^
+                                "$in = [IO.File]::OpenRead('distill\\target\\x86_64-pc-windows-msvc\\release\\distill.exe'); ^
+                                 $out = [IO.File]::Create('dist\\x86_64-pc-windows-msvc\\distill.gz'); ^
+                                 $gz = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionMode]::Compress); ^
+                                 $in.CopyTo($gz); $gz.Dispose(); $out.Dispose(); $in.Dispose()"
+                        '''
+                        stash name: 'windows-x86_64', includes: 'dist/x86_64-pc-windows-msvc/distill.gz'
+                    }
+                }
+            }
+        }
+
+        stage('Publish') {
+            agent { label 'linux-rust' }
+            steps {
+                unstash 'linux-x86_64'
+                unstash 'macos-x86_64'
+                unstash 'macos-aarch64'
+                unstash 'windows-x86_64'
+
+                sh 'cp distill/scripts/install.sh dist/install.sh'
+                sh 'cp distill/scripts/install.ps1 dist/install.ps1'
+                sh 'cp distill/SKILL.md dist/SKILL.md'
+                sh 'cp distill/CHANGELOG.md dist/CHANGELOG.md'
+                sh 'printf "%s\n" "${VERSION#v}" > dist/version.txt'
+
+                script {
+                    def files = [
+                        ['x86_64-unknown-linux-gnu', 'distill.gz'],
+                        ['x86_64-unknown-linux-gnu', 'distilld.gz'],
+                        ['x86_64-apple-darwin',      'distill.gz'],
+                        ['aarch64-apple-darwin',     'distill.gz'],
+                        ['x86_64-pc-windows-msvc',   'distill.gz'],
+                    ]
+                    files.each { item ->
+                        def (target, file) = item
+                        if (params.PUBLISH_LATEST) {
+                            sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} dist/${target}/${file} s3://${S3_BUCKET}/${S3_PATH}/latest/${target}/${file}"
+                        }
+                        if (params.PUBLISH_VERSIONED) {
+                            sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} dist/${target}/${file} s3://${S3_BUCKET}/${S3_PATH}/${VERSION}/${target}/${file}"
+                        }
+                    }
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} dist/install.sh s3://${S3_BUCKET}/${S3_PATH}/install.sh"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} dist/install.ps1 s3://${S3_BUCKET}/${S3_PATH}/install.ps1"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} --content-type 'text/markdown; charset=utf-8' dist/SKILL.md s3://${S3_BUCKET}/${S3_PATH}/SKILL.md"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} --content-type 'text/markdown; charset=utf-8' dist/SKILL.md s3://${S3_BUCKET}/${S3_PATH}/latest/SKILL.md"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} --content-type 'text/markdown; charset=utf-8' dist/CHANGELOG.md s3://${S3_BUCKET}/${S3_PATH}/CHANGELOG.md"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} --content-type 'text/plain; charset=utf-8' dist/version.txt s3://${S3_BUCKET}/${S3_PATH}/version.txt"
+                    sh "AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY} AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY} aws s3 cp --endpoint-url ${S3_BASE} --content-type 'text/plain; charset=utf-8' dist/version.txt s3://${S3_BUCKET}/${S3_PATH}/latest/version.txt"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ distill ${VERSION} 发布完成"
+            echo "macOS/Linux: bash -c \"\$(curl -fsSL ${S3_BASE}/${S3_BUCKET}/${S3_PATH}/install.sh)\""
+            echo "Windows:     irm ${S3_BASE}/${S3_BUCKET}/${S3_PATH}/install.ps1 | iex"
+        }
+        failure {
+            echo "❌ distill 发布失败，请检查 stage 日志"
+        }
+    }
+}
