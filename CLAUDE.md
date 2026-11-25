@@ -8,6 +8,7 @@ R_LIT 是一个中长期演进的 Rust CLI 工具与桌面工程集合仓库。�
 
 | 目录 | 说明 |
 |------|------|
+| `archcast/` | 面向 AI 的确定性架构与流程汇报编译器（SIMD + Rayon + 可选 WebGPU；YAML ⇄ 1:1 固定样式 HTML+SVG + Markdown/Mermaid） |
 | `audiogen/` | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | `bulk_upload/` | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |
 | `deskpet/` | 无边框透明置顶 3D/Spine 桌面宠物（Bevy + 系统托盘 / macOS 菜单栏常驻；GUI，非短时 CLI） |
@@ -59,7 +60,7 @@ just install_loc <tool> release
 
 - **错误处理:** 各 crate 在 `error.rs` 中用 `thiserror` 定义错误枚举 + `Result<T>` 别名。禁止 `unwrap()`，用 `?`。
 - **CLI:** `clap` derive 宏 + `--json` 全局标志 + 子命令架构 + 中英双语帮助。
-- **机器调用契约:** 所有 CLI binary 统一接入 `crates/rlit_cli`（统一 JSON envelope、退出码 0-5、`artifacts` 回执、隐藏 `__schema` 子命令导出 JSON Schema）。规范与接入清单见 `docs/cli-contract.md`。已全量接入: `mj_atlas` / `img_resize` / `ui-trim` / `textexture` / `bulk_upload` / `audiogen` / `phone_haul` / `mini_reg` / `looplog` / `mailctl` / `maquette-cli`。
+- **机器调用契约:** 所有 CLI binary 统一接入 `crates/rlit_cli`（统一 JSON envelope、退出码 0-5、`artifacts` 回执、隐藏 `__schema` 子命令导出 JSON Schema）。规范与接入清单见 `docs/cli-contract.md`。已全量接入: `archcast` / `artifact-inspect` / `mj_atlas` / `img_resize` / `ui-trim` / `textexture` / `bulk_upload` / `audiogen` / `phone_haul` / `mini_reg` / `looplog` / `mailctl` / `maquette-cli`。
 - **根 `Cargo.toml`:** 只为 deskpet 存在；其他 crate 必须列在 `workspace.exclude`，否则在子目录里 `cargo build` 会报 "believes it's in a workspace"。
 - **日志:** `log` crate；直接复用 `rlit_cli::runlog`（INFO+ 打控制台、`--json` 下切到 stderr、全级别进内存 buffer，运行结束 flush 到 `<output>.log` 边车文件，RFC3339 时间戳）。
 - **Release profile:** `lto = true, panic = "abort", strip = true, opt-level = "z"`
@@ -67,7 +68,7 @@ just install_loc <tool> release
 ## Troubleshooting / 排查问题
 
 报问题时**先看 `<output>.log` 边车文件**，再动代码。详见 `docs/troubleshooting.md`。
-文件级管线及状态类 CLI 工具通过 `rlit_cli::runlog` 落盘 `<output>.log` 边车日志（已接入: `mj_atlas` / `bulk_upload` / `img_resize` / `textexture` / `mini_reg`）。
+文件级管线及状态类 CLI 工具通过 `rlit_cli::runlog` 落盘 `<output>.log` 边车日志（已接入: `archcast` / `artifact-inspect` / `mj_atlas` / `bulk_upload` / `img_resize` / `textexture` / `mini_reg`）。
 
 ## AI Debug Loop Context
 

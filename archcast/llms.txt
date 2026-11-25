@@ -1,0 +1,46 @@
+# archcast
+
+name: archcast
+version: 0.1.0
+language: Rust (edition 2024)
+category: CLI / Architecture & Flow Report Compiler
+backends: cpu-simd-rayon (default: memchr + wide::f64x4 + rayon + resvg/tiny-skia/gif), webgpu-hybrid (optional feature: gpu via wgpu WGSL compute)
+
+## Purpose
+Deterministic compiler between AI-friendly YAML/JSON architecture specifications and fixed-style visual deliverables (HTML with browser WebGPU/Canvas2D motion, standalone root-level SVG files, optional raster PNG & animated flow-pulse GIF) + canonical Markdown/Mermaid documents. Also reverse-extracts existing HTML+SVG overview pages into canonical YAML and Markdown.
+
+## Commands
+- `archcast render <INPUT> -o <DIR> [--format all|both|media|html|svg|md|png|gif] [--png] [--gif] [--gif-mode overlay|delta] [--scale <F32>] [--gif-scale <F32>] [--frames <N>] [--fps <N>] [--static-html] [--backend auto|cpu|gpu] [--strict] [--json]`
+  effects: pure
+  io: input=input-path, output_dir=output-dir
+  outputs: <stem>.html (report-html), <stem>[-<diag_id>].svg (diagram-svg), <stem>.md (doc-markdown), optional <stem>[-<diag_id>].png (diagram-png), optional <stem>[-<diag_id>].gif (diagram-gif), archcast.log (log)
+- `archcast extract <INPUT> -o <DIR> [--yaml-only] [--json]`
+  effects: pure
+  io: input=input-path, output_dir=output-dir
+  outputs: <stem>.yaml (spec-yaml), <stem>.md (doc-markdown), archcast.log (log)
+- `archcast validate <INPUT> [--json]`
+  effects: read-only
+  io: input=input-file
+- `archcast init <OUTPUT> [--title <TITLE>] [--json]`
+  effects: pure
+  io: output=output-file
+  outputs: <OUTPUT> (spec-yaml)
+- `archcast info [--backend auto|cpu|gpu] [--json]`
+  effects: read-only
+
+## Spec Schema (v1)
+- root: schema_version (1), doc_title, title, lead[], diagrams[], flow_table
+- diagram: id, heading, note, svg_title, canvas_title, subtitles[], columns[], edges[], callouts[], warning, footer
+- column: id, title, width (optional), cards[]
+- card: id, title, accent (Tone), badge (optional), align_with (optional card id), lines[], subcards[], footer
+- edge: kind (direct|bus|loop_left|bottom_route), from[], to[], label, bus_slot
+- flow_table: id, heading, note, groups[] -> { name, tone, rows[] -> { action, trigger, version, version_tone, entry[], downstream[], note } }, hint
+
+## Machine Call Contract
+contract_version: 1
+json_flag: --json
+schema_command: archcast __schema
+interactive: false
+exit_codes: 0=ok, 1=runtime, 2=usage, 3=input, 5=partial
+artifact_roles: report-html, diagram-svg, doc-markdown, diagram-png, diagram-gif, spec-yaml, log
+sidecar_log: <output_dir>/archcast.log (for render and extract)

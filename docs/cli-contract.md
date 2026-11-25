@@ -7,7 +7,7 @@ r_lit 下所有 CLI binary 对 AI / 执行器（titan-wall、CI、脚本）的�
 rlit_cli = { path = "../crates/rlit_cli" }
 ```
 
-已接入（全量 CLI binary）：`artifact-inspect` `mj_atlas` `img_resize` `ui-trim` `textexture` `bulk_upload` `audiogen` `phone_haul` `mini_reg` `looplog` `mailctl` `maquette-cli`。
+已接入（全量 CLI binary）：`archcast` `artifact-inspect` `mj_atlas` `img_resize` `ui-trim` `textexture` `bulk_upload` `audiogen` `phone_haul` `mini_reg` `looplog` `mailctl` `maquette-cli`。
 
 ## artifact-inspect 的本地接入边界
 

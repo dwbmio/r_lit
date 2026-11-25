@@ -1,0 +1,1023 @@
+schema_version: 1
+doc_title: 小捆自动化：链路全景
+title: 小捆自动化：链路全景 / 改造落点
+lead:
+- 一句话：**人从页面发起 → 星链编排 → 调 5 个外部系统（项管只在建迭代 / 拉需求时）→ 方案管理读结果。**
+- 这次要加的 `bbc_api_version`（v1 / v2）只是创建时多选一个值、后面透传；`caller`（用哪套项管）保持原样。
+diagrams:
+- id: fig1
+  heading: 一、链路全景（现状）
+  note: 左：人 / N8N 发起；中：星链入口 → 主表 → 工作流 → 宽表；右：5 个外部系统及其接口；红圈 ①②③④ 是缺口。
+  svg_title: 小捆自动化链路全景
+  canvas_title: 小捆自动化 · 链路全景（现状）
+  subtitles:
+  - text: 每个平台按「被调用的动作」拆开；同一个平台多次调用 = 多张卡。红标 = 这次调用没有接口版本。
+    tone: muted
+    size: 13.5
+  - text: 注意：v1 / v2 只指 BBC 接口版本；项管按系统名区分（云效 / BB 项管）。橙色 = caller 传参；红/绿标 = 接口版本标识的有无。
+    tone: muted
+    size: 11.5
+  - text: caller 链路：创建时写入 → 主表 → 班车流 → 方案平台创参（原样透传，本次不改）
+    tone: amber
+    size: 11.5
+  columns:
+  - id: col_1
+    title: ① 触发源
+    width: 340.0
+    cards:
+    - id: c1_1
+      title: 人 · 创建小捆（新建迭代）
+      accent: blue
+      lines:
+      - text: 一个弹窗：名称 / 类型 / 来源
+      - text: create_kind：普通 1 / 专项 2，是参数
+      - text: 云效  → POST …/v1/create
+        mono: true
+      - text: BB 项管 → POST …/v2/create
+        mono: true
+      - text: caller = "" / "BB Project Management"
+        mono: true
+        tone: amber
+      - text: bbc_api_version：—— 没有这个参数
+        mono: true
+        bold: true
+        tone: red
+      - text: 产出：小捆流 + 工作流
+        tone: muted
+    - id: c1_2
+      title: 人 · 刷新迭代
+      accent: blue
+      lines:
+      - text: 重拉需求，和现有方案对账
+      - text: POST …/refresh-iteration-callback
+        mono: true
+      - text: 挂在小捆流上：的是项管 + 方案平台
+        tone: muted
+    - id: c1_3
+      title: 人 · 刷新期次
+      accent: blue
+      lines:
+      - text: 只刷某一个期次的方案
+      - text: POST …/refresh-way-callback
+        mono: true
+    - id: c1_4
+      title: 人 · 点班车流卡片
+      accent: blue
+      lines:
+      - text: 打包 / 代码审核 / 测试（班车流）
+      - text: POST …/build-package/*
+        mono: true
+      - text: POST …/testing-phase/*
+        mono: true
+    - id: c1_5
+      title: N8N · 两套流程初始化 / 执行
+      accent: orange
+      lines:
+      - text: 小捆流 /wf/mb/get_init_layer
+        mono: true
+      - text: /wf/mb/exec_start
+        mono: true
+      - text: 班车流 /wf/release_shuttle_bus_flow/*
+        mono: true
+      - text: 回调星链 create-iteration 建迭代
+  - id: col_2
+    title: ② 星链（编排 / 存储）
+    width: 440.0
+    cards:
+    - id: c2_1
+      title: 星链入口 API（/flow/**）
+      accent: green
+      align_with: c1_1
+      lines:
+      - text: POST …/mini_bundle_auto/v1|v2/create
+        mono: true
+      - text: POST …/create-iteration/v1|v2/*
+        mono: true
+      - text: POST …/build-package/* · …/testing-phase/*
+        mono: true
+      - text: POST /flow/callback/*
+        mono: true
+    - id: c2_2
+      title: 小捆自动化流（流表）
+      accent: green
+      lines:
+      - text: st_wf_solution_mini_bundle_auto
+        mono: true
+        tone: muted
+      - text: id_wf_data → st_workflow（卡片 / 状态）
+      - text: create_kind：普通 / 专项
+      - text: caller：云效 / BB 项管（创建时写入）
+        bold: true
+        tone: amber
+      - text: ✗ 没有接口版本（本次要加）
+        tone: red
+    - id: c2_3
+      title: 发版班车流（流表）
+      accent: green
+      lines:
+      - text: st_wf_release_shuttle_bus_flow
+        mono: true
+        tone: muted
+      - text: id_wf_data → st_workflow（打包/审核/测试卡片）
+      - text: 期次 st_wf_rsbf_period（六元组）
+      - text: 由 create-release-shuttle-bus 创建
+      - text: caller 与 bbc_api_version 同步落这里
+        tone: muted
+    - id: c2_4
+      title: 总览宽表
+      accent: green
+      lines:
+      - text: st_wf_release_overview_wide
+        mono: true
+        tone: muted
+      - text: create_kind + 期次维度（GQL 可筛）
+      - text: ✗ 无接口版本维度
+        tone: red
+  - id: col_3
+    title: ③ 外部系统（按调用动作拆卡）
+    width: 600.0
+    cards:
+    - id: c3_1
+      title: 项管：云效 / BB 项管
+      accent: amber
+      align_with: c2_1
+      subcards:
+      - title: 建迭代
+        badge:
+          text: 不涉及版本
+          tone: muted
+        lines:
+        - text: POST /oapi/v1/…/projects/{p}/sprints
+          mono: true
+      - title: 拉需求
+        badge:
+          text: 不涉及版本
+          tone: muted
+        lines:
+        - text: GET  /oapi/v1/…/workitems:search
+          mono: true
+      footer: 小捆流调用 · 只在创建 / 刷新时
+    - id: c3_2
+      title: 方案平台 BBC
+      accent: purple
+      badge:
+        text: 缺版本
+        tone: red
+      subcards:
+      - title: 建方案（创参）
+        badge:
+          text: ✗ 只有 v1
+          tone: red
+        lines:
+        - text: v1 → POST /api/fc/solution/add_mini_bundle_auto
+          mono: true
+        - text: v2 → 没有对应接口，需要方案平台提供
+          mono: true
+          tone: red
+      - title: 特性冲突检测
+        badge:
+          text: 只读
+          tone: muted
+        lines:
+        - text: v1 → GET /api/st/wf/get_conflict_report
+          mono: true
+        - text: v2 → 没有对应接口
+          mono: true
+          tone: red
+      footer: 小捆流调用 · 按 bbc_api_version 选不同接口；创参 origin_param{workflow_id, caller}
+    - id: c3_3
+      title: 打包（Jenkins / n8n）
+      accent: blue
+      badge:
+        text: 缺版本
+        tone: red
+      subcards:
+      - title: 出测试包
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: 星链 → n8n /api/st/receive-data → Jenkins job
+          mono: true
+      footer: 班车流调用 · 星链用 /job/{job}/lastBuild 查状态；回调 package-update
+    - id: c3_4
+      title: 代码审核
+      accent: gold
+      badge:
+        text: 缺版本
+        tone: red
+      subcards:
+      - title: 初审
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: POST /api/block-blast/release-review (reviewCount=1)
+          mono: true
+      - title: 复审
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: 同接口 (reviewCount≥2)
+          mono: true
+      footer: 班车流调用 · 回调 /flow/callback/code-review-appointment
+    - id: c3_5
+      title: 自动化测试 / 机器人
+      accent: green
+      badge:
+        text: 缺版本
+        tone: red
+      subcards:
+      - title: 主流程
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: POST /api/v1/smoke_test/main_case_starlink
+          mono: true
+      - title: 性能
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: POST /api/v1/performance_test/performance_case
+          mono: true
+      - title: 机器人
+        badge:
+          text: ✗ 无版本
+          tone: red
+        lines:
+        - text: POST /robot/oapi/task/create
+          mono: true
+      footer: 班车流调用 · 回调 /flow/callback/{robot,main,performance}
+  - id: col_4
+    title: ④ 读侧
+    width: 420.0
+    cards:
+    - id: c4_1
+      title: 方案管理（solutionhub）
+      accent: gold
+      align_with: c3_2
+      lines:
+      - text: v1 → GET /api/fc/solution/get_way
+        mono: true
+      - text: v1 → GET /api/fc/solution/get_list
+        mono: true
+      - text: v2 → 没有区分，取不到 v2
+        mono: true
+        tone: red
+      - text: 只有「Auto」标签，看不出接口版本
+        tone: red
+    - id: c4_2
+      title: 需求 / 发版总览
+      accent: gold
+      align_with: c3_4
+      lines:
+      - text: 宽表 → GQL
+      - text: ✗ 无接口版本维度
+        tone: red
+  edges:
+  - kind: bus
+    from:
+    - c1_1
+    - c1_2
+    - c1_3
+    - c1_4
+    - c1_5
+    to:
+    - c2_1
+    label: 触发
+    bus_slot: 0.5
+  - kind: bus
+    from:
+    - c2_2
+    to:
+    - c3_1
+    - c3_2
+    label: 小捆流调用
+    bus_slot: 0.18
+  - kind: bus
+    from:
+    - c2_3
+    to:
+    - c3_3
+    - c3_4
+    - c3_5
+    label: 班车流调用
+    bus_slot: 0.83
+  - kind: direct
+    from:
+    - c2_1
+    to:
+    - c2_2
+  - kind: direct
+    from:
+    - c2_2
+    to:
+    - c2_3
+  - kind: direct
+    from:
+    - c2_3
+    to:
+    - c2_4
+  - kind: loop_left
+    from:
+    - c2_2
+    to:
+    - c2_4
+  - kind: direct
+    from:
+    - c3_2
+    to:
+    - c4_1
+  - kind: bottom_route
+    from:
+    - c2_4
+    to:
+    - c4_2
+  callouts:
+  - title: 方案平台创参：POST /api/fc/solution/add_mini_bundle_auto
+    accent: purple
+    style: code_box
+    lines:
+    - text: platform, way_type, way, experiment_type
+      mono: true
+    - text: solution_type, other_sol_type_name, list_tag_data[], way_notes
+      mono: true
+    - text: origin_param { workflow_id, caller }   ← caller 已有，不动
+      mono: true
+      tone: amber
+    - text: bbc_api_version  ——（没有这个参数）
+      mono: true
+      tone: red
+  - title: 缺口
+    accent: red
+    style: bullets
+    lines:
+    - text: ① 方案管理只认「小捆自动」，看不出走哪套 BBC 接口
+    - text: ② 创建入口没有接口版本可选，方案平台创参里也没有
+    - text: ③ 打包 / 代码审核 / 测试的请求都不带版本，回调无法归属
+    - text: ④ 主表 / 宽表没有这个字段，全靠人记
+  footer: 依据：star-flow internal/data/http_*.go（出站）· api/**/*.proto（入站）· n8n 方案准备流程 · hs-code-keeper/bbc/api/fc · solutionhub/block_blast
+- id: fig2
+  heading: 二、链路全景（改造后）
+  note: 只加一个 bbc_api_version（接口 v1 / v2）：主表 / 创参 / 打包 / 审核 / 测试全部带上；项管两跳不涉及。
+  svg_title: 小捆自动化链路全景
+  canvas_title: 小捆自动化 · 链路全景（改造后）
+  subtitles:
+  - text: 每个平台按「被调用的动作」拆开；同一个平台多次调用 = 多张卡。绿标 = 这次调用带 bbc_api_version。
+    tone: muted
+    size: 13.5
+  - text: 注意：v1 / v2 只指 BBC 接口版本；项管按系统名区分（云效 / BB 项管）。橙色 = caller 传参；绿色 = 本次新增的 bbc_api_version。
+    tone: muted
+    size: 11.5
+  - text: caller 链路：创建时写入 → 主表 → 班车流 → 方案平台创参（原样透传，本次不改）
+    tone: amber
+    size: 11.5
+  columns:
+  - id: col_1
+    title: ① 触发源
+    width: 340.0
+    cards:
+    - id: c1_1
+      title: 人 · 创建小捆（新建迭代）
+      accent: blue
+      lines:
+      - text: 一个弹窗：名称 / 类型 / 来源 / 接口版本
+      - text: create_kind：普通 1 / 专项 2，是参数
+      - text: 云效  → POST …/v1/create
+        mono: true
+      - text: BB 项管 → POST …/v2/create
+        mono: true
+      - text: caller = "" / "BB Project Management"
+        mono: true
+        tone: amber
+      - text: bbc_api_version = "v1" / "v2"
+        mono: true
+        bold: true
+        tone: emerald
+      - text: 产出：小捆流 + 工作流
+        tone: muted
+    - id: c1_2
+      title: 人 · 刷新迭代
+      accent: blue
+      lines:
+      - text: 重拉需求，和现有方案对账
+      - text: POST …/refresh-iteration-callback
+        mono: true
+      - text: 挂在小捆流上：的是项管 + 方案平台
+        tone: muted
+    - id: c1_3
+      title: 人 · 刷新期次
+      accent: blue
+      lines:
+      - text: 只刷某一个期次的方案
+      - text: POST …/refresh-way-callback
+        mono: true
+    - id: c1_4
+      title: 人 · 点班车流卡片
+      accent: blue
+      lines:
+      - text: 打包 / 代码审核 / 测试（班车流）
+      - text: POST …/build-package/*
+        mono: true
+      - text: POST …/testing-phase/*
+        mono: true
+    - id: c1_5
+      title: N8N · 两套流程初始化 / 执行
+      accent: orange
+      lines:
+      - text: 小捆流 /wf/mb/get_init_layer
+        mono: true
+      - text: /wf/mb/exec_start
+        mono: true
+      - text: 班车流 /wf/release_shuttle_bus_flow/*
+        mono: true
+      - text: 回调星链 create-iteration 建迭代
+  - id: col_2
+    title: ② 星链（编排 / 存储）
+    width: 440.0
+    cards:
+    - id: c2_1
+      title: 星链入口 API（/flow/**）
+      accent: green
+      align_with: c1_1
+      lines:
+      - text: POST …/mini_bundle_auto/v1|v2/create
+        mono: true
+      - text: POST …/create-iteration/v1|v2/*
+        mono: true
+      - text: POST …/build-package/* · …/testing-phase/*
+        mono: true
+      - text: POST /flow/callback/*
+        mono: true
+    - id: c2_2
+      title: 小捆自动化流（流表）
+      accent: green
+      badge:
+        text: 新增
+        tone: emerald
+      lines:
+      - text: st_wf_solution_mini_bundle_auto
+        mono: true
+        tone: muted
+      - text: id_wf_data → st_workflow（卡片 / 状态）
+      - text: create_kind：普通 / 专项
+      - text: caller：云效 / BB 项管（创建时写入）
+        bold: true
+        tone: amber
+      - text: + bbc_api_version：接口 v1 / v2
+        tone: emerald
+    - id: c2_3
+      title: 发版班车流（流表）
+      accent: green
+      lines:
+      - text: st_wf_release_shuttle_bus_flow
+        mono: true
+        tone: muted
+      - text: id_wf_data → st_workflow（打包/审核/测试卡片）
+      - text: 期次 st_wf_rsbf_period（六元组）
+      - text: 由 create-release-shuttle-bus 创建
+      - text: caller 与 bbc_api_version 同步落这里
+        tone: muted
+    - id: c2_4
+      title: 总览宽表
+      accent: green
+      badge:
+        text: 新增
+        tone: emerald
+      lines:
+      - text: st_wf_release_overview_wide
+        mono: true
+        tone: muted
+      - text: create_kind + 期次维度（GQL 可筛）
+      - text: + bbc_api_version：可筛
+        tone: emerald
+  - id: col_3
+    title: ③ 外部系统（按调用动作拆卡）
+    width: 600.0
+    cards:
+    - id: c3_1
+      title: 项管：云效 / BB 项管
+      accent: amber
+      align_with: c2_1
+      subcards:
+      - title: 建迭代
+        badge:
+          text: 不涉及版本
+          tone: muted
+        lines:
+        - text: POST /oapi/v1/…/projects/{p}/sprints
+          mono: true
+      - title: 拉需求
+        badge:
+          text: 不涉及版本
+          tone: muted
+        lines:
+        - text: GET  /oapi/v1/…/workitems:search
+          mono: true
+      footer: 小捆流调用 · 只在创建 / 刷新时
+    - id: c3_2
+      title: 方案平台 BBC
+      accent: purple
+      badge:
+        text: 改造
+        tone: emerald
+      subcards:
+      - title: 建方案（创参）
+        badge:
+          text: ✓ 按版本选接口
+          tone: emerald
+        lines:
+        - text: v1 → POST /api/fc/solution/add_mini_bundle_auto
+          mono: true
+        - text: v2 → POST …/add_mini_bundle_auto_v2（待确认）
+          mono: true
+          tone: emerald
+      - title: 特性冲突检测
+        badge:
+          text: 只读
+          tone: muted
+        lines:
+        - text: v1 → GET /api/st/wf/get_conflict_report
+          mono: true
+        - text: v2 → GET …/get_conflict_report_v2（待确认）
+          mono: true
+          tone: emerald
+      footer: 小捆流调用 · 按 bbc_api_version 选不同接口；创参 origin_param{workflow_id, caller}
+    - id: c3_3
+      title: 打包（Jenkins / n8n）
+      accent: blue
+      badge:
+        text: 改造
+        tone: emerald
+      subcards:
+      - title: 出测试包
+        badge:
+          text: ✓ 透传版本
+          tone: emerald
+        lines:
+        - text: 星链 → n8n /api/st/receive-data → Jenkins job
+          mono: true
+      footer: 班车流调用 · 星链用 /job/{job}/lastBuild 查状态；回调 package-update
+    - id: c3_4
+      title: 代码审核
+      accent: gold
+      badge:
+        text: 改造
+        tone: emerald
+      subcards:
+      - title: 初审
+        badge:
+          text: ✓ 星链落库
+          tone: emerald
+        lines:
+        - text: POST /api/block-blast/release-review (reviewCount=1)
+          mono: true
+      - title: 复审
+        badge:
+          text: ✓ 星链落库
+          tone: emerald
+        lines:
+        - text: 同接口 (reviewCount≥2)
+          mono: true
+      footer: 班车流调用 · 回调 /flow/callback/code-review-appointment
+    - id: c3_5
+      title: 自动化测试 / 机器人
+      accent: green
+      badge:
+        text: 改造
+        tone: emerald
+      subcards:
+      - title: 主流程
+        badge:
+          text: ✓ 透传版本
+          tone: emerald
+        lines:
+        - text: POST /api/v1/smoke_test/main_case_starlink
+          mono: true
+      - title: 性能
+        badge:
+          text: ✓ 透传版本
+          tone: emerald
+        lines:
+        - text: POST /api/v1/performance_test/performance_case
+          mono: true
+      - title: 机器人
+        badge:
+          text: ✓ 透传版本
+          tone: emerald
+        lines:
+        - text: POST /robot/oapi/task/create
+          mono: true
+      footer: 班车流调用 · 回调 /flow/callback/{robot,main,performance}
+  - id: col_4
+    title: ④ 读侧
+    width: 420.0
+    cards:
+    - id: c4_1
+      title: 方案管理（solutionhub）
+      accent: gold
+      badge:
+        text: 改造
+        tone: emerald
+      align_with: c3_2
+      lines:
+      - text: v1 → GET /api/fc/solution/get_way
+        mono: true
+      - text: v1 → GET /api/fc/solution/get_list
+        mono: true
+      - text: v2 → 同路径按版本取数（待确认）
+        mono: true
+        tone: emerald
+      - text: 标签「Auto · 接口 v1 / v2」+ 筛选
+        tone: emerald
+    - id: c4_2
+      title: 需求 / 发版总览
+      accent: gold
+      badge:
+        text: 改造
+        tone: emerald
+      align_with: c3_4
+      lines:
+      - text: 宽表 → GQL
+      - text: + bbcApiVersion 可筛
+        tone: emerald
+  edges:
+  - kind: bus
+    from:
+    - c1_1
+    - c1_2
+    - c1_3
+    - c1_4
+    - c1_5
+    to:
+    - c2_1
+    label: 触发
+    bus_slot: 0.5
+  - kind: bus
+    from:
+    - c2_2
+    to:
+    - c3_1
+    - c3_2
+    label: 小捆流调用
+    bus_slot: 0.18
+  - kind: bus
+    from:
+    - c2_3
+    to:
+    - c3_3
+    - c3_4
+    - c3_5
+    label: 班车流调用
+    bus_slot: 0.83
+  - kind: direct
+    from:
+    - c2_1
+    to:
+    - c2_2
+  - kind: direct
+    from:
+    - c2_2
+    to:
+    - c2_3
+  - kind: direct
+    from:
+    - c2_3
+    to:
+    - c2_4
+  - kind: loop_left
+    from:
+    - c2_2
+    to:
+    - c2_4
+  - kind: direct
+    from:
+    - c3_2
+    to:
+    - c4_1
+  - kind: bottom_route
+    from:
+    - c2_4
+    to:
+    - c4_2
+  callouts:
+  - title: 方案平台创参：POST /api/fc/solution/add_mini_bundle_auto
+    accent: purple
+    style: code_box
+    lines:
+    - text: platform, way_type, way, experiment_type
+      mono: true
+    - text: solution_type, other_sol_type_name, list_tag_data[], way_notes
+      mono: true
+    - text: origin_param { workflow_id, caller }   ← caller 已有，不动
+      mono: true
+      tone: amber
+    - text: bbc_api_version  "v1" | "v2"       ← 新增
+      mono: true
+      tone: emerald
+  - title: 改动一句话
+    accent: emerald
+    style: bullets
+    lines:
+    - text: 只加一个值：创建时选 bbc_api_version（接口 v1 / v2）
+    - text: 5 个平台的调用全部带上；项管的两次调用保持「不涉及版本」
+    - text: caller 一字未动，与接口版本互不推导
+    - text: 存量默认 v1；四处一致性巡检（主表 / 班车流 / 方案期次 / 回调）
+  warning:
+    title: ⚠ 别忘了打包（Jenkins）这一跳
+    body: 若底层底板有变动，需按 bbc_api_version 判断是否追加底板方案 / 底版包；本次先按「透传版本」落，底板规则确认后再补，别只改方案平台那一层。
+  footer: 依据：star-flow internal/data/http_*.go（出站）· api/**/*.proto（入站）· n8n 方案准备流程 · hs-code-keeper/bbc/api/fc · solutionhub/block_blast
+flow_table:
+  id: flowtable
+  heading: 三、入口 → 星链 → 下游服务
+  note: 只列这次相关的三条链路：小捆自动化流、发版班车流、回调。每行 = 一个入口 + 它打到的星链接口 + 星链再去调的服务与接口。
+  groups:
+  - name: 小捆自动化流
+    tone: blue
+    rows:
+    - action: 创建方案
+      trigger: 前端
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/st_wf_solution_mini_bundle_auto/v1/create
+      downstream:
+      - n8n GET {n8n}/wf/mb/get_init_layer（初始化）
+      - 建 st_workflow
+      - caller = ""（云效）
+      note: 一个弹窗；create_kind 普通/专项是参数
+    - action: 创建方案
+      trigger: 前端
+      version: v2 · BB 项管
+      version_tone: purple
+      entry:
+      - POST /flow/st_wf_solution_mini_bundle_auto/v2/create
+      downstream:
+      - n8n GET {n8n}/wf/mb/get_init_layer（初始化）
+      - 建 st_workflow
+      - caller = "BB Project Management"
+      note: 来源选 BB 项管时走这条
+    - action: 刷新迭代
+      trigger: 前端 · n8n
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/refresh-iteration-callback
+      downstream:
+      - 云效 POST /oapi/v1/projex/organizations/{org}/workitems:search
+      - 方案平台 POST /api/fc/solution/add_mini_bundle_auto
+      note: 重拉需求 → 对账 → 增删方案
+    - action: 刷新迭代
+      trigger: BB 项管
+      version: v2 · BB 项管
+      version_tone: purple
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v2/refresh-iteration-callback
+      downstream:
+      - BB 项管 POST /oapi/v1/projex/organizations/{org}/workitems:search
+      - 方案平台 POST /api/fc/solution/add_mini_bundle_auto
+      note: 与 v1 同一套逻辑，项管换成 BB
+    - action: 刷新期次（卡片）
+      trigger: 前端 · BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/refresh-way-callback
+      downstream:
+      - 云效 POST /oapi/v1/projex/organizations/{org}/workitems:search
+      - 方案平台 POST /api/fc/solution/add_mini_bundle_auto
+      note: 只刷某一个期次；BBC 叫 post_flow_mini_bundle_auto_refresh；**v2 缺这条**
+    - action: N8N 方案准备
+      trigger: n8n
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/yunxiao-create-iteration
+      downstream:
+      - 云效 POST /oapi/v1/projex/organizations/{org}/projects/{p}/sprints
+      - 云效 POST …/workitems:search
+      - 方案平台 POST /api/fc/solution/add_mini_bundle_auto
+      note: 方案准备主流程
+    - action: N8N 方案准备
+      trigger: n8n
+      version: v2 · BB 项管
+      version_tone: purple
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v2/yunxiao-create-iteration
+      downstream:
+      - BB 项管 POST /oapi/v1/projex/organizations/{org}/projects/{p}/sprints
+      - BB 项管 POST …/workitems:search
+      - 方案平台 POST /api/fc/solution/add_mini_bundle_auto
+      note: 项管换成 BB
+    - action: 建发版班车
+      trigger: n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/create-release-shuttle-bus
+      downstream:
+      - 落库 st_wf_release_shuttle_bus_flow + st_wf_rsbf_period
+      - n8n POST {n8n}/wf/release_shuttle_bus_flow/exec_start
+      note: 小捆流建完后创建班车流
+    - action: 改迭代名
+      trigger: 前端
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/update-iteration-name
+      downstream:
+      - 云效 PUT /oapi/v1/projex/organizations/{org}/workitems/{id}
+      - 更新工作流内落库的名称
+      note: 同步云效侧与卡片里的名称
+    - action: 改迭代名
+      trigger: 前端
+      version: v2 · BB 项管
+      version_tone: purple
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v2/update-iteration-name
+      downstream:
+      - BB 项管 PUT /oapi/v1/projex/organizations/{org}/workitems/{id}
+      - 更新工作流内落库的名称
+      note: 项管换成 BB
+  - name: 发版班车流
+    tone: orange
+    rows:
+    - action: 特性冲突检测
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/solution-preparation/feature-conflict-check
+      downstream:
+      - 方案平台 GET /api/st/wf/get_conflict_report
+      note: 同 Key 特性跨层检查
+    - action: 构建测试包
+      trigger: 前端
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/release-shuttle-bus-flow/build-package/package-create
+      downstream:
+      - n8n POST {n8n}/api/st/receive-data → Jenkins job
+      note: 星链不直接触发 Jenkins，由 n8n 触发
+    - action: 构建测试包
+      trigger: BB 项管
+      version: v2 · BB 项管
+      version_tone: purple
+      entry:
+      - POST /flow/release-shuttle-bus-flow/build-package/v2/package-create
+      downstream:
+      - n8n POST {n8n}/api/st/receive-data → Jenkins job
+      note: 项管换成 BB
+    - action: 黑盒测试
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - GET /flow/release-shuttle-bus-flow/testing-phase/blackbox-test-query
+      downstream:
+      - 方案平台 GET /api/fc/solution/get_list
+      - 读包体记录
+      note: 查黑盒包体结果
+    - action: 代码审核 · 初审
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/build-package/code-review-appointment-initial
+      downstream:
+      - 代码审核 POST /api/block-blast/release-review（reviewCount=1）
+      note: 打包完成后预约
+    - action: 代码审核 · 复审
+      trigger: 前端 · n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/testing-phase/code-review-appointment-re
+      downstream:
+      - 代码审核 POST /api/block-blast/release-review（reviewCount≥2）
+      note: 与初审同一个接口
+    - action: 机器人测试
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/testing-phase/robot-task/create
+      downstream:
+      - 机器人 POST /robot/oapi/task/create
+      note: 回调 /flow/callback/robot-test
+    - action: 正交自动化
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/testing-phase/package-create
+      downstream:
+      - n8n POST {n8n}/api/st/receive-data → 测试平台
+      note: 先出正交包再触发
+    - action: 主流程自动化
+      trigger: n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/testing-phase/main-process-automation-test
+      downstream:
+      - 测试平台 POST /api/v1/smoke_test/main_case_starlink
+      note: 回调 /flow/callback/main-process-test
+    - action: 性能测试
+      trigger: n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/testing-phase/performance-test
+      downstream:
+      - 测试平台 POST /api/v1/performance_test/performance_case
+      note: 回调 /flow/callback/performance-test
+    - action: 热更（发版后）
+      trigger: 前端
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/release-shuttle-bus-flow/release-phase/local-hotfix-automation-test
+      - GET …/release-phase/hotfix-domains、hotfix-projects
+      downstream:
+      - n8n 热更 webhook / 打包服务
+      note: 安卓 + iOS 共 6 张卡
+  - name: BBC 回调（BBC → 星链）
+    tone: purple
+    rows:
+    - action: 刷新期次
+      trigger: BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/refresh-way-callback
+      downstream:
+      - 同「刷新期次」：云效拉需求 + 方案平台建方案
+      note: BBC 函数 post_flow_mini_bundle_auto_refresh
+    - action: 对比云效与输入
+      trigger: BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/compare-yunxiao-with-input-starlink
+      downstream:
+      - 云效 POST …/workitems:search
+      - 方案平台读方案
+      note: BBC 函数 post_flow_mini_bundle_auto_compare_yunxiao_with_input
+    - action: 冲突检测完成
+      trigger: BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/conflict-detection-callback
+      downstream:
+      - 只落库 + 更新卡片（不再外调）
+      note: BBC 函数 post_flow_conflict_check_finished
+    - action: 查锁定状态
+      trigger: BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/query-lock-status
+      downstream:
+      - 只读，无外调
+      note: BBC 函数 post_flow_query_mini_bundle_lock_status
+    - action: 底版变更
+      trigger: BBC
+      version: v1 · 云效
+      version_tone: blue
+      entry:
+      - POST /flow/solution-mini-bundle-auto/create-iteration/v1/change-baseline-callback
+      downstream:
+      - 只落库 + 更新卡片
+      - （DMP 底版：added / removed / same tags）
+      note: BBC 函数 post_flow_change_baseline_callback
+  - name: 通用回调
+    tone: green
+    rows:
+    - action: 打包 / 审核 / 测试结果
+      trigger: 外部平台 · n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/callback/package-update
+      - POST /flow/callback/code-review-appointment
+      - POST /flow/callback/{robot-test,main-process-test,performance-test}
+      downstream:
+      - 只落库 + 更新卡片
+      note: 回调统一入口
+    - action: 热更 / 版本发布
+      trigger: 外部平台 · n8n
+      version: —
+      version_tone: muted
+      entry:
+      - POST /flow/callback/{local-hot-update,online-hot-update,local-hotfix-automation-test}
+      - POST /flow/callback/version-release/{publish-review,publish-status}
+      downstream:
+      - 只落库 + 更新卡片
+      note: 发版后链路
+  hint: 本表不含 star-flow 其它业务域（专项流、麻将等）。BBC 写死 `/v1/`，要支持第 6 点「刷新/通知区分版本」，**v2 还缺 refresh-way-callback 与 4 个通知类回调**。

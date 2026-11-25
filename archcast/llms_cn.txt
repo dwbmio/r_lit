@@ -1,0 +1,46 @@
+# archcast
+
+name: archcast
+version: 0.1.0
+language: Rust (edition 2024)
+category: CLI / 架构与流程汇报编译器
+backends: cpu-simd-rayon（默认：memchr + wide::f64x4 + rayon + resvg/tiny-skia/gif）、webgpu-hybrid（可选 feature: gpu，原生 wgpu WGSL Compute Shader）
+
+## 定位
+面向 AI 与工程团队的确定性编译器：在「AI 友好的 YAML/JSON 规范」与「固定样式 HTML（内置浏览器 WebGPU/Canvas2D 流动动效）+ 根目录独立原版 SVG + 可选 PNG 光栅图与动态流光 GIF + 标准 Markdown/Mermaid 文档」之间双向转换。支持将既有 HTML+SVG 总览页逆向提取为规范 YAML 与 Markdown。
+
+## 子命令
+- `archcast render <INPUT> -o <DIR> [--format all|both|media|html|svg|md|png|gif] [--png] [--gif] [--gif-mode overlay|delta] [--scale <F32>] [--gif-scale <F32>] [--frames <N>] [--fps <N>] [--static-html] [--backend auto|cpu|gpu] [--strict] [--json]`
+  effects: pure
+  io: input=input-path, output_dir=output-dir
+  产物: <stem>.html (report-html), <stem>[-<diag_id>].svg (diagram-svg), <stem>.md (doc-markdown), 可选 <stem>[-<diag_id>].png (diagram-png), 可选 <stem>[-<diag_id>].gif (diagram-gif), archcast.log (log)
+- `archcast extract <INPUT> -o <DIR> [--yaml-only] [--json]`
+  effects: pure
+  io: input=input-path, output_dir=output-dir
+  产物: <stem>.yaml (spec-yaml), <stem>.md (doc-markdown), archcast.log (log)
+- `archcast validate <INPUT> [--json]`
+  effects: read-only
+  io: input=input-file
+- `archcast init <OUTPUT> [--title <TITLE>] [--json]`
+  effects: pure
+  io: output=output-file
+  产物: <OUTPUT> (spec-yaml)
+- `archcast info [--backend auto|cpu|gpu] [--json]`
+  effects: read-only
+
+## 规范 Schema (v1)
+- 根节点：schema_version (1)、doc_title、title、lead[]、diagrams[]、flow_table
+- 图表 diagram：id、heading、note、svg_title、canvas_title、subtitles[]、columns[]、edges[]、callouts[]、warning、footer
+- 泳道列 column：id、title、width（可选）、cards[]
+- 卡片 card：id、title、accent (Tone)、badge（可选）、align_with（可选对齐卡片 ID）、lines[]、subcards[]、footer
+- 连线 edge：kind (direct|bus|loop_left|bottom_route)、from[]、to[]、label、bus_slot
+- 接口表 flow_table：id、heading、note、groups[]（含 name、tone、rows[]）、hint
+
+## Machine Call Contract
+contract_version: 1
+json_flag: --json
+schema_command: archcast __schema
+interactive: false
+exit_codes: 0=ok, 1=runtime, 2=usage, 3=input, 5=partial
+artifact_roles: report-html, diagram-svg, doc-markdown, diagram-png, diagram-gif, spec-yaml, log
+sidecar_log: <output_dir>/archcast.log（render 与 extract 子命令）

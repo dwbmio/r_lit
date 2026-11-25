@@ -8,6 +8,7 @@ A collection of independent Rust CLI tools and companion desktop utilities maint
 
 | Directory | Description |
 |-----------|-------------|
+| [archcast](archcast/) | AI-first deterministic architecture & flow report compiler (SIMD + Rayon + optional WebGPU; YAML <-> 1:1 HTML/SVG, standalone SVG, PNG/layered GIF, Markdown/Mermaid) |
 | [artifact-inspect](artifact-inspect/README.md) | Offline directory/ZIP/TAR.GZ inventories; per-layer JSON and HTML metadata/image previews; validated on macOS arm64 and in a Linux x86_64 pilot |
 | [audiogen](audiogen/) | Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs) |
 | [bulk_upload](bulk_upload/) | Batch extract URLs from JSON and upload to S3-compatible storage |

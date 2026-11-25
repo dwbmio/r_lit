@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 TOOLS_AND_LIBS = [
+    "archcast",
     "audiogen",
     "bulk_upload",
     "deskpet",

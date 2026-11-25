@@ -12,6 +12,7 @@
 
 ## Directory
 
+- archcast/ — AI-first deterministic architecture & flow report compiler (SIMD + Rayon + optional WebGPU; YAML <-> 1:1 HTML+SVG with minimal-bounds WebGPU/Canvas2D motion, standalone SVG, PNG/layered GIF, Markdown+Mermaid); docs: archcast/README.md, archcast/llms.txt, archcast/SKILL.md
 - artifact-inspect/ — Offline build inventories (directory/ZIP/TAR.GZ/TGZ), per-layer JSON and HTML metadata/image previews; docs: artifact-inspect/README.md, artifact-inspect/llms.txt
 - audiogen/ — Pure-Rust game audio pipeline (procedural SFX, MP3/WAV/FLAC encoding, async MiniMax jobs)
 - bulk_upload/ — Batch extract URLs from JSON, upload to S3-compatible storage
@@ -34,7 +35,7 @@
 ## Machine Call Contract
 
 - spec: docs/cli-contract.md; shared crate: crates/rlit_cli
-- adopted_by: artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
+- adopted_by: archcast, artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
 - json: `--json` -> exactly one envelope {contract, ok, tool, version, command, data, artifacts, error} on stdout
 - exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial
 - schema: `<tool> __schema` -> JSON Schema per subcommand + x-cli / x-effects / x-env / x-stdin

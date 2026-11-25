@@ -12,6 +12,7 @@
 
 ## 目录
 
+- archcast/ — 面向 AI 的确定性架构与流程汇报编译器（SIMD + Rayon + 可选 WebGPU；YAML ⇄ 1:1 最小动态区 WebGPU/Canvas2D 动效 HTML+SVG、根目录独立 SVG、光栅 PNG / 分层最小动态区 GIF 与 Markdown+Mermaid）；文档：archcast/README_CN.md、archcast/llms_cn.txt、archcast/SKILL.md
 - artifact-inspect/ — 离线构建产物盘点（目录/ZIP/TAR.GZ/TGZ），按层 JSON 与 HTML 元数据/图像预览；文档：artifact-inspect/README_CN.md、artifact-inspect/llms_cn.txt
 - audiogen/ — 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务）
 - bulk_upload/ — 从 JSON 批量提取 URL 并上传至 S3 兼容存储
@@ -34,7 +35,7 @@
 ## 机器调用契约
 
 - 规范: docs/cli-contract.md；共享 crate: crates/rlit_cli
-- 已接入: artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
+- 已接入: archcast, artifact-inspect, mj_atlas, img_resize, ui-trim, textexture, bulk_upload, audiogen, phone_haul, mini_reg, looplog, mailctl, maquette-cli
 - JSON: `--json` → stdout 只输出一个 envelope {contract, ok, tool, version, command, data, artifacts, error}
 - 退出码: 0 成功, 1 运行时, 2 参数, 3 输入, 4 外部服务, 5 部分失败
 - schema: `<工具> __schema` → 每个子命令的 JSON Schema + x-cli / x-effects / x-env / x-stdin

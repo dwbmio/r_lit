@@ -8,6 +8,7 @@
 
 | 目录 | 说明 |
 |------|------|
+| [archcast](archcast/) | 面向 AI 的确定性架构与流程汇报编译器（SIMD + Rayon + 可选 WebGPU；YAML ⇄ 1:1 HTML/SVG、根目录独立 SVG、光栅 PNG / 分层最小动态区 GIF 与标准 Markdown/Mermaid） |
 | [artifact-inspect](artifact-inspect/README_CN.md) | 离线目录/ZIP/TAR.GZ 清单；按层 JSON 与 HTML 元数据/图像预览；通过本地 macOS arm64 和 Linux x86_64 试点验证 |
 | [audiogen](audiogen/) | 纯 Rust 游戏音频管线（程序化音效、MP3/WAV/FLAC 编码、MiniMax 异步任务） |
 | [bulk_upload](bulk_upload/) | 从 JSON 批量提取 URL 并上传至 S3 兼容存储 |

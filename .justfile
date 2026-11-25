@@ -22,7 +22,7 @@ check-repo:
 test-cli:
     #!/usr/bin/env bash
     set -euo pipefail
-    for crate in crates/rlit_cli bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
+    for crate in crates/rlit_cli archcast bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
       echo "==> cargo test ($crate)"
       (cd "$crate" && cargo test)
     done
@@ -33,7 +33,7 @@ test-cli:
 lint-cli:
     #!/usr/bin/env bash
     set -euo pipefail
-    for crate in crates/rlit_cli bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
+    for crate in crates/rlit_cli archcast bulk_upload img_resize textexture ui-trim mj_atlas looplog mailctl mini_reg phone_haul audiogen; do
       echo "==> clippy ($crate)"
       (cd "$crate" && cargo clippy --all-targets -- -D warnings)
     done

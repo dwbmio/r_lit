@@ -36,6 +36,10 @@ jobs:
           - crate: crates/rlit_cli
             strict_clippy: true
             has_bin: false
+          - crate: archcast
+            strict_clippy: true
+            has_bin: true
+            contract: true
           - crate: bulk_upload
             strict_clippy: false
             has_bin: true
