@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod yaml_config_tests {
-    use std::collections::HashMap;
-
     #[derive(Debug, PartialEq)]
     struct ResizeConfig {
         max_pixel: Option<u32>,

@@ -1,76 +1,77 @@
-# img_resize — Image Resize & Compress CLI
+# img_resize — Image Resize & Channel Texture Optimizer CLI
 
-- purpose: Resize and compress images (PNG/JPG/WebP/BMP/GIF/TIFF). Pure Rust, no network deps.
-- version: 0.3.0
+- purpose: Resize, audit, and optimize game textures (PNG/JPG/WebP/BMP/GIF/TIFF) with `$engine_$channel.yml` best-practice profiles. Local & offline, no network deps.
+- version: 0.4.0
 - language: Rust
 - type: CLI binary
-- supported-formats: PNG, JPEG, WebP, BMP, GIF, TIFF (input); PNG, JPEG (output)
+- supported-formats: PNG, JPEG, WebP, BMP, GIF, TIFF (input); PNG, JPEG, WebP (output)
 
 ## Command Syntax
 
 ```
+img_resize optimize <PROFILE_YML> [PATH] [-o <DIR>] [--dry-run] [--report <FILE>] [--jobs <N>] [--json]
+img_resize profile list [--json]
+img_resize profile init <PRESET> [-o <FILE>] [-f|--force] [--json]
 img_resize r_resize <PATH> [-o <DIR>] [OPTIONS] [--json]
 ```
 
-## Arguments
+## Subcommand: `optimize`
+
+- `<PROFILE_YML>`: Path to `$engine_$channel.yml` (required, positional). Engine and channel can be inferred from filename stem (e.g. `godot_wx-minip.yml`) and inherit built-in preset defaults.
+- `[PATH]`: Input image or directory (optional positional; overrides `input:` in YAML)
+- `-o, --out-dir <DIR>`: Output directory (overrides `output:` in YAML; omits -> in-place overwrite). Preserves relative directory structure by default.
+- `--dry-run`: Analyze effective pixel ratios and simulate encoding without writing image files
+- `--report <FILE>`: Write full JSON report to FILE (registered as artifact role `report`)
+- `--jobs <N>`: Parallel worker threads (default: CPU cores)
+
+### Built-in Presets (`$engine_$channel`)
+
+- `godot_wx-minip`: Godot WASM WeChat Mini Game (max 1024px, align 4, PNG quantize 78..92 + PSNR>=38dB + oxipng L3, JPG 82, WebP 82)
+- `godot_qq-minip`: Godot WASM QQ Mini Game (max 1024px, align 4, PNG quantize 78..92 + PSNR>=38dB + oxipng L3, JPG 82, WebP 82)
+- `godot_dy-minip`: Godot WASM Douyin Mini Game (max 1024px, align 4, PNG quantize 75..90 + PSNR>=37dB + oxipng L3, JPG 80, WebP 80)
+- `godot_zfb-minip`: Godot WASM Alipay Mini Game (max 1024px, align 4, PNG quantize 76..90 + PSNR>=37.5dB + oxipng L4, JPG 80, WebP 80)
+- `godot_mobile`: Godot Native Mobile iOS/Android (max 2048px, align 4, PNG lossless + oxipng L3, JPG 88, WebP 88)
+- `raw_png-jpg`: Generic PNG/JPG channel (no forced downscale, PNG quantize 80..95 + PSNR>=39dB + oxipng L4, JPG 84, WebP 84)
+
+### Optimization Pipeline
+
+1. Effective pixel analysis: `effective_pixel_ratio`, `bbox_area_ratio`, fake-alpha detection (`min_alpha >= opaque_threshold`), unique color count (<=256 lossless palette), grayscale detection.
+2. Safe pixel cleanup: `strip_fake_alpha` (RGBA -> RGB), `zero_transparent_rgb` with `edge_bleed_px` dilation (prevents bilinear black fringes). `trim_transparent` defaults to `false` (enable selectively in `rules:`).
+3. Resize + `align_multiple` (never upscales; `lanczos3` default).
+4. Format routing: `opaque_png_to`, `alpha_png_to`, `jpg_to`, `webp_to` (`keep|png|jpg|webp`; defaults to `keep` to protect Godot `res://` refs).
+5. Encoding: PNG (`imagequant` + `min_psnr_db` lossless fallback + `oxipng`), JPG (metadata-stripped), WebP (lossy VP8 or lossless VP8L).
+6. No-regression guard (`no_regression: true`, `min_saving_pct: 1.0`): keeps original bytes if output is not smaller on unresized/unconverted files.
+7. Default Godot protection rules (`inherit_default_rules: true`): normal/orm/mask/roughness/metallic/height/bump/ao maps, `**/fonts/**`, and `**/*_pixel*.*` forced lossless.
+
+## Subcommand: `profile`
+
+- `img_resize profile list [--json]`: list all built-in presets
+- `img_resize profile init <PRESET> [-o <FILE>] [-f] [--json]`: write commented `$engine_$channel.yml` template (checked-in copies live in `img_resize/profiles/`)
+
+## Subcommand: `r_resize`
 
 - `<PATH>`: Image file or directory path (required, positional)
-- `-o, --out-dir <DIR>`: Write results into DIR instead of overwriting inputs (directory inputs flattened by file name). Not allowed with -c
-- `-m, --max-pixel <SIZE>`: Max pixel on longest side, proportional scale (preserves aspect ratio)
-- `--rw <WIDTH>`: Exact resize width (must pair with --rh)
-- `--rh <HEIGHT>`: Exact resize height (must pair with --rw)
-- `-c, --resize-config <FILE>`: YAML config for batch multi-size output (always PNG; paths from the YAML)
-- `-j, --force-jpg`: Convert to JPG (quality 100) instead of resizing
-- `--json`: One JSON envelope on stdout (global flag, any position)
-
-## Resize Modes (mutually exclusive)
-
-1. Proportional: `-m 800` — scale so max(width, height) <= 800px
-2. Exact: `--rw 1920 --rh 1080` — resize to exact dimensions
-3. Config file: `-c config.yaml` — generate multiple sizes per YAML spec
-
-## YAML Config Format
-
-```yaml
-vec_size:
-  - [1920, 1080]
-  - [800, 600]
-vec_f:
-  - "output/large.png"
-  - "output/small.png"
-base_f: "/output/base/path"
-```
+- `-o, --out-dir <DIR>`: Write results into DIR instead of overwriting inputs (not allowed with `-c`)
+- `-m, --max-pixel <SIZE>`: Longest-side proportional scale (Lanczos3)
+- `--rw <WIDTH>` + `--rh <HEIGHT>`: Exact resize (CatmullRom)
+- `-c, --resize-config <FILE>`: Legacy YAML (`vec_size`, `vec_f`, `base_f`) multi-size PNG output
+- `-j, --force-jpg`: Convert to JPG (quality 100) without resizing
 
 ## Examples
 
 ```bash
-# Proportional scale, single file, written to out/
+img_resize profile list --json
+img_resize profile init godot_wx-minip -o godot_wx-minip.yml
+img_resize optimize godot_wx-minip.yml ./assets -o ./out --dry-run --json
+img_resize optimize profiles/godot_dy-minip.yml ./assets -o ./out --report report.json --json
 img_resize r_resize -m 800 image.jpg -o out/
-
-# Exact resize
-img_resize r_resize --rw 1920 --rh 1080 image.jpg
-
-# Batch directory
-img_resize r_resize -m 1024 images/
-
-# JSON output for scripting
-img_resize --json r_resize -m 800 image.jpg
-
-# Convert to JPG
-img_resize r_resize -m 800 -j image.png
-
-# Multi-size via config
-img_resize r_resize -c sizes.yaml image.png
 ```
 
 ## Notes
 
-- Directory processing: recursively finds all image files, skips hidden dirs
-- Output: overwrites original by default (proportional/exact mode); pass `-o/--out-dir` to keep inputs untouched
-- With -m, images already within the limit are left unchanged (status "unchanged"; copied when -o is given)
-- `tinyfy` subcommand disabled and hidden (OpenSSL/musl incompatibility)
-- JSON data: {total, failed, results:[{file, output, status: success|unchanged|converted|skipped|failed, original_size, new_size, error}]}
-- Exit codes: see Machine Call Contract (5 = some files failed)
+- `tinyfy` subcommand is disabled and hidden (OpenSSL/musl incompatibility); use local `optimize`.
+- Local PNG quantization uses `imagequant` (GPL-3.0).
+- `optimize` JSON data: `{profile, dry_run, input, output_dir?, summary:{total, optimized, unchanged, skipped, failed, total_original_bytes, total_output_bytes, saved_bytes, saved_pct, fake_alpha_stripped_count, low_effective_pixel_count, quantize_fallback_count}, audit_hotspots:[...], results:[...]}`.
 
 ## Build
 
@@ -86,4 +87,4 @@ cd img_resize && cargo build --release
 - exit_codes: 0 ok, 1 runtime, 2 usage, 3 input, 4 external, 5 partial (ok=false, data still complete)
 - schema: `img_resize __schema` prints JSON Schema (draft 2020-12) per subcommand, with x-cli (argv mapping, io role), x-effects, x-env, x-stdin, x-note
 - non_interactive: never prompts
-- effects: r_resize=pure (only writes declared outputs; in-place unless --out-dir)
+- effects: optimize=pure, r_resize=pure, profile list=read-only, profile init=pure

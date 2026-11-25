@@ -1,0 +1,91 @@
+# img_resize texture optimization profile: godot_wx-minip.yml
+# Godot WASM -> WeChat Mini Game (4MB main pkg, strict iOS WASM/WebGL RAM; 1024px cap, perceptual PNG quantize + PSNR guard + oxipng)
+# Usage:
+#   img_resize optimize godot_wx-minip.yml ./assets -o ./assets_opt --dry-run --json
+#   img_resize optimize godot_wx-minip.yml ./assets -o ./assets_opt --json
+
+engine: godot
+channel: wx-minip
+
+# Optional default paths (overridden when CLI PATH / -o are provided)
+# input: ./assets
+# output: ./assets_opt
+preserve_dir_structure: true
+dry_run: false
+inherit_default_rules: true
+
+limits:
+  # Longest-side pixel cap (0 = unlimited; never upscales)
+  max_dimension: 1024
+  # Align resized dimensions down to a multiple of N (4 is friendly to WebGL/ETC2/ASTC)
+  align_multiple: 4
+  force_align: false
+  downscale_filter: lanczos3
+
+effective_pixels:
+  # Pixels with alpha <= alpha_threshold count as transparent
+  alpha_threshold: 4
+  # Images whose minimum alpha >= opaque_threshold are treated as fake-alpha (fully opaque)
+  opaque_threshold: 252
+  # Drop useless alpha channel (RGBA -> RGB) on fully opaque PNGs (zero layout impact)
+  strip_fake_alpha: true
+  # Zero RGB on fully transparent pixels after edge bleed (pure lossless PNG size win)
+  zero_transparent_rgb: true
+  edge_bleed_px: 1
+  # Audit warning thresholds in JSON/CLI report (prompts atlas packing via mj_atlas)
+  warn_effective_ratio_below: 0.35
+  warn_bbox_ratio_below: 0.50
+  # Keep false by default to protect Godot pivots/anchors/9-patch/UVs; enable per-rule if safe
+  trim_transparent: false
+  trim_padding: 2
+
+format:
+  # Keep `.png` by default so Godot `res://*.png` references stay intact;
+  # set `opaque_png_to: jpg` or `webp` for CDN/remote texture bundles or in `rules:`
+  opaque_png_to: keep       # keep | jpg | webp
+  alpha_png_to: keep        # keep | png | webp
+  jpg_to: keep              # keep | jpg | webp
+  webp_to: keep             # keep | webp | png | jpg
+  # Never write a larger file when image was not resized/trimmed/format-converted
+  no_regression: true
+  min_saving_pct: 1.0
+
+compression:
+  png:
+    mode: quantize          # lossless | quantize (local imagequant, TinyPNG-equivalent)
+    quality_min: 78
+    quality_max: 92
+    speed: 3                 # 1 (slowest/best) .. 10 (fastest)
+    dithering: 0.85
+    # Perceptual quality guard: if quantized RGBA PSNR < min_psnr_db, fallback to lossless PNG
+    min_psnr_db: 38.0
+    oxipng_level: 3          # 0 (off) .. 6 (max lossless deflate/filter optimization)
+    strip_metadata: true
+  jpg:
+    quality: 82
+    strip_metadata: true
+  webp:
+    lossless: false
+    quality: 82.0
+
+# Built-in Godot protection rules (normal/ORM/mask/fonts/pixel-art -> lossless) are inherited
+# automatically when `inherit_default_rules: true`. Add project-specific overrides below:
+rules:
+  # Large opaque backgrounds: allow slightly larger dim and convert opaque PNG -> JPG (for CDN bundles)
+  # - match: "bg/**"
+  #   limits:
+  #     max_dimension: 1280
+  #   format:
+  #     opaque_png_to: jpg
+
+  # Safe standalone icon folder where transparent trimming will not break Godot pivots/anchors:
+  # - match: "raw_icons/**"
+  #   effective_pixels:
+  #     trim_transparent: true
+  #     trim_padding: 2
+
+  # Remote CDN sprites targeting WebP directly:
+  # - match: "cdn/**"
+  #   format:
+  #     opaque_png_to: webp
+  #     alpha_png_to: webp

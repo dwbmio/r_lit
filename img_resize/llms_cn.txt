@@ -1,76 +1,77 @@
-# img_resize — 图片缩放压缩 CLI
+# img_resize — 图片缩放与渠道纹理优化 CLI
 
-- 用途: 图片缩放与压缩（PNG/JPG/WebP/BMP/GIF/TIFF），纯 Rust 实现，无网络依赖
-- 版本: 0.3.0
+- 用途: 按 `$engine_$channel.yml` 渠道配置进行游戏纹理体积优化、有效像素审计与图片缩放（PNG/JPG/WebP/BMP/GIF/TIFF），纯本地离线，无网络依赖
+- 版本: 0.4.0
 - 语言: Rust
 - 类型: CLI 二进制
-- 支持格式: PNG, JPEG, WebP, BMP, GIF, TIFF（输入）；PNG, JPEG（输出）
+- 支持格式: PNG, JPEG, WebP, BMP, GIF, TIFF（输入）；PNG, JPEG, WebP（输出）
 
 ## 命令格式
 
 ```
+img_resize optimize <PROFILE_YML> [PATH] [-o <DIR>] [--dry-run] [--report <FILE>] [--jobs <N>] [--json]
+img_resize profile list [--json]
+img_resize profile init <PRESET> [-o <FILE>] [-f|--force] [--json]
 img_resize r_resize <PATH> [-o <DIR>] [选项] [--json]
 ```
 
-## 参数
+## 子命令：`optimize`
+
+- `<PROFILE_YML>`: `$engine_$channel.yml` 渠道配置文件路径（必填，位置参数）。文件名符合 `<engine>_<channel>.yml`（如 `godot_wx-minip.yml`）时自动推断引擎与渠道并继承内置默认值
+- `[PATH]`: 输入图片或目录（可选，覆盖 YAML 内 `input:`）
+- `-o, --out-dir <DIR>`: 输出目录（覆盖 YAML 内 `output:`；不传则原地覆盖；默认保留子目录结构）
+- `--dry-run`: 仅执行有效像素分析与模拟压缩，不写图片文件
+- `--report <FILE>`: 将完整 JSON 审计与压缩报告写至 FILE（artifact role=`report`）
+- `--jobs <N>`: 并行线程数（默认按 CPU 核心数）
+
+### 内置渠道预设（`$engine_$channel`）
+
+- `godot_wx-minip`: Godot WASM 微信小游戏（max 1024px, 4px 对齐, PNG 量化 78..92 + PSNR>=38dB 兜底 + oxipng L3, JPG 82, WebP 82）
+- `godot_qq-minip`: Godot WASM QQ 小游戏（max 1024px, 4px 对齐, PNG 量化 78..92 + PSNR>=38dB 兜底 + oxipng L3, JPG 82, WebP 82）
+- `godot_dy-minip`: Godot WASM 抖音小游戏（max 1024px, 4px 对齐, PNG 量化 75..90 + PSNR>=37dB 兜底 + oxipng L3, JPG 80, WebP 80）
+- `godot_zfb-minip`: Godot WASM 支付宝小游戏（max 1024px, 4px 对齐, PNG 量化 76..90 + PSNR>=37.5dB 兜底 + oxipng L4, JPG 80, WebP 80）
+- `godot_mobile`: Godot 原生移动端 iOS/Android（max 2048px, 4px 对齐, PNG 无损 + oxipng L3 保留供 ASTC/ETC2 编码, JPG 88, WebP 88）
+- `raw_png-jpg`: 通用 PNG/JPG 渠道（不强行缩放, PNG 量化 80..95 + PSNR>=39dB 兜底 + oxipng L4, JPG 84, WebP 84）
+
+### 优化管线
+
+1. 有效像素分析：`effective_pixel_ratio`、`bbox_area_ratio`、假透明检测（`min_alpha >= opaque_threshold`）、唯一色数（<=256 无损调色板）、灰度检测。
+2. 布局安全清理：`strip_fake_alpha`（RGBA→RGB）、`zero_transparent_rgb` + `edge_bleed_px` 边界扩色（防 GPU 双线性采样黑边）；`trim_transparent` 默认 `false`（保护 Godot pivot/anchor/UV，可通过 `rules:` 对安全目录开启）。
+3. 等比缩放与 `align_multiple` 对齐（绝不放大，默认 `lanczos3`）。
+4. 格式路由：`opaque_png_to`、`alpha_png_to`、`jpg_to`、`webp_to`（`keep|png|jpg|webp`，默认 `keep` 以保护 Godot `res://` 引用）。
+5. 本地编码：PNG（`imagequant` + `min_psnr_db` 无损回退 + `oxipng`）、JPG（剥离元数据）、WebP（有损 VP8 / 无损 VP8L）。
+6. 体积不增保护（`no_regression: true`, `min_saving_pct: 1.0`）：未缩放/未裁切/未转格式时，若压完不更小则保留原文件。
+7. Godot 默认保护规则（`inherit_default_rules: true`）：法线/ORM/遮罩/粗糙度/金属度/高度/凹凸/AO 贴图、`**/fonts/**`、`**/*_pixel*.*` 自动保持无损。
+
+## 子命令：`profile`
+
+- `img_resize profile list [--json]`: 列出全部内置渠道预设
+- `img_resize profile init <PRESET> [-o <FILE>] [-f] [--json]`: 生成带注释的 `$engine_$channel.yml` 模板（`img_resize/profiles/` 目录亦有预置副本）
+
+## 子命令：`r_resize`
 
 - `<PATH>`: 图片文件或目录路径（必填）
-- `-m, --max-pixel <SIZE>`: 最大边像素值，等比缩放（保持宽高比）
-- `--rw <WIDTH>`: 精确宽度（必须配合 --rh）
-- `--rh <HEIGHT>`: 精确高度（必须配合 --rw）
-- `-o, --out-dir <DIR>`: 结果写到 DIR，不覆盖输入（目录输入按文件名平铺），不可与 -c 同用
-- `-c, --resize-config <FILE>`: YAML 配置文件，批量生成多尺寸（固定 PNG，路径取自 YAML）
+- `-o, --out-dir <DIR>`: 输出目录（不传则原地覆盖，不可与 `-c` 同用）
+- `-m, --max-pixel <SIZE>`: 最大边等比缩放（Lanczos3）
+- `--rw <WIDTH>` + `--rh <HEIGHT>`: 精确尺寸调整（CatmullRom）
+- `-c, --resize-config <FILE>`: 旧版多尺寸 YAML（`vec_size` / `vec_f` / `base_f`）
 - `-j, --force-jpg`: 转成 JPG（质量 100），不做缩放
-- `--json`: stdout 输出一个 JSON envelope（全局标志，位置任意）
-
-## 缩放模式（互斥）
-
-1. 等比缩放: `-m 800` — max(宽, 高) <= 800px
-2. 精确调整: `--rw 1920 --rh 1080` — 指定宽高
-3. 配置文件: `-c config.yaml` — 按 YAML 规格生成多尺寸
-
-## YAML 配置格式
-
-```yaml
-vec_size:
-  - [1920, 1080]
-  - [800, 600]
-vec_f:
-  - "output/large.png"
-  - "output/small.png"
-base_f: "/output/base/path"
-```
 
 ## 示例
 
 ```bash
-# 等比缩放，单文件
-img_resize r_resize -m 800 image.jpg
-
-# 精确尺寸
-img_resize r_resize --rw 1920 --rh 1080 image.jpg
-
-# 目录批量处理
-img_resize r_resize -m 1024 images/
-
-# JSON 输出
-img_resize --json r_resize -m 800 image.jpg
-
-# 转 JPG
-img_resize r_resize -m 800 -j image.png
-
-# 多尺寸配置
-img_resize r_resize -c sizes.yaml image.png
+img_resize profile list --json
+img_resize profile init godot_wx-minip -o godot_wx-minip.yml
+img_resize optimize godot_wx-minip.yml ./assets -o ./out --dry-run --json
+img_resize optimize profiles/godot_dy-minip.yml ./assets -o ./out --report report.json --json
+img_resize r_resize -m 800 image.jpg -o out/
 ```
 
 ## 备注
 
-- 目录处理: 递归查找图片文件，跳过隐藏目录
-- 输出: 默认覆盖原文件（等比/精确模式）；传 `-o/--out-dir` 可保留原文件
-- 用 -m 时已在限制内的图片不处理（status 为 "unchanged"；给了 -o 会复制过去）
-- `tinyfy` 子命令已禁用并隐藏（OpenSSL/musl 不兼容）
-- JSON data: {total, failed, results:[{file, output, status: success|unchanged|converted|skipped|failed, original_size, new_size, error}]}
-- 退出码: 见「机器调用契约」（5 = 部分文件失败）
+- `tinyfy` 子命令已禁用并隐藏（OpenSSL/musl 不兼容），请改用本地 `optimize`。
+- 本地 PNG 量化使用 `imagequant`（GPL-3.0）。
+- `optimize` JSON data: `{profile, dry_run, input, output_dir?, summary:{total, optimized, unchanged, skipped, failed, total_original_bytes, total_output_bytes, saved_bytes, saved_pct, fake_alpha_stripped_count, low_effective_pixel_count, quantize_fallback_count}, audit_hotspots:[...], results:[...]}`。
 
 ## 构建
 
@@ -86,4 +87,4 @@ cd img_resize && cargo build --release
 - 退出码: 0 成功, 1 运行时错误, 2 参数错误, 3 输入错误, 4 外部服务失败, 5 部分失败（ok=false，data 仍完整）
 - schema: `img_resize __schema` 输出每个子命令的 JSON Schema (draft 2020-12)，含 x-cli（argv 还原、io 角色）、x-effects、x-env、x-stdin、x-note
 - 非交互: 不会弹任何提示
-- 副作用: r_resize=pure（只写声明的输出；不带 --out-dir 时原地覆盖）
+- 副作用: optimize=pure, r_resize=pure, profile list=read-only, profile init=pure

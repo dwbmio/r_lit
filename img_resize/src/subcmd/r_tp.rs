@@ -27,12 +27,12 @@ struct ProcessResult {
     error: Option<String>,
 }
 
-use image::{GenericImageView, ImageFormat, ImageOutputFormat};
+use image::{codecs::jpeg::JpegEncoder, GenericImageView, ImageFormat};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{
     ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 fn rand_filename() -> String {
@@ -75,8 +75,10 @@ fn convert_tp(
     let im = image::open(tp)?;
     let convert_ext = clap::builder::OsStr::from(convert_type.extensions_str()[0]);
     let f_j_path = out_i.join(f_name).with_extension(convert_ext);
-    let fo = &mut std::fs::File::create(&f_j_path)?;
-    im.write_to(fo, ImageOutputFormat::Jpeg(100))?;
+    let mut fo = std::fs::File::create(&f_j_path)?;
+    let rgb = im.to_rgb8();
+    let mut enc = JpegEncoder::new_with_quality(&mut fo, 100);
+    enc.encode_image(&rgb)?;
     Ok(f_j_path)
 }
 
@@ -140,20 +142,25 @@ fn re_tp(
     let ran_fname = OsString::from(rand_filename().to_owned());
     let f_name: &std::ffi::OsStr = tp.file_name().unwrap_or(&(ran_fname));
     let im_r: image::DynamicImage = match is_thumb {
-        true => im.resize(size.0, size.1, image::imageops::FilterType::Nearest),
+        true => im.resize(size.0, size.1, image::imageops::FilterType::Lanczos3),
         false => im.resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom),
     };
     let new_size = im_r.dimensions();
     let f_path = out_i.join(f_name);
     let fo = &mut std::fs::File::create(&f_path)?;
-    let out = ImageOutputFormat::from(
-        ImageFormat::from_mime_type(mine_type).expect("unknown output format!"),
-    );
+    let out_fmt = ImageFormat::from_mime_type(mine_type)
+        .ok_or_else(|| ReError::Input(format!("unsupported image mime type: {}", mine_type)))?;
 
     if !json_output {
-        log::info!("output fmt={:?} → {:?}", out, f_path);
+        log::info!("output fmt={:?} → {:?}", out_fmt, f_path);
     }
-    im_r.write_to(fo, out)?;
+    if out_fmt == ImageFormat::Jpeg {
+        let rgb = im_r.to_rgb8();
+        let mut enc = JpegEncoder::new_with_quality(fo, 90);
+        enc.encode_image(&rgb)?;
+    } else {
+        im_r.write_to(fo, out_fmt)?;
+    }
     Ok(((orig_size.0, orig_size.1, new_size.0, new_size.1), f_path))
 }
 
@@ -162,6 +169,7 @@ struct RtpExecutor {
     max_pixel: u32,
     height: u32,
     width: u32,
+    #[allow(dead_code)]
     force_jpg: bool,
     tp: PathBuf,
     out: Option<PathBuf>,

@@ -1,0 +1,75 @@
+# img_resize texture optimization profile: raw_png-jpg.yml
+# Generic PNG/JPG channel (no forced downscale, perceptual PNG quantize + oxipng + JPG re-encode)
+# Usage:
+#   img_resize optimize raw_png-jpg.yml ./assets -o ./assets_opt --dry-run --json
+#   img_resize optimize raw_png-jpg.yml ./assets -o ./assets_opt --json
+
+engine: raw
+channel: png-jpg
+
+# Optional default paths (overridden when CLI PATH / -o are provided)
+# input: ./assets
+# output: ./assets_opt
+preserve_dir_structure: true
+dry_run: false
+inherit_default_rules: true
+
+limits:
+  # Longest-side pixel cap (0 = unlimited; never upscales)
+  max_dimension: 0
+  # Align resized dimensions down to a multiple of N (4 is friendly to WebGL/ETC2/ASTC)
+  align_multiple: 0
+  force_align: false
+  downscale_filter: lanczos3
+
+effective_pixels:
+  # Pixels with alpha <= alpha_threshold count as transparent
+  alpha_threshold: 4
+  # Images whose minimum alpha >= opaque_threshold are treated as fake-alpha (fully opaque)
+  opaque_threshold: 252
+  # Drop useless alpha channel (RGBA -> RGB) on fully opaque PNGs (zero layout impact)
+  strip_fake_alpha: true
+  # Zero RGB on fully transparent pixels after edge bleed (pure lossless PNG size win)
+  zero_transparent_rgb: true
+  edge_bleed_px: 1
+  # Audit warning thresholds in JSON/CLI report (prompts atlas packing via mj_atlas)
+  warn_effective_ratio_below: 0.35
+  warn_bbox_ratio_below: 0.50
+  # Keep false by default to protect Godot pivots/anchors/9-patch/UVs; enable per-rule if safe
+  trim_transparent: false
+  trim_padding: 2
+
+format:
+  # Keep `.png` by default so Godot `res://*.png` references stay intact;
+  # set `opaque_png_to: jpg` or `webp` for CDN/remote texture bundles or in `rules:`
+  opaque_png_to: keep       # keep | jpg | webp
+  alpha_png_to: keep        # keep | png | webp
+  jpg_to: keep              # keep | jpg | webp
+  webp_to: keep             # keep | webp | png | jpg
+  # Never write a larger file when image was not resized/trimmed/format-converted
+  no_regression: true
+  min_saving_pct: 1.0
+
+compression:
+  png:
+    mode: quantize          # lossless | quantize (local imagequant, TinyPNG-equivalent)
+    quality_min: 80
+    quality_max: 95
+    speed: 3                 # 1 (slowest/best) .. 10 (fastest)
+    dithering: 0.85
+    # Perceptual quality guard: if quantized RGBA PSNR < min_psnr_db, fallback to lossless PNG
+    min_psnr_db: 39.0
+    oxipng_level: 4          # 0 (off) .. 6 (max lossless deflate/filter optimization)
+    strip_metadata: true
+  jpg:
+    quality: 84
+    strip_metadata: true
+  webp:
+    lossless: false
+    quality: 84.0
+
+# Optional per-path glob overrides (later matching rules win):
+rules:
+  # - match: "photos/**"
+  #   format:
+  #     opaque_png_to: jpg

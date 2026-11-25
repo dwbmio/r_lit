@@ -7,6 +7,7 @@ use crate::error::ReError;
 pub mod r_tp;
 // pub mod tinify_tp;  // Temporarily disabled for musl builds
 
+#[allow(dead_code, async_fn_in_trait)]
 pub trait SubExecutor {
     async fn exec(&self, matches: &clap::ArgMatches) -> Result<(), crate::error::ReError>;
     async fn single_tp(

@@ -20,7 +20,7 @@ pub enum ReError {
     #[error("{0}")]
     JsonError(#[from] serde_json::Error),
 
-    /// Missing / unreadable input path or config (exit 3).
+    /// Missing / unreadable input path or invalid YAML/glob config (exit 3).
     #[error("{0}")]
     Input(String),
 
@@ -33,7 +33,5 @@ pub enum ReError {
 }
 
 /// Repo convention: a crate-wide `Result<T>` alias alongside the `thiserror`
-/// enum. Some call sites still spell out `Result<_, ReError>` / `Box<dyn Error>`;
-/// new code should prefer this alias.
-#[allow(dead_code)]
+/// enum. New code should prefer this alias.
 pub type Result<T> = std::result::Result<T, ReError>;

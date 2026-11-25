@@ -1,20 +1,26 @@
 [package]
 name = "img_resize"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 rlit_cli = { path = "../crates/rlit_cli" }
-image = "*"
-imageproc ="*"
-clap = { version = "^4", features=["cargo", "derive"]}
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
+imagequant = "4"
+lodepng = "3"
+oxipng = { version = "9", default-features = false, features = ["parallel", "zopfli"] }
+webp = { version = "0.3", default-features = false }
+clap = { version = "^4", features = ["cargo", "derive"] }
 thiserror = "2"
 rand = "0.8.5"
 walkdir = "2"
 infer = "0.15.0"
 yaml-rust = "0.4.5"
+serde_yaml_ng = "0.10"
+globset = "0.4"
+rayon = "1"
 log = "0.4.27"
 # tinify-rs = { version = "1.4.2", features = ["async"] }  # Temporarily disabled for musl builds
 tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread"] }
