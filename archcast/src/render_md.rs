@@ -1,10 +1,17 @@
 //! Canonical Markdown + Mermaid documentation emitter for AI context and engineering wikis.
 
 use crate::schema::{ArchSpec, CalloutStyle, DiagramSpec, EdgeKind, FlowTableSpec};
+use crate::theme::{ThemeConfig, default_theme, resolve_theme};
 use std::fmt::Write;
 
 /// Render an [`ArchSpec`] into a concise, token-efficient, AI- & Wiki-friendly Markdown document.
 pub fn render_markdown_document(spec: &ArchSpec) -> String {
+    let theme = resolve_theme(spec.theme.as_deref(), None).unwrap_or_else(|_| default_theme());
+    render_markdown_document_with_theme(spec, &theme)
+}
+
+/// Render an [`ArchSpec`] with theme-synced Mermaid `themeVariables`.
+pub fn render_markdown_document_with_theme(spec: &ArchSpec, theme: &ThemeConfig) -> String {
     let mut out = String::with_capacity(8_192);
     let _ = writeln!(out, "# {}\n", spec.title);
 
@@ -16,7 +23,7 @@ pub fn render_markdown_document(spec: &ArchSpec) -> String {
     }
 
     for diag in &spec.diagrams {
-        render_diagram_md(diag, &mut out);
+        render_diagram_md(diag, theme, &mut out);
     }
 
     if let Some(ft) = &spec.flow_table {
@@ -26,7 +33,7 @@ pub fn render_markdown_document(spec: &ArchSpec) -> String {
     out
 }
 
-fn render_diagram_md(diag: &DiagramSpec, out: &mut String) {
+fn render_diagram_md(diag: &DiagramSpec, theme: &ThemeConfig, out: &mut String) {
     let _ = writeln!(out, "## {}\n", diag.heading);
     if !diag.note.is_empty() {
         let _ = writeln!(out, "{}\n", diag.note);
@@ -38,8 +45,10 @@ fn render_diagram_md(diag: &DiagramSpec, out: &mut String) {
         out.push('\n');
     }
 
-    // Emit explicit Mermaid topology graph (AI-friendly semantic connectivity).
-    out.push_str("```mermaid\nflowchart LR\n");
+    // Emit explicit Mermaid topology graph with synced themeVariables.
+    out.push_str("```mermaid\n");
+    let _ = writeln!(out, "{}", theme.mermaid_init_directive());
+    out.push_str("flowchart LR\n");
     for col in &diag.columns {
         let col_id = mermaid_id(&col.id);
         let _ = writeln!(out, "  subgraph {}[\"{}\"]", col_id, escape_mermaid(&col.title));

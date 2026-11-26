@@ -4,9 +4,10 @@
 
 use crate::error::{ArchcastError, Result};
 use crate::layout::{LaidOutDiagram, layout_diagrams_parallel};
-use crate::render_html::render_diagram_svg;
+use crate::render_html::render_diagram_svg_with_theme;
 use crate::schema::DiagramSpec;
 use crate::simd_ops::simd_profile;
+use crate::theme::ThemeConfig;
 use clap::ValueEnum;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -38,7 +39,11 @@ pub trait RenderBackend: Send + Sync {
     fn is_gpu(&self) -> bool {
         false
     }
-    fn render_diagrams(&self, diagrams: &[DiagramSpec]) -> Vec<(LaidOutDiagram, String)>;
+    fn render_diagrams(
+        &self,
+        diagrams: &[DiagramSpec],
+        theme: &ThemeConfig,
+    ) -> Vec<(LaidOutDiagram, String)>;
 }
 
 /// Default headless backend combining SIMD (`memchr` + `wide::f64x4`) and Rayon parallelism.
@@ -56,19 +61,23 @@ impl RenderBackend for CpuSimdBackend {
         }
     }
 
-    fn render_diagrams(&self, diagrams: &[DiagramSpec]) -> Vec<(LaidOutDiagram, String)> {
+    fn render_diagrams(
+        &self,
+        diagrams: &[DiagramSpec],
+        theme: &ThemeConfig,
+    ) -> Vec<(LaidOutDiagram, String)> {
         let laid = layout_diagrams_parallel(diagrams);
         if laid.len() <= 1 {
             laid.into_iter()
                 .map(|d| {
-                    let svg = render_diagram_svg(&d);
+                    let svg = render_diagram_svg_with_theme(&d, theme);
                     (d, svg)
                 })
                 .collect()
         } else {
             laid.into_par_iter()
                 .map(|d| {
-                    let svg = render_diagram_svg(&d);
+                    let svg = render_diagram_svg_with_theme(&d, theme);
                     (d, svg)
                 })
                 .collect()
@@ -114,8 +123,12 @@ impl RenderBackend for WebGpuBackend {
         true
     }
 
-    fn render_diagrams(&self, diagrams: &[DiagramSpec]) -> Vec<(LaidOutDiagram, String)> {
-        CpuSimdBackend.render_diagrams(diagrams)
+    fn render_diagrams(
+        &self,
+        diagrams: &[DiagramSpec],
+        theme: &ThemeConfig,
+    ) -> Vec<(LaidOutDiagram, String)> {
+        CpuSimdBackend.render_diagrams(diagrams, theme)
     }
 }
 

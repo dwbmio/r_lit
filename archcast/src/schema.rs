@@ -63,6 +63,9 @@ impl Tone {
 pub struct ArchSpec {
     #[serde(default = "default_spec_version")]
     pub schema_version: u32,
+    /// Optional default visual theme ID or file path (overridden by CLI `--theme`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// HTML `<title>` text. Defaults to `title` if omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_title: Option<String>,
@@ -307,6 +310,7 @@ pub struct FlowRowSpec {
 pub fn starter_template(title: &str) -> ArchSpec {
     ArchSpec {
         schema_version: SPEC_VERSION,
+        theme: None,
         doc_title: Some(title.to_string()),
         title: title.to_string(),
         lead: vec![

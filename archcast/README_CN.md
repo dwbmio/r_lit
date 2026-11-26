@@ -6,12 +6,12 @@
 
 ## 核心能力
 
-- **1:1 固定样式汇报生成（`render`）**：将 YAML/JSON 确定性编译为四栏泳道汇报页（现状/改造后双图对比、外部系统动作子卡、自动宽度胶囊徽章、正交总线路由、底部创参/缺口卡、全宽风险警示条、分组接口/回调明细表）。
+- **1:1 固定样式与结构化主题系统（`render`、`theme`）**：将 YAML/JSON 确定性编译为四栏泳道汇报页（现状/改造后双图对比、外部系统动作子卡、自动宽度胶囊徽章、正交总线路由、底部创参/缺口卡、全宽风险警示条、分组接口/回调明细表）。随包内置 5 套主题（默认 `starlink-light`，另含 `obsidian-neon`、`paper-editorial`、`blueprint-ink`、`catppuccin-mocha`），并支持外部 YAML/JSON 结构化主题配置与完整 CRUD（`archcast theme list|show|create|update|delete|export`）、`extends` 继承覆写，HTML / SVG / PNG / GIF 与 Mermaid `%%{init:...}%%` 全链路色彩同步。
 - **根目录直出独立 SVG + HTML + Markdown**：默认 `--format all` 直接在 `--output-dir` 根目录产出 `<stem>.html`、独立原版 `<stem>-<diagram_id>.svg`（单图时为 `<stem>.svg`）以及 `<stem>.md`。
-- **以 HTML 为核心的浏览器 WebGPU 动效层**：产出的 HTML 内置零外部依赖的 WebGPU WGSL 粒子着色器叠加层（不支持 WebGPU 时自动平滑回退到 60fps Canvas2D），支持沿连线流动的数据脉冲动效、点击卡片高亮上下游链路与一键下载 SVG；传入 `--static-html` 可生成纯零 JS 静态 HTML。
-- **光栅 PNG 与动态流光 GIF 导出（`--png` / `--gif` / `--format media`）**：
+- **以 HTML 为核心的分层 WebGPU 动效层**：产出的 HTML 内置零外部依赖的 WebGPU WGSL 粒子着色器叠加层（严格按 `dynamic_bounds` 最小动态范围定位，不支持 WebGPU 时自动回退 60fps Canvas2D），支持沿连线流动的数据脉冲动效、点击卡片高亮上下游链路与一键下载 SVG；传入 `--static-html` 可生成纯零 JS 静态 HTML。
+- **光栅 PNG 与分层最小动态范围 GIF 导出（`--png` / `--gif` / `--format media`）**：
   - 基于纯 Rust `resvg` + `tiny-skia` 光栅化（自动加载系统 CJK 字体，无头 CI 零外部依赖）；
-  - 导出带流光脉冲与状态徽章呼吸灯效果的无限循环 GIF；
+  - 默认 `--gif-mode overlay` 仅导出裁剪至最小动态包围盒的透明动效叠加层 GIF（绝不全屏重复编码），也支持 `--gif-mode delta` 静态底图 + 最小脏区子帧；
   - 默认模式走 CPU SIMD + Rayon 多帧并行合成；使用 `--features gpu` 构建后可走原生 `wgpu` WGSL Compute Shader（Metal / Vulkan / DX12）在 GPU 上合成动图帧。
 - **逆向提取（`extract`）**：基于 `memchr` SIMD 扫描、`roxmltree` 零拷贝 XML 解析与 `wide::f64x4` 空间包围盒批量匹配，将既有 `HTML + SVG` 总览页逆向还原为结构化 YAML 和标准 Markdown。
 - **AI Agent Skill**：内置 [SKILL.md](SKILL.md)，供任意 Coding Agent 读完源码直接产出规范 YAML 并自动编译交付。
@@ -40,13 +40,22 @@ archcast validate starter.yaml --json
 # 3. 编译 YAML → HTML（内置 WebGPU/Canvas2D 动效）+ 根目录独立 SVG + 标准 Markdown
 archcast render starter.yaml -o out/ --strict --json
 
-# 4. 同步导出光栅 PNG 与流动动效 GIF
+# 4. 管理外部结构化主题（默认存放在 ~/.config/archcast/themes 或 ARCHCAST_THEMES_DIR）
+archcast theme list --json
+archcast theme create corp-blue --from starlink-light \
+  --set surface.page_bg=#f0f4ff --set chrome.h2_accent=#1e40af --json
+archcast theme update corp-blue --set tones.emerald=#047857 --json
+archcast render starter.yaml -o out/ --theme corp-blue --strict --json
+archcast theme export corp-blue corp-blue.yaml --json
+archcast theme delete corp-blue --json
+
+# 5. 同步导出光栅 PNG 与分层流动动效 GIF
 archcast render starter.yaml -o out/ --format media --strict --json
 
-# 5. 将既有 HTML+SVG 总览页逆向提取为 YAML + Markdown
+# 6. 将既有 HTML+SVG 总览页逆向提取为 YAML + Markdown
 archcast extract legacy-overview.html -o extracted/ --json
 
-# 6. 查看运行期 SIMD / Rayon / WebGPU 能力
+# 7. 查看运行期 SIMD / Rayon / WebGPU 能力
 archcast info --json
 ```
 

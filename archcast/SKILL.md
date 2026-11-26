@@ -22,6 +22,7 @@ description: "面向 AI Agent 的确定性架构与流程汇报编译器（Rust 
 | 逆向分析既有 HTML+SVG 总览页 | 把别人给的 HTML+SVG 变成标准文档或可编辑 YAML | `archcast extract <legacy.html> -o out/ --json` |
 | 校验 YAML 拓扑连线是否完整 | 检查有没有断链、重名卡片 | `archcast validate <name>.yaml --json` |
 | 生成空白四栏模板 | 新建架构总览起步 | `archcast init <name>.yaml --title "..." --json` |
+| 管理视觉主题（增删改查/导出） | 切换全局配色、创建团队定制主题、覆盖默认主题 | `archcast theme list\|show\|create\|update\|delete\|export --json`；渲染时传入 `--theme <id-or-path>` |
 | 检查 SIMD / Rayon / WebGPU 能力 | 排查 GPU 后端是否就绪 | `archcast info --json` |
 
 ---
@@ -188,7 +189,32 @@ flow_table:
 
 ---
 
-## 四、WebGPU 与分层最小动态范围动效说明
+## 四、结构化主题配置与外部 CRUD
+
+1. **随包默认主题（5 套）**：
+   - `starlink-light`（**默认主题**，清爽冷灰浅色汇报风）
+   - `obsidian-neon`（深邃暗黑霓虹，适合大屏/深色评审）
+   - `paper-editorial`（暖纸本编辑风，适合打印与长文阅读）
+   - `blueprint-ink`（高对比工程蓝图风）
+   - `catppuccin-mocha`（Catppuccin Mocha 暗色工程风）
+2. **解析优先级（`--theme <id-or-path>` 或 YAML 顶层 `theme:` 字段）**：
+   - 直接存在的 `.yaml`/`.yml`/`.json` 文件路径 → 外部主题目录（`--themes-dir` / `ARCHCAST_THEMES_DIR`，默认 `~/.config/archcast/themes/`）→ 随包内置主题；
+   - 支持 `extends: <parent-id>` 继承（仅需写差异字段即可局部覆写，也支持用同名外部文件覆盖随包主题，删除后自动恢复内置默认）。
+3. **外部主题 CRUD 命令**：
+   ```bash
+   archcast theme list --json
+   archcast theme show starlink-light --yaml
+   archcast theme create corp-blue --from starlink-light \
+     --set surface.page_bg=#f0f4ff --set chrome.h2_accent=#1e40af --json
+   archcast theme update corp-blue --set tones.emerald=#047857 --json
+   archcast theme export corp-blue ./corp-blue.yaml --json
+   archcast theme delete corp-blue --json
+   ```
+   单份主题配置同时驱动 **HTML CSS、SVG 图形、光栅 PNG、动态 GIF 脉冲色与 Mermaid `%%{init:...}%%` 变量**。
+
+---
+
+## 五、WebGPU 与分层最小动态范围动效说明
 
 1. **HTML 汇报页内置动效（默认开启，绝不全屏铺画布）**：
    - WebGPU / Canvas2D 叠加层 `<canvas class="fx-canvas">` 严格按 `dynamic_bounds`（仅包裹连线与状态呼吸灯的最小动态包围盒）百分比定位，不覆盖顶部标题、底部创参卡、警示条与静态留白；
@@ -201,7 +227,7 @@ flow_table:
 
 ---
 
-## 五、机器调用契约（`rlit_cli` v1）
+## 六、机器调用契约（`rlit_cli` v1）
 
 - 全局 `--json`：stdout 仅输出单个 JSON 信封（含 `ok`、`data`、`artifacts[]`、`error`）；
 - `archcast __schema`：输出机器可读的 CLI JSON Schema；

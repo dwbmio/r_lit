@@ -17,6 +17,7 @@ pub mod render_html;
 pub mod render_md;
 pub mod schema;
 pub mod simd_ops;
+pub mod theme;
 pub mod validate;
 
 use crate::backend::RenderBackend;
@@ -24,15 +25,16 @@ use crate::error::{ArchcastError, Result};
 use crate::extract::extract_html_file;
 use crate::raster::{GifLayerMetadata, GifOptions, encode_animated_gif, encode_png};
 use crate::render_html::{render_html_from_rendered, render_standalone_svg};
-use crate::render_md::render_markdown_document;
+use crate::render_md::{render_markdown_document, render_markdown_document_with_theme};
 use crate::schema::ArchSpec;
+use crate::theme::resolve_theme;
 use crate::validate::{ValidationReport, validate_spec};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RenderFormats {
     pub html: bool,
     pub svg: bool,
@@ -40,6 +42,8 @@ pub struct RenderFormats {
     pub png: bool,
     pub gif: bool,
     pub motion: bool,
+    pub theme: Option<String>,
+    pub themes_dir: Option<PathBuf>,
     pub png_scale: f32,
     pub gif_opts: GifOptions,
 }
@@ -53,6 +57,8 @@ impl Default for RenderFormats {
             png: false,
             gif: false,
             motion: true,
+            theme: None,
+            themes_dir: None,
             png_scale: 1.0,
             gif_opts: GifOptions::default(),
         }
@@ -158,7 +164,7 @@ pub fn collect_inputs(path: &Path, allowed_exts: &[&str]) -> Result<Vec<PathBuf>
 pub fn render_inputs(
     input_path: &Path,
     output_dir: &Path,
-    formats: RenderFormats,
+    formats: &RenderFormats,
     strict: bool,
     backend: &dyn RenderBackend,
 ) -> Result<Vec<RenderItemResult>> {
@@ -215,7 +221,7 @@ fn diagram_output_stem(file_stem: &str, diag_id: &str, total_diagrams: usize) ->
 fn render_single(
     file: &Path,
     output_dir: &Path,
-    formats: RenderFormats,
+    formats: &RenderFormats,
     strict: bool,
     backend: &dyn RenderBackend,
 ) -> Result<RenderItemResult> {
@@ -234,9 +240,12 @@ fn render_single(
         .and_then(|s| s.to_str())
         .unwrap_or("overview");
 
+    let theme_ref = formats.theme.as_deref().or(spec.theme.as_deref());
+    let active_theme = resolve_theme(theme_ref, formats.themes_dir.as_deref())?;
+
     let needs_svg_layout = formats.html || formats.svg || formats.png || formats.gif;
     let rendered_diagrams = if needs_svg_layout {
-        backend.render_diagrams(&spec.diagrams)
+        backend.render_diagrams(&spec.diagrams, &active_theme)
     } else {
         Vec::new()
     };
@@ -248,7 +257,7 @@ fn render_single(
     let mut gif_outputs = Vec::new();
 
     if formats.html {
-        let html = render_html_from_rendered(&spec, &rendered_diagrams, formats.motion);
+        let html = render_html_from_rendered(&spec, &rendered_diagrams, formats.motion, &active_theme);
         let out_path = output_dir.join(format!("{stem}.html"));
         write_atomic(&out_path, html.as_bytes())?;
         html_output = Some(out_path);
@@ -271,7 +280,7 @@ fn render_single(
             .map(|(diag, svg_body)| {
                 let d_stem = diagram_output_stem(stem, &diag.id, total_diags);
                 let out_path = output_dir.join(format!("{d_stem}.png"));
-                let bytes = encode_png(svg_body, formats.png_scale)?;
+                let bytes = encode_png(svg_body, formats.png_scale, &active_theme)?;
                 write_atomic(&out_path, &bytes)?;
                 Ok(out_path)
             })
@@ -286,7 +295,7 @@ fn render_single(
         for (diag, svg_body) in &rendered_diagrams {
             let d_stem = diagram_output_stem(stem, &diag.id, total_diags);
             let out_path = output_dir.join(format!("{d_stem}.gif"));
-            let encoded = encode_animated_gif(diag, svg_body, formats.gif_opts, use_gpu)?;
+            let encoded = encode_animated_gif(diag, svg_body, formats.gif_opts, use_gpu, &active_theme)?;
             write_atomic(&out_path, &encoded.bytes)?;
             gif_outputs.push(GifOutputInfo {
                 path: out_path,
@@ -296,7 +305,7 @@ fn render_single(
     }
 
     if formats.markdown {
-        let md = render_markdown_document(&spec);
+        let md = render_markdown_document_with_theme(&spec, &active_theme);
         let out_path = output_dir.join(format!("{stem}.md"));
         write_atomic(&out_path, md.as_bytes())?;
         markdown_output = Some(out_path);

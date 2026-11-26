@@ -79,6 +79,7 @@ pub fn extract_html_str(html: &str, source_path: &Path) -> Result<ArchSpec> {
 
     Ok(ArchSpec {
         schema_version: SPEC_VERSION,
+        theme: None,
         doc_title,
         title,
         lead,

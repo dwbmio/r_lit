@@ -12,6 +12,7 @@
 
 use crate::error::{ArchcastError, Result};
 use crate::layout::LaidOutDiagram;
+use crate::theme::ThemeConfig;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -110,7 +111,7 @@ mod imp {
         pub _pad: f32,
     }
 
-    fn rasterize_pixmap(svg_xml: &str, scale: f32) -> Result<tiny_skia::Pixmap> {
+    fn rasterize_pixmap(svg_xml: &str, scale: f32, bg_rgba: [u8; 4]) -> Result<tiny_skia::Pixmap> {
         let scale = scale.clamp(0.2, 3.0);
         let mut opt = usvg::Options {
             fontdb: shared_fontdb(),
@@ -127,7 +128,9 @@ mod imp {
 
         let mut pixmap = tiny_skia::Pixmap::new(w, h)
             .ok_or_else(|| ArchcastError::Raster(format!("invalid pixmap size {w}x{h}")))?;
-        pixmap.fill(tiny_skia::Color::WHITE);
+        pixmap.fill(tiny_skia::Color::from_rgba8(
+            bg_rgba[0], bg_rgba[1], bg_rgba[2], bg_rgba[3],
+        ));
 
         let transform = tiny_skia::Transform::from_scale(scale, scale);
         resvg::render(&tree, transform, &mut pixmap.as_mut());
@@ -170,8 +173,8 @@ mod imp {
         }
     }
 
-    pub fn encode_png(svg_xml: &str, scale: f32) -> Result<Vec<u8>> {
-        let pixmap = rasterize_pixmap(svg_xml, scale)?;
+    pub fn encode_png(svg_xml: &str, scale: f32, theme: &ThemeConfig) -> Result<Vec<u8>> {
+        let pixmap = rasterize_pixmap(svg_xml, scale, theme.svg_bg_rgba())?;
         pixmap
             .encode_png()
             .map_err(|e| ArchcastError::Raster(format!("PNG encode failed: {e}")))
@@ -182,6 +185,7 @@ mod imp {
         svg_xml: &str,
         opts: GifOptions,
         use_gpu: bool,
+        theme: &ThemeConfig,
     ) -> Result<EncodedGif> {
         let frames_count = opts.frames.clamp(4, 60);
         let fps = opts.fps.clamp(2, 30);
@@ -208,8 +212,8 @@ mod imp {
             .min(full_h - dyn_y);
 
         // Build tracks & beacons shifted into minimal dynamic box coordinates!
-        let tracks = collect_polyline_tracks(diagram, scale as f64, dyn_x as f64, dyn_y as f64);
-        let beacons = collect_badge_beacons(diagram, scale as f64, dyn_x as f64, dyn_y as f64);
+        let tracks = collect_polyline_tracks(diagram, scale as f64, dyn_x as f64, dyn_y as f64, theme);
+        let beacons = collect_badge_beacons(diagram, scale as f64, dyn_x as f64, dyn_y as f64, theme);
 
         let per_frame_particles: Vec<Vec<PulseParticle>> = (0..frames_count)
             .map(|fi| {
@@ -277,7 +281,7 @@ mod imp {
             }
             GifMode::Delta => {
                 // Full static base once + minimal dirty-rect transparent delta sub-frames inside dynamic bounds!
-                let pixmap = rasterize_pixmap(svg_xml, scale)?;
+                let pixmap = rasterize_pixmap(svg_xml, scale, theme.svg_bg_rgba())?;
                 let full_base = pixmap_to_straight_rgba(&pixmap);
                 let actual_w = full_base.width;
                 let actual_h = full_base.height;
@@ -646,17 +650,14 @@ mod imp {
         scale: f64,
         offset_x: f64,
         offset_y: f64,
+        theme: &ThemeConfig,
     ) -> Vec<Track> {
         let mut tracks = Vec::new();
-        let palette = [
-            (15.0_f32, 138.0, 95.0),
-            (75.0_f32, 131.0, 212.0),
-            (224.0_f32, 139.0, 60.0),
-            (123.0_f32, 97.0, 201.0),
-        ];
+        let palette = theme.pulse_rgb();
 
         for (ei, edge) in diagram.edges.iter().enumerate() {
-            let color = palette[ei % palette.len()];
+            let p = palette[ei % palette.len()];
+            let color = (p[0], p[1], p[2]);
             for (pi, raw_pts) in edge.polylines.iter().enumerate() {
                 if raw_pts.len() < 2 {
                     continue;
@@ -693,6 +694,7 @@ mod imp {
         scale: f64,
         offset_x: f64,
         offset_y: f64,
+        theme: &ThemeConfig,
     ) -> Vec<Beacon> {
         let mut beacons = Vec::new();
         let mut idx = 0usize;
@@ -701,10 +703,11 @@ mod imp {
                 if let Some(b) = &card.badge
                     && matches!(b.spec.tone, Tone::Red | Tone::Emerald | Tone::Green)
                 {
-                    let color = match b.spec.tone {
-                        Tone::Red => (217.0, 83.0, 79.0),
-                        _ => (15.0, 138.0, 95.0),
+                    let rgb = match b.spec.tone {
+                        Tone::Red => theme.beacon_red_rgb(),
+                        _ => theme.beacon_green_rgb(),
                     };
+                    let color = (rgb[0], rgb[1], rgb[2]);
                     beacons.push(Beacon {
                         x: (b.rect.x * scale - offset_x) as f32,
                         y: (b.rect.cy() * scale - offset_y) as f32,
@@ -1135,14 +1138,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-pub fn encode_png(svg_xml: &str, scale: f32) -> Result<Vec<u8>> {
+pub fn encode_png(svg_xml: &str, scale: f32, theme: &ThemeConfig) -> Result<Vec<u8>> {
     #[cfg(feature = "raster")]
     {
-        imp::encode_png(svg_xml, scale)
+        imp::encode_png(svg_xml, scale, theme)
     }
     #[cfg(not(feature = "raster"))]
     {
-        let _ = (svg_xml, scale);
+        let _ = (svg_xml, scale, theme);
         Err(ArchcastError::BackendUnavailable(
             "archcast was built without `--features raster`; rebuild with default features to export PNG".to_string(),
         ))
@@ -1154,14 +1157,15 @@ pub fn encode_animated_gif(
     svg_xml: &str,
     opts: GifOptions,
     use_gpu: bool,
+    theme: &ThemeConfig,
 ) -> Result<EncodedGif> {
     #[cfg(feature = "raster")]
     {
-        imp::encode_animated_gif(diagram, svg_xml, opts, use_gpu)
+        imp::encode_animated_gif(diagram, svg_xml, opts, use_gpu, theme)
     }
     #[cfg(not(feature = "raster"))]
     {
-        let _ = (diagram, svg_xml, opts, use_gpu);
+        let _ = (diagram, svg_xml, opts, use_gpu, theme);
         Err(ArchcastError::BackendUnavailable(
             "archcast was built without `--features raster`; rebuild with default features to export animated GIF".to_string(),
         ))

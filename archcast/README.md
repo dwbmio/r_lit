@@ -6,12 +6,12 @@
 
 ## Features
 
-- **1:1 Fixed Visual Style (`render`)**: Compiles YAML/JSON specs into deterministic 4-column swimlane reports (before/after dual diagrams, action subcards, auto-sized pill badges, orthogonal bus routing, payload/gap callouts, warning banners, grouped API/callback tables).
+- **1:1 Fixed Visual Style & Structured Themes (`render`, `theme`)**: Compiles YAML/JSON specs into deterministic 4-column swimlane reports (before/after dual diagrams, action subcards, auto-sized pill badges, orthogonal bus routing, payload/gap callouts, warning banners, grouped API/callback tables). Ships with 5 bundled themes (`starlink-light` default, `obsidian-neon`, `paper-editorial`, `blueprint-ink`, `catppuccin-mocha`) plus external YAML/JSON theme CRUD (`archcast theme list|show|create|update|delete|export`) with `extends` inheritance, synced across HTML, SVG, PNG, GIF, and Mermaid `%%{init:...}%%`.
 - **Root-Level Standalone SVG + Rich HTML + Markdown**: Default `--format all` writes `<stem>.html`, standalone `<stem>-<diagram_id>.svg` (or `<stem>.svg` for single-diagram specs), and `<stem>.md` directly into `--output-dir`.
-- **HTML-First Browser WebGPU Motion Layer**: Generated HTML embeds a zero-dependency WebGPU WGSL instanced particle overlay (automatically falling back to 60fps Canvas2D) for animated data-flow pulses, click-to-trace upstream/downstream card highlighting, and one-click SVG download. Pass `--static-html` for pure zero-JS HTML.
-- **Raster PNG & Animated Flow-Pulse GIF (`--png`, `--gif`, `--format media`)**:
+- **HTML-First Browser WebGPU Motion Layer**: Generated HTML embeds a zero-dependency WebGPU WGSL instanced particle overlay scoped to each diagram's minimal `dynamic_bounds` (automatically falling back to 60fps Canvas2D) for animated data-flow pulses, click-to-trace upstream/downstream card highlighting, and one-click SVG download. Pass `--static-html` for pure zero-JS HTML.
+- **Raster PNG & Layered Animated Flow-Pulse GIF (`--png`, `--gif`, `--format media`)**:
   - Pure-Rust SIMD SVG rasterization (`resvg` + `tiny-skia`) with system CJK font loading.
-  - Animated looping GIF export with glowing packets traveling along routed edges and breathing status badges.
+  - Layered minimal-bounds animated GIF export (`--gif-mode overlay` transparent cropped dynamic overlay by default, or `--gif-mode delta` static base + dirty-rect sub-frames).
   - Default build runs frame compositing in parallel on CPU via Rayon (100% headless CI safe); optional `--features gpu` executes frame glow compositing on a native `wgpu` WGSL compute shader (Metal / Vulkan / DX12).
 - **Reverse Extraction (`extract`)**: Parses existing `HTML + SVG` overviews via SIMD scanning (`memchr`), zero-copy XML DOM (`roxmltree`), and 4-wide SIMD spatial containment (`wide::f64x4`) into clean YAML + Markdown.
 - **Agent Skill**: See `SKILL.md` for end-to-end AI agent authoring workflows.
@@ -40,13 +40,22 @@ archcast validate starter.yaml --json
 # 3. Compile YAML -> HTML (WebGPU/Canvas2D motion) + standalone root SVG(s) + Markdown
 archcast render starter.yaml -o out/ --strict --json
 
-# 4. Also export static PNG + animated flow-pulse GIF
+# 4. Manage structured external themes (stored in ~/.config/archcast/themes or ARCHCAST_THEMES_DIR)
+archcast theme list --json
+archcast theme create corp-blue --from starlink-light \
+  --set surface.page_bg=#f0f4ff --set chrome.h2_accent=#1e40af --json
+archcast theme update corp-blue --set tones.emerald=#047857 --json
+archcast render starter.yaml -o out/ --theme corp-blue --strict --json
+archcast theme export corp-blue corp-blue.yaml --json
+archcast theme delete corp-blue --json
+
+# 5. Also export static PNG + layered animated flow-pulse GIF
 archcast render starter.yaml -o out/ --format media --strict --json
 
-# 5. Reverse-extract an existing HTML+SVG overview into YAML + Markdown
+# 6. Reverse-extract an existing HTML+SVG overview into YAML + Markdown
 archcast extract legacy-overview.html -o extracted/ --json
 
-# 6. Inspect runtime SIMD / Rayon / WebGPU capabilities
+# 7. Inspect runtime SIMD / Rayon / WebGPU capabilities
 archcast info --json
 ```
 

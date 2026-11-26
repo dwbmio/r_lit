@@ -10,10 +10,28 @@ backends: cpu-simd-rayon（默认：memchr + wide::f64x4 + rayon + resvg/tiny-sk
 面向 AI 与工程团队的确定性编译器：在「AI 友好的 YAML/JSON 规范」与「固定样式 HTML（内置浏览器 WebGPU/Canvas2D 流动动效）+ 根目录独立原版 SVG + 可选 PNG 光栅图与动态流光 GIF + 标准 Markdown/Mermaid 文档」之间双向转换。支持将既有 HTML+SVG 总览页逆向提取为规范 YAML 与 Markdown。
 
 ## 子命令
-- `archcast render <INPUT> -o <DIR> [--format all|both|media|html|svg|md|png|gif] [--png] [--gif] [--gif-mode overlay|delta] [--scale <F32>] [--gif-scale <F32>] [--frames <N>] [--fps <N>] [--static-html] [--backend auto|cpu|gpu] [--strict] [--json]`
+- `archcast render <INPUT> -o <DIR> [--format all|both|media|html|svg|md|png|gif] [--png] [--gif] [--gif-mode overlay|delta] [--scale <F32>] [--gif-scale <F32>] [--frames <N>] [--fps <N>] [--static-html] [--theme <ID_OR_PATH>] [--themes-dir <DIR>] [--backend auto|cpu|gpu] [--strict] [--json]`
   effects: pure
   io: input=input-path, output_dir=output-dir
   产物: <stem>.html (report-html), <stem>[-<diag_id>].svg (diagram-svg), <stem>.md (doc-markdown), 可选 <stem>[-<diag_id>].png (diagram-png), 可选 <stem>[-<diag_id>].gif (diagram-gif), archcast.log (log)
+- `archcast theme list [--themes-dir <DIR>] [--json]`
+  effects: read-only
+- `archcast theme show <THEME> [--themes-dir <DIR>] [--yaml] [--json]`
+  effects: read-only
+- `archcast theme create <ID> [--from <THEME>] [--file <PATH>] [--display-name <NAME>] [--set <KEY=VALUE>...] [--force] [--themes-dir <DIR>] [--json]`
+  effects: pure
+  io: file=input-file
+  产物: <themes_dir>/<ID>.yaml (theme-yaml)
+- `archcast theme update <ID> [--file <PATH>] [--display-name <NAME>] [--set <KEY=VALUE>...] [--themes-dir <DIR>] [--json]`
+  effects: pure
+  io: file=input-file
+  产物: <themes_dir>/<ID>.yaml (theme-yaml)
+- `archcast theme delete <ID> [--themes-dir <DIR>] [--json]`
+  effects: pure
+- `archcast theme export <THEME> <OUTPUT> [--themes-dir <DIR>] [--json]`
+  effects: pure
+  io: output=output-file
+  产物: <OUTPUT> (theme-yaml)
 - `archcast extract <INPUT> -o <DIR> [--yaml-only] [--json]`
   effects: pure
   io: input=input-path, output_dir=output-dir
@@ -28,13 +46,16 @@ backends: cpu-simd-rayon（默认：memchr + wide::f64x4 + rayon + resvg/tiny-sk
 - `archcast info [--backend auto|cpu|gpu] [--json]`
   effects: read-only
 
-## 规范 Schema (v1)
-- 根节点：schema_version (1)、doc_title、title、lead[]、diagrams[]、flow_table
+## 规范 Schema (v1) 与主题 Schema (v1)
+- 规范根节点：schema_version (1)、theme（可选主题 ID 或文件路径）、doc_title、title、lead[]、diagrams[]、flow_table
 - 图表 diagram：id、heading、note、svg_title、canvas_title、subtitles[]、columns[]、edges[]、callouts[]、warning、footer
 - 泳道列 column：id、title、width（可选）、cards[]
 - 卡片 card：id、title、accent (Tone)、badge（可选）、align_with（可选对齐卡片 ID）、lines[]、subcards[]、footer
 - 连线 edge：kind (direct|bus|loop_left|bottom_route)、from[]、to[]、label、bus_slot
 - 接口表 flow_table：id、heading、note、groups[]（含 name、tone、rows[]）、hint
+- 随包默认主题：starlink-light（默认）、obsidian-neon、paper-editorial、blueprint-ink、catppuccin-mocha
+- 外部主题目录：--themes-dir 或环境变量 ARCHCAST_THEMES_DIR（默认 ~/.config/archcast/themes）
+- 主题结构分组：schema_version (1)、id、display_name、extends（可选继承）、color_scheme、is_dark、surface、ink、chrome、table、warning、tones、motion
 
 ## Machine Call Contract
 contract_version: 1
@@ -42,5 +63,5 @@ json_flag: --json
 schema_command: archcast __schema
 interactive: false
 exit_codes: 0=ok, 1=runtime, 2=usage, 3=input, 5=partial
-artifact_roles: report-html, diagram-svg, doc-markdown, diagram-png, diagram-gif, spec-yaml, log
+artifact_roles: report-html, diagram-svg, doc-markdown, diagram-png, diagram-gif, spec-yaml, theme-yaml, log
 sidecar_log: <output_dir>/archcast.log（render 与 extract 子命令）

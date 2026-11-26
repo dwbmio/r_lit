@@ -4,63 +4,102 @@ use crate::backend::RenderBackend;
 use crate::layout::{LaidOutBadge, LaidOutDiagram};
 use crate::schema::{ArchSpec, CalloutStyle, FlowTableSpec, StyledLine};
 use crate::simd_ops::escape_html_into;
+use crate::theme::{ThemeConfig, default_theme, resolve_theme};
 use std::fmt::Write;
 
 const FONT_SANS: &str = "'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif";
 const FONT_MONO: &str = "'SFMono-Regular',Menlo,Consolas,'PingFang SC','Microsoft YaHei',monospace";
 
-const PAGE_CSS: &str = r#"  :root { color-scheme: light; }
-  body { margin:0; background:#eef2f7; color:#0f172a;
-         font-family:'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif; }
-  .wrap { max-width:1560px; margin:0 auto; padding:28px 20px 60px; }
-  h1 { font-size:25px; margin:0 0 10px; }
-  p.toc { font-size:13px; margin:0 0 16px; }
-  p.toc a { color:#0f8a5f; text-decoration:none; }
-  p.toc a:hover { text-decoration:underline; }
-  p.lead { color:#475569; font-size:14px; line-height:1.8; margin:0 0 18px; }
-  .card { background:#fff; border:1px solid #dbe3ee; border-radius:14px;
-          padding:14px 14px 6px; margin:0 0 26px; box-shadow:0 1px 3px rgba(15,23,42,.05); }
-  .card h2 { font-size:17px; margin:4px 0 8px; padding-left:10px; border-left:4px solid #0f8a5f; }
-  .card p.note { color:#64748b; font-size:13px; margin:0 0 10px; padding-left:14px; line-height:1.7; }
-  svg { width:100%; height:auto; display:block; }
-  code { background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:12.5px; }
-  .card h3 { font-size:15px; margin:22px 0 8px; padding-left:10px; border-left:3px solid #cbd5e1; }
-  .card h4 { font-size:13.5px; margin:16px 0 6px; color:#334155; }
-  .card p.hint { font-size:12.5px; color:#7c5a12; background:#fff8ec; border-left:4px solid #b45309;
-                 padding:9px 12px; border-radius:6px; margin:8px 0 4px; line-height:1.7; }
-  table { width:100%; border-collapse:collapse; font-size:12.5px; margin:6px 0 10px; }
-  th { text-align:left; background:#f4f6fa; color:#475569; font-weight:600; padding:7px 10px;
-       border-bottom:1px solid #e2e8f0; white-space:nowrap; }
-  td { padding:6px 10px; border-bottom:1px solid #eef2f7; vertical-align:top; line-height:1.6; }
-  tr:hover td { background:#fafcff; }
-  td.mono { font-family:'SFMono-Regular',Menlo,Consolas,monospace; font-size:11.5px; color:#0f172a; }
-  td.mono code { background:none; padding:0; }
-  details { margin-top:6px; }
-  summary { cursor:pointer; font-size:12.5px; color:#64748b; margin-bottom:6px; }
-  table.flow td { font-size:12px; }
-  table.flow td.small { color:#64748b; font-size:11.5px; white-space:nowrap; }
-  table.flow td.down { color:#0f8a5f; }
-  table.flow tr.grp td { background:#f4f6fa; font-weight:700; color:#334155; font-size:13px;
-                         padding:8px 10px; border-top:2px solid #e2e8f0; }
-  table.flow tr.grp .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
-                           margin-right:8px; }
-  table.flow tr.grp .cnt { color:#94a3b8; font-weight:400; margin-left:8px; font-size:11.5px; }
-  table.flow td .tab { display:block; width:4px; height:20px; border-radius:2px; }
-  table.flow .ver { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
-                    font-weight:600; white-space:nowrap; }
-  table.flow tr:hover td { background:#fafcff; }
-  .card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-  .fx-bar { display:flex; align-items:center; gap:6px; font-size:11.5px; }
-  .fx-btn { border:1px solid #cbd5e1; background:#f8fafc; color:#334155; border-radius:7px;
-            padding:3px 9px; cursor:pointer; font-size:11.5px; line-height:1.5; }
-  .fx-btn:hover { background:#eef2f7; border-color:#94a3b8; }
-  .fx-pill { padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;
-             background:#0f8a5f1a; color:#0f8a5f; }
-  .stage { position:relative; }
-  .stage canvas.fx-canvas { position:absolute; pointer-events:none; display:block; }
-  svg g[data-card-id] { cursor:pointer; transition:opacity .18s ease; }
-  svg.has-focus g[data-card-id] { opacity:.24; }
-  svg.has-focus g[data-card-id].is-active { opacity:1; }"#;
+fn build_page_css(t: &ThemeConfig) -> String {
+    format!(
+        r#"  :root {{ color-scheme: {cs}; }}
+  body {{ margin:0; background:{page_bg}; color:{page_fg};
+         font-family:'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif; }}
+  .wrap {{ max-width:1560px; margin:0 auto; padding:28px 20px 60px; }}
+  .title-row {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:0 0 10px; }}
+  h1 {{ font-size:25px; margin:0; }}
+  .theme-chip {{ font-size:11.5px; font-weight:600; padding:3px 10px; border-radius:999px;
+                 background:{pill_bg}; color:{pill_fg}; border:1px solid {card_border}; }}
+  p.toc {{ font-size:13px; margin:0 0 16px; }}
+  p.toc a {{ color:{toc_link}; text-decoration:none; }}
+  p.toc a:hover {{ text-decoration:underline; }}
+  p.lead {{ color:{lead_fg}; font-size:14px; line-height:1.8; margin:0 0 18px; }}
+  .card {{ background:{card_bg}; border:1px solid {card_border}; border-radius:14px;
+          padding:14px 14px 6px; margin:0 0 26px; box-shadow:{card_shadow}; }}
+  .card h2 {{ font-size:17px; margin:4px 0 8px; padding-left:10px; border-left:4px solid {h2_accent}; }}
+  .card p.note {{ color:{note_fg}; font-size:13px; margin:0 0 10px; padding-left:14px; line-height:1.7; }}
+  svg {{ width:100%; height:auto; display:block; border-radius:8px; }}
+  code {{ background:{code_bg}; color:{code_fg}; padding:1px 5px; border-radius:4px; font-size:12.5px; }}
+  .card h3 {{ font-size:15px; margin:22px 0 8px; padding-left:10px; border-left:3px solid {card_border}; }}
+  .card h4 {{ font-size:13.5px; margin:16px 0 6px; color:{page_fg}; }}
+  .card p.hint {{ font-size:12.5px; color:{hint_fg}; background:{hint_bg}; border-left:4px solid {hint_accent};
+                 padding:9px 12px; border-radius:6px; margin:8px 0 4px; line-height:1.7; }}
+  table {{ width:100%; border-collapse:collapse; font-size:12.5px; margin:6px 0 10px; }}
+  th {{ text-align:left; background:{table_head_bg}; color:{table_head_fg}; font-weight:600; padding:7px 10px;
+       border-bottom:1px solid {table_border}; white-space:nowrap; }}
+  td {{ padding:6px 10px; border-bottom:1px solid {table_row_border}; vertical-align:top; line-height:1.6; }}
+  tr:hover td {{ background:{table_hover_bg}; }}
+  td.mono {{ font-family:'SFMono-Regular',Menlo,Consolas,monospace; font-size:11.5px; color:{page_fg}; }}
+  td.mono code {{ background:none; padding:0; color:inherit; }}
+  details {{ margin-top:6px; }}
+  summary {{ cursor:pointer; font-size:12.5px; color:{note_fg}; margin-bottom:6px; }}
+  table.flow td {{ font-size:12px; }}
+  table.flow td.small {{ color:{table_small_fg}; font-size:11.5px; white-space:nowrap; }}
+  table.flow td.down {{ color:{table_down_fg}; }}
+  table.flow tr.grp td {{ background:{table_grp_bg}; font-weight:700; color:{table_grp_fg}; font-size:13px;
+                         padding:8px 10px; border-top:2px solid {table_border}; }}
+  table.flow tr.grp .dot {{ display:inline-block; width:8px; height:8px; border-radius:50%;
+                           margin-right:8px; }}
+  table.flow tr.grp .cnt {{ color:{table_cnt_fg}; font-weight:400; margin-left:8px; font-size:11.5px; }}
+  table.flow td .tab {{ display:block; width:4px; height:20px; border-radius:2px; }}
+  table.flow .ver {{ display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+                    font-weight:600; white-space:nowrap; }}
+  table.flow tr:hover td {{ background:{table_hover_bg}; }}
+  .card-head {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
+  .fx-bar {{ display:flex; align-items:center; gap:6px; font-size:11.5px; }}
+  .fx-btn {{ border:1px solid {btn_border}; background:{btn_bg}; color:{btn_fg}; border-radius:7px;
+            padding:3px 9px; cursor:pointer; font-size:11.5px; line-height:1.5; }}
+  .fx-btn:hover {{ background:{btn_hover_bg}; }}
+  .fx-pill {{ padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;
+             background:{pill_bg}; color:{pill_fg}; }}
+  .stage {{ position:relative; }}
+  .stage canvas.fx-canvas {{ position:absolute; pointer-events:none; display:block; }}
+  svg g[data-card-id] {{ cursor:pointer; transition:opacity .18s ease; }}
+  svg.has-focus g[data-card-id] {{ opacity:.24; }}
+  svg.has-focus g[data-card-id].is-active {{ opacity:1; }}"#,
+        cs = t.color_scheme,
+        page_bg = t.surface.page_bg,
+        page_fg = t.ink.page_fg,
+        pill_bg = t.chrome.pill_bg,
+        pill_fg = t.chrome.pill_fg,
+        card_border = t.surface.card_border,
+        toc_link = t.chrome.toc_link,
+        lead_fg = t.ink.lead_fg,
+        card_bg = t.surface.card_bg,
+        card_shadow = t.surface.card_shadow,
+        h2_accent = t.chrome.h2_accent,
+        note_fg = t.ink.note_fg,
+        code_bg = t.surface.code_bg,
+        code_fg = t.ink.code_fg,
+        hint_fg = t.warning.hint_fg,
+        hint_bg = t.warning.hint_bg,
+        hint_accent = t.warning.hint_accent,
+        table_head_bg = t.table.head_bg,
+        table_head_fg = t.table.head_fg,
+        table_border = t.table.border,
+        table_row_border = t.table.row_border,
+        table_hover_bg = t.table.hover_bg,
+        table_small_fg = t.table.small_fg,
+        table_down_fg = t.table.down_fg,
+        table_grp_bg = t.table.grp_bg,
+        table_grp_fg = t.table.grp_fg,
+        table_cnt_fg = t.table.cnt_fg,
+        btn_border = t.chrome.btn_border,
+        btn_bg = t.chrome.btn_bg,
+        btn_fg = t.chrome.btn_fg,
+        btn_hover_bg = t.chrome.btn_hover_bg,
+    )
+}
 
 const MOTION_RUNTIME_JS: &str = r#"<script>
 (() => {
@@ -102,9 +141,10 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32>, @lo
 `;
 
   function buildTracks(data) {
+    const pal = (data.palette && data.palette.length) ? data.palette : PALETTE;
     const tracks = [];
     (data.edges || []).forEach((e, ei) => {
-      const col = PALETTE[ei % PALETTE.length];
+      const col = pal[ei % pal.length];
       (e.polylines || []).forEach((pts, pi) => {
         if (!pts || pts.length < 2) return;
         const cum = [0];
@@ -332,30 +372,35 @@ pub fn render_standalone_svg(svg_body: &str) -> String {
     format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{svg_body}\n")
 }
 
-/// Render a complete standalone HTML+SVG document using the chosen backend (with WebGPU/Canvas2D motion enabled by default).
+/// Render a complete standalone HTML+SVG document using the chosen backend and spec theme (or Starlink Light default).
 pub fn render_html_document(spec: &ArchSpec, backend: &dyn RenderBackend) -> String {
-    let rendered = backend.render_diagrams(&spec.diagrams);
-    render_html_from_rendered(spec, &rendered, true)
+    let theme = resolve_theme(spec.theme.as_deref(), None).unwrap_or_else(|_| default_theme());
+    let rendered = backend.render_diagrams(&spec.diagrams, &theme);
+    render_html_from_rendered(spec, &rendered, true, &theme)
 }
 
-/// Render a complete standalone HTML+SVG document from pre-rendered diagrams (avoids duplicate layout/SVG work when also emitting standalone `.svg`/`.png`/`.gif`).
+/// Render a complete standalone HTML+SVG document from pre-rendered diagrams with the specified global theme.
 pub fn render_html_from_rendered(
     spec: &ArchSpec,
     rendered_diagrams: &[(LaidOutDiagram, String)],
     motion: bool,
+    theme: &ThemeConfig,
 ) -> String {
-
     let mut out = String::with_capacity(32_768);
-    out.push_str("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
+    out.push_str("<!doctype html>\n<html lang=\"zh-CN\" data-archcast-theme=\"");
+    escape_html_into(&theme.id, &mut out);
+    out.push_str("\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
     escape_html_into(
         spec.doc_title.as_deref().unwrap_or(&spec.title),
         &mut out,
     );
     out.push_str("</title>\n<style>\n");
-    out.push_str(PAGE_CSS);
-    out.push_str("\n</style>\n</head>\n<body><div class=\"wrap\">\n<h1>");
+    out.push_str(&build_page_css(theme));
+    out.push_str("\n</style>\n</head>\n<body><div class=\"wrap\">\n<div class=\"title-row\"><h1>");
     escape_html_into(&spec.title, &mut out);
-    out.push_str("</h1>\n");
+    out.push_str("</h1><span class=\"theme-chip\">");
+    escape_html_into(&theme.display_name, &mut out);
+    out.push_str("</span></div>\n");
 
     // Table of contents anchors.
     let mut toc_items: Vec<(&str, &str)> = rendered_diagrams
@@ -425,7 +470,7 @@ pub fn render_html_from_rendered(
                     out,
                     "\n  <canvas class=\"fx-canvas\" style=\"left:{left_pct:.3}%;top:{top_pct:.3}%;width:{w_pct:.3}%;height:{h_pct:.3}%\" aria-hidden=\"true\"></canvas>\n  </div>\n  <script type=\"application/json\" class=\"fx-data\">"
                 );
-                out.push_str(&build_motion_json(diag, b));
+                out.push_str(&build_motion_json(diag, b, theme));
                 out.push_str("</script>\n</div>\n\n");
             } else {
                 out.push_str("\n  </div>\n</div>\n\n");
@@ -439,7 +484,7 @@ pub fn render_html_from_rendered(
 
     // Section 3: Flow table.
     if let Some(table) = &spec.flow_table {
-        render_flow_table(table, &mut out);
+        render_flow_table(table, theme, &mut out);
     }
 
     out.push_str("</div>");
@@ -451,7 +496,11 @@ pub fn render_html_from_rendered(
     out
 }
 
-fn build_motion_json(d: &LaidOutDiagram, bounds: crate::layout::DynamicBounds) -> String {
+fn build_motion_json(
+    d: &LaidOutDiagram,
+    bounds: crate::layout::DynamicBounds,
+    theme: &ThemeConfig,
+) -> String {
     let edges: Vec<serde_json::Value> = d
         .edges
         .iter()
@@ -464,6 +513,8 @@ fn build_motion_json(d: &LaidOutDiagram, bounds: crate::layout::DynamicBounds) -
         })
         .collect();
 
+    let red_rgb = theme.beacon_red_rgb();
+    let green_rgb = theme.beacon_green_rgb();
     let mut beacons = Vec::new();
     let mut bi = 0usize;
     for col in &d.columns {
@@ -476,25 +527,32 @@ fn build_motion_json(d: &LaidOutDiagram, bounds: crate::layout::DynamicBounds) -
                         | crate::schema::Tone::Green
                 )
             {
-                let col = match b.spec.tone {
-                    crate::schema::Tone::Red => [217.0 / 255.0, 83.0 / 255.0, 79.0 / 255.0],
-                    _ => [15.0 / 255.0, 138.0 / 255.0, 95.0 / 255.0],
+                let rgb = match b.spec.tone {
+                    crate::schema::Tone::Red => red_rgb,
+                    _ => green_rgb,
                 };
                 beacons.push(serde_json::json!({
                     "x": b.rect.x,
                     "y": b.rect.cy(),
                     "off": (bi % 6) as f64 / 6.0,
-                    "col": col,
+                    "col": [rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0],
                 }));
                 bi += 1;
             }
         }
     }
 
+    let palette: Vec<[f32; 3]> = theme
+        .pulse_rgb()
+        .iter()
+        .map(|rgb| [rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0])
+        .collect();
+
     let payload = serde_json::json!({
         "width": d.width,
         "height": d.height,
         "bounds": bounds,
+        "palette": palette,
         "edges": edges,
         "beacons": beacons,
     });
@@ -502,8 +560,14 @@ fn build_motion_json(d: &LaidOutDiagram, bounds: crate::layout::DynamicBounds) -
     payload.to_string().replace("</", "<\\/")
 }
 
-/// Emit one deterministic `<svg>...</svg>` element from a laid-out diagram.
+/// Emit one deterministic `<svg>...</svg>` element using the default Starlink Light theme.
 pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
+    let theme = default_theme();
+    render_diagram_svg_with_theme(d, &theme)
+}
+
+/// Emit one deterministic `<svg>...</svg>` element styled with `theme`.
+pub fn render_diagram_svg_with_theme(d: &LaidOutDiagram, t: &ThemeConfig) -> String {
     let mut s = String::with_capacity(24_576);
     let marker_id = format!("ar-{}", sanitize_id(&d.id));
 
@@ -518,25 +582,34 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
 
     let _ = writeln!(
         s,
-        "<defs><marker id=\"{marker_id}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#94a3b8\"/></marker></defs>"
+        "<defs><marker id=\"{marker_id}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"{}\"/></marker></defs>",
+        t.chrome.edge_stroke
     );
     let _ = writeln!(
         s,
-        "<rect x=\"0\" y=\"0\" width=\"{:.0}\" height=\"{:.0}\" fill=\"#ffffff\"/>",
-        d.width, d.height
+        "<rect x=\"0\" y=\"0\" width=\"{:.0}\" height=\"{:.0}\" fill=\"{}\"/>",
+        d.width, d.height, t.surface.svg_bg
     );
 
     // Canvas title & subtitles.
-    s.push_str("<text x=\"50\" y=\"54\" font-size=\"27\" fill=\"#0f172a\" font-weight=\"bold\" text-anchor=\"start\">");
+    let _ = write!(
+        s,
+        "<text x=\"50\" y=\"54\" font-size=\"27\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
+        t.ink.svg_title
+    );
     escape_html_into(&d.canvas_title, &mut s);
     s.push_str("</text>\n");
 
     for (i, (sy, line)) in d.subtitles.iter().enumerate() {
         let size = line.size.unwrap_or(if i == 0 { 13.5 } else { 11.5 });
-        let fill = if line.tone.is_default() {
-            if i == 0 { "#6b7280" } else { "#9aa4b2" }
+        let fill: &str = if line.tone.is_default() {
+            if i == 0 {
+                &t.ink.svg_subtitle
+            } else {
+                &t.ink.svg_meta
+            }
         } else {
-            line.tone.hex()
+            t.tone_hex(line.tone)
         };
         let weight = if line.bold { "bold" } else { "normal" };
         let _ = write!(
@@ -551,15 +624,15 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
     for col in &d.columns {
         let _ = write!(
             s,
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"#94a3b8\" font-weight=\"bold\" text-anchor=\"start\">",
-            col.header_x, col.header_y
+            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
+            col.header_x, col.header_y, t.ink.col_header
         );
         escape_html_into(&col.title, &mut s);
         s.push_str("</text>\n");
 
         for card in &col.cards {
             let r = &card.rect;
-            let accent_hex = card.spec.accent.hex();
+            let accent_hex = t.tone_hex(card.spec.accent);
             let _ = writeln!(
                 s,
                 "<g data-card-id=\"{}\">",
@@ -567,8 +640,8 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
             );
             let _ = writeln!(
                 s,
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"#fdfefe\" stroke=\"#d7dee8\" stroke-width=\"1.2\"/>",
-                r.x, r.y, r.w, r.h
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1.2\"/>",
+                r.x, r.y, r.w, r.h, t.surface.node_bg, t.surface.node_border
             );
             let _ = writeln!(
                 s,
@@ -577,21 +650,22 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
             );
             let _ = write!(
                 s,
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"15.5\" fill=\"#1f2937\" font-weight=\"bold\" text-anchor=\"start\">",
+                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"15.5\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
                 r.x + 18.0,
-                r.y + 26.0
+                r.y + 26.0,
+                t.ink.node_title
             );
             escape_html_into(&card.spec.title, &mut s);
             s.push_str("</text>\n");
 
             if let Some(badge) = &card.badge {
-                write_badge_svg(badge, &mut s);
+                write_badge_svg(badge, t, &mut s);
             }
 
             // Card lines.
             let mut ly = r.y + 52.0;
             for line in &card.spec.lines {
-                write_styled_svg_line(r.x + 18.0, ly, line, 11.5, 10.4, &mut s);
+                write_styled_svg_line(r.x + 18.0, ly, line, 11.5, 10.4, t, &mut s);
                 ly += if line.mono { 20.5 } else { 22.0 };
             }
 
@@ -600,8 +674,8 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
                 let sr = &sub.rect;
                 let _ = writeln!(
                     s,
-                    "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"8\" fill=\"#ffffff\" stroke=\"#e2e8f0\"/>",
-                    sr.x, sr.y, sr.w, sr.h
+                    "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"8\" fill=\"{}\" stroke=\"{}\"/>",
+                    sr.x, sr.y, sr.w, sr.h, t.surface.subcard_bg, t.surface.subcard_border
                 );
                 let _ = writeln!(
                     s,
@@ -610,21 +684,22 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
                 );
                 let _ = write!(
                     s,
-                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"#1f2937\" font-weight=\"bold\" text-anchor=\"start\">",
+                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
                     sr.x + 14.0,
-                    sr.y + 22.0
+                    sr.y + 22.0,
+                    t.ink.subcard_title
                 );
                 escape_html_into(&sub.spec.title, &mut s);
                 s.push_str("</text>\n");
 
                 if let Some(sb) = &sub.badge {
-                    write_badge_svg(sb, &mut s);
+                    write_badge_svg(sb, t, &mut s);
                 }
 
                 let mut sly = sr.y + 42.0;
                 for (li, line) in sub.spec.lines.iter().enumerate() {
                     let mono_size = if li == 0 { 10.2 } else { 9.5 };
-                    write_styled_svg_line(sr.x + 14.0, sly, line, 11.0, mono_size, &mut s);
+                    write_styled_svg_line(sr.x + 14.0, sly, line, 11.0, mono_size, t, &mut s);
                     sly += 15.5;
                 }
             }
@@ -634,8 +709,9 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
                 let fy = r.bottom() - 10.0;
                 let _ = write!(
                     s,
-                    "<text x=\"{:.1}\" y=\"{fy:.1}\" font-size=\"10.5\" fill=\"#8b95a5\" font-weight=\"normal\" text-anchor=\"start\">",
-                    r.x + 18.0
+                    "<text x=\"{:.1}\" y=\"{fy:.1}\" font-size=\"10.5\" fill=\"{}\" font-weight=\"normal\" text-anchor=\"start\">",
+                    r.x + 18.0,
+                    t.ink.node_footer
                 );
                 escape_html_into(footer, &mut s);
                 s.push_str("</text>\n");
@@ -649,25 +725,29 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
         for (x1, y1, x2, y2) in &edge.spines {
             let _ = writeln!(
                 s,
-                "<line x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" y2=\"{y2:.1}\" stroke=\"#cbd5e1\" stroke-width=\"1.8\"/>"
+                "<line x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" y2=\"{y2:.1}\" stroke=\"{}\" stroke-width=\"1.8\"/>",
+                t.chrome.edge_spine
             );
         }
         for path in &edge.paths {
             let _ = writeln!(
                 s,
-                "<path d=\"{path}\" fill=\"none\" stroke=\"#94a3b8\" stroke-width=\"1.7\" stroke-linejoin=\"round\" marker-end=\"url(#{marker_id})\"/>"
+                "<path d=\"{path}\" fill=\"none\" stroke=\"{}\" stroke-width=\"1.7\" stroke-linejoin=\"round\" marker-end=\"url(#{marker_id})\"/>",
+                t.chrome.edge_stroke
             );
         }
         if let Some((lx, ly, lw, text)) = &edge.label {
             let _ = writeln!(
                 s,
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{lw:.1}\" height=\"18\" fill=\"#ffffff\"/>",
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{lw:.1}\" height=\"18\" fill=\"{}\"/>",
                 lx - lw * 0.5,
-                ly - 13.0
+                ly - 13.0,
+                t.chrome.edge_label_bg
             );
             let _ = write!(
                 s,
-                "<text x=\"{lx:.1}\" y=\"{ly:.1}\" font-size=\"11\" fill=\"#94a3b8\" font-weight=\"bold\" text-anchor=\"middle\">"
+                "<text x=\"{lx:.1}\" y=\"{ly:.1}\" font-size=\"11\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"middle\">",
+                t.chrome.edge_label_fg
             );
             escape_html_into(text, &mut s);
             s.push_str("</text>\n");
@@ -677,11 +757,11 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
     // Bottom callout cards.
     for callout in &d.callouts {
         let r = &callout.rect;
-        let accent = callout.spec.accent.hex();
+        let accent = t.tone_hex(callout.spec.accent);
         let _ = writeln!(
             s,
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"12\" fill=\"#fbfcfe\" stroke=\"#d7dee8\" stroke-width=\"1.2\"/>",
-            r.x, r.y, r.w, r.h
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"12\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1.2\"/>",
+            r.x, r.y, r.w, r.h, t.surface.callout_bg, t.surface.callout_border
         );
         let _ = writeln!(
             s,
@@ -690,9 +770,10 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
         );
         let _ = write!(
             s,
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"14.5\" fill=\"#1f2937\" font-weight=\"bold\" text-anchor=\"start\">",
+            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"14.5\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
             r.x + 20.0,
-            r.y + 27.0
+            r.y + 27.0,
+            t.ink.node_title
         );
         escape_html_into(&callout.spec.title, &mut s);
         s.push_str("</text>\n");
@@ -702,23 +783,25 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
                 let box_h = (r.h - 60.0).max(60.0);
                 let _ = writeln!(
                     s,
-                    "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{box_h:.1}\" rx=\"8\" fill=\"#f8fafc\" stroke=\"#e2e8f0\"/>",
+                    "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{box_h:.1}\" rx=\"8\" fill=\"{}\" stroke=\"{}\"/>",
                     r.x + 20.0,
                     r.y + 42.0,
-                    r.w - 40.0
+                    r.w - 40.0,
+                    t.surface.codebox_bg,
+                    t.surface.codebox_border
                 );
                 let mut ly = r.y + 62.0;
                 for line in &callout.spec.lines {
                     let mut mono_line = line.clone();
                     mono_line.mono = true;
-                    write_styled_svg_line(r.x + 32.0, ly, &mono_line, 10.4, 10.4, &mut s);
+                    write_styled_svg_line(r.x + 32.0, ly, &mono_line, 10.4, 10.4, t, &mut s);
                     ly += 17.5;
                 }
             }
             CalloutStyle::Bullets => {
                 let mut ly = r.y + 54.0;
                 for line in &callout.spec.lines {
-                    write_styled_svg_line(r.x + 20.0, ly, line, 12.5, 11.0, &mut s);
+                    write_styled_svg_line(r.x + 20.0, ly, line, 12.5, 11.0, t, &mut s);
                     ly += 21.5;
                 }
             }
@@ -730,28 +813,30 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
         let r = &warn.rect;
         let _ = writeln!(
             s,
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"#fff8ec\" stroke=\"#f0d9b5\" stroke-width=\"1.4\"/>",
-            r.x, r.y, r.w, r.h
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1.4\"/>",
+            r.x, r.y, r.w, r.h, t.warning.banner_bg, t.warning.banner_border
         );
         let _ = writeln!(
             s,
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"6\" height=\"{:.1}\" fill=\"#b45309\" rx=\"3\"/>",
-            r.x, r.y, r.h
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"6\" height=\"{:.1}\" fill=\"{}\" rx=\"3\"/>",
+            r.x, r.y, r.h, t.warning.banner_accent
         );
         let _ = write!(
             s,
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"14.5\" fill=\"#b45309\" font-weight=\"bold\" text-anchor=\"start\">",
+            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"14.5\" fill=\"{}\" font-weight=\"bold\" text-anchor=\"start\">",
             r.x + 24.0,
-            r.y + 28.0
+            r.y + 28.0,
+            t.warning.banner_title
         );
         escape_html_into(&warn.spec.title, &mut s);
         s.push_str("</text>\n");
 
         let _ = write!(
             s,
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"#7a4a12\" font-weight=\"normal\" text-anchor=\"start\">",
+            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12.5\" fill=\"{}\" font-weight=\"normal\" text-anchor=\"start\">",
             r.x + 24.0,
-            r.y + 52.0
+            r.y + 52.0,
+            t.warning.banner_body
         );
         escape_html_into(&warn.spec.body, &mut s);
         s.push_str("</text>\n");
@@ -761,8 +846,8 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
     if !d.footer.is_empty() {
         let _ = write!(
             s,
-            "<text x=\"50\" y=\"{:.1}\" font-size=\"11\" fill=\"#9aa4b2\" font-weight=\"normal\" text-anchor=\"start\">",
-            d.footer_y
+            "<text x=\"50\" y=\"{:.1}\" font-size=\"11\" fill=\"{}\" font-weight=\"normal\" text-anchor=\"start\">",
+            d.footer_y, t.ink.svg_meta
         );
         escape_html_into(&d.footer, &mut s);
         s.push_str("</text>\n");
@@ -772,13 +857,13 @@ pub fn render_diagram_svg(d: &LaidOutDiagram) -> String {
     s
 }
 
-fn write_badge_svg(badge: &LaidOutBadge, s: &mut String) {
+fn write_badge_svg(badge: &LaidOutBadge, t: &ThemeConfig, s: &mut String) {
     let r = &badge.rect;
-    let hex = badge.spec.tone.hex();
+    let hex = t.tone_hex(badge.spec.tone);
     let _ = writeln!(
         s,
-        "<rect x=\"{:.2}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"{hex}\" opacity=\"0.12\"/>",
-        r.x, r.y, r.w, r.h
+        "<rect x=\"{:.2}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"10\" fill=\"{hex}\" opacity=\"{}\"/>",
+        r.x, r.y, r.w, r.h, t.chrome.badge_opacity
     );
     let _ = write!(
         s,
@@ -796,13 +881,18 @@ fn write_styled_svg_line(
     line: &StyledLine,
     default_size: f64,
     mono_size: f64,
+    t: &ThemeConfig,
     s: &mut String,
 ) {
     let size = line.size.unwrap_or(if line.mono { mono_size } else { default_size });
-    let fill = if line.tone.is_default() {
-        if line.mono { "#334155" } else { "#4b5563" }
+    let fill: &str = if line.tone.is_default() {
+        if line.mono {
+            &t.ink.node_mono
+        } else {
+            &t.ink.node_text
+        }
     } else {
-        line.tone.hex()
+        t.tone_hex(line.tone)
     };
     let weight = if line.bold { "bold" } else { "normal" };
     if line.mono {
@@ -820,7 +910,7 @@ fn write_styled_svg_line(
     s.push_str("</text>\n");
 }
 
-fn render_flow_table(table: &FlowTableSpec, out: &mut String) {
+fn render_flow_table(table: &FlowTableSpec, t: &ThemeConfig, out: &mut String) {
     out.push_str("<div class=\"card\" id=\"");
     escape_html_into(&table.id, out);
     out.push_str("\">\n  <h2>");
@@ -834,7 +924,7 @@ fn render_flow_table(table: &FlowTableSpec, out: &mut String) {
     out.push_str("  <table class='flow'><thead><tr><th>链路</th><th>入口 / 动作</th><th>触发方</th><th>版本</th><th>① 核心入口</th><th>② 下游调用（服务 · 接口）</th><th>说明</th></tr></thead><tbody>\n");
 
     for grp in &table.groups {
-        let ghex = grp.tone.hex();
+        let ghex = t.tone_hex(grp.tone);
         let _ = write!(
             out,
             "<tr class='grp'><td colspan='7'><span class='dot' style='background:{ghex}'></span>"
@@ -843,7 +933,7 @@ fn render_flow_table(table: &FlowTableSpec, out: &mut String) {
         let _ = writeln!(out, "<span class='cnt'>{}</span></td></tr>", grp.rows.len());
 
         for row in &grp.rows {
-            let vhex = row.version_tone.hex();
+            let vhex = t.tone_hex(row.version_tone);
             let _ = write!(
                 out,
                 "<tr><td><span class='tab' style='background:{ghex}'></span></td><td><b>"
@@ -853,7 +943,8 @@ fn render_flow_table(table: &FlowTableSpec, out: &mut String) {
             escape_html_into(&row.trigger, out);
             let _ = write!(
                 out,
-                "</td><td><span class='ver' style='color:{vhex};background:{vhex}1a'>"
+                "</td><td><span class='ver' style='color:{vhex};background:{vhex}{}'>",
+                t.chrome.ver_bg_alpha
             );
             escape_html_into(&row.version, out);
             out.push_str("</span></td><td class='mono'>");
