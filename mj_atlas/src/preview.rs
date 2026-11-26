@@ -2004,6 +2004,7 @@ impl MJAtlasApp {
                 extrude: s.extrude,
                 trim: s.trim,
                 trim_threshold: s.trim_threshold,
+                trim_margin: 0,
                 rotate: s.rotate,
                 pot: s.pot,
                 recursive: true,

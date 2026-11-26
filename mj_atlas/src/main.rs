@@ -207,6 +207,12 @@ enum Commands {
         #[arg(long, default_value = "0", value_name = "0-255")]
         trim_threshold: u8,
 
+        /// Transparent safety border (in pixels) preserved around trimmed sprite content
+        /// (clamped to original source bounds). Recommended: 1-2 when using --trim to avoid
+        /// bilinear filtering clipping anti-aliased sprite edges.
+        #[arg(long, default_value = "0", value_name = "PIXELS")]
+        trim_margin: u32,
+
         /// Enable lossy PNG quantization (imagequant).
         /// Reduces atlas PNG file size by ~60-70% with minimal visual quality loss.
         /// Uses palette-based encoding (256 colors max with dithering).
@@ -650,6 +656,7 @@ fn run(cli: &Cli) -> Result<()> {
             recursive,
             incremental,
             trim_threshold,
+            trim_margin,
             quantize,
             quantize_quality,
             polygon,
@@ -678,6 +685,7 @@ fn run(cli: &Cli) -> Result<()> {
                 extrude: *extrude,
                 trim: *trim,
                 trim_threshold: *trim_threshold,
+                trim_margin: *trim_margin,
                 rotate: *rotate,
                 pot: *pot,
                 recursive: *recursive,

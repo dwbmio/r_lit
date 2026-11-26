@@ -187,6 +187,7 @@ pub fn compute_options_hash(opts: &PackOptions) -> String {
     field!("extrude", opts.extrude);
     field!("trim", opts.trim);
     field!("trim_threshold", opts.trim_threshold);
+    field!("trim_margin", opts.trim_margin);
     field!("rotate", opts.rotate);
     field!("pot", opts.pot);
     field!("recursive", opts.recursive);
@@ -778,6 +779,7 @@ mod tests {
             extrude: 0,
             trim: false,
             trim_threshold: 0,
+            trim_margin: 0,
             rotate: false,
             pot: false,
             recursive: true,

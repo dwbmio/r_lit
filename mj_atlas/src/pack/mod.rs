@@ -25,6 +25,8 @@ pub struct PackOptions {
     pub extrude: u32,
     pub trim: bool,
     pub trim_threshold: u8,
+    /// Preserve up to N transparent border pixels around trimmed content (clamped to source bounds).
+    pub trim_margin: u32,
     pub rotate: bool,
     pub pot: bool,
     pub recursive: bool,
@@ -237,7 +239,11 @@ fn full_pack(opts: &PackOptions, entries: &[(String, PathBuf)]) -> Result<Vec<At
         .map(|&idx| {
             let (name, img) = &loaded[idx];
             let (trimmed_img, trim_info) = if opts.trim {
-                let tr = trim::trim_transparent(img, opts.trim_threshold);
+                let tr = trim::trim_transparent_with_margin(
+                    img,
+                    opts.trim_threshold,
+                    opts.trim_margin,
+                );
                 (tr.image.clone(), tr)
             } else {
                 let (w, h) = img.dimensions();
@@ -343,8 +349,8 @@ fn full_pack(opts: &PackOptions, entries: &[(String, PathBuf)]) -> Result<Vec<At
             image::imageops::overlay(
                 &mut atlas_img,
                 &img_to_place,
-                place_x as i64,
-                place_y as i64,
+                (place_x + opts.padding) as i64,
+                (place_y + opts.padding) as i64,
             );
 
             // The bin packer reserves `pack_w + spacing` × `pack_h + spacing` per
@@ -1208,7 +1214,12 @@ fn try_partial_repack(
         };
         // Clear the old region first so transparent pixels of new sprite win.
         clear_atlas_region(&mut atlas.image, &outer);
-        image::imageops::overlay(&mut atlas.image, &to_paint, outer.x as i64, outer.y as i64);
+        image::imageops::overlay(
+            &mut atlas.image,
+            &to_paint,
+            (outer.x + opts.padding) as i64,
+            (outer.y + opts.padding) as i64,
+        );
 
         // Update sprite entry (content_hash, mtime, polygon hash).
         let (size, mtime) = manifest::file_fingerprint(
@@ -1271,7 +1282,12 @@ fn try_partial_repack(
         } else {
             sd.extruded_image.clone()
         };
-        image::imageops::overlay(&mut atlas.image, &to_paint, fit.x as i64, fit.y as i64);
+        image::imageops::overlay(
+            &mut atlas.image,
+            &to_paint,
+            (fit.x + opts.padding) as i64,
+            (fit.y + opts.padding) as i64,
+        );
 
         atlas.used_rects.push(manifest::UsedRect {
             name: sd.name.clone(),
@@ -1429,7 +1445,7 @@ fn clear_atlas_region(img: &mut RgbaImage, rect: &manifest::UsedRect) {
 /// Preprocess a single sprite — trim, extrude, polygon mesh.
 fn preprocess_sprite(name: String, img: RgbaImage, opts: &PackOptions) -> SpriteData {
     let (trimmed_img, trim_info) = if opts.trim {
-        let tr = trim::trim_transparent(&img, opts.trim_threshold);
+        let tr = trim::trim_transparent_with_margin(&img, opts.trim_threshold, opts.trim_margin);
         (tr.image.clone(), tr)
     } else {
         let (w, h) = img.dimensions();
@@ -1652,6 +1668,7 @@ mod tests {
             extrude: 0,
             trim: false,
             trim_threshold: 0,
+            trim_margin: 0,
             rotate: false,
             pot: false,
             recursive: true,
@@ -1768,6 +1785,66 @@ mod tests {
         assert_eq!(names, vec!["bar/y.png", "foo/x.png"]);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn padding_offsets_painted_pixels_and_keeps_transparent_gutter() {
+        let root = std::env::temp_dir().join(format!(
+            "mj_atlas_padding_test_{}",
+            std::process::id()
+        ));
+        let in_dir = root.join("in");
+        let out_dir = root.join("out");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&in_dir).unwrap();
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        write_png(&in_dir.join("dot.png"), 6, 6, [255, 128, 0, 255]);
+
+        let mut opts = make_opts(&in_dir, &out_dir, None);
+        opts.padding = 2;
+        let atlases = execute(&opts).unwrap();
+        let atlas = &atlases[0];
+        let sp = &atlas.sprites[0];
+        assert_eq!((sp.x, sp.y, sp.w, sp.h), (2, 2, 6, 6));
+        // Outer 2px border must be fully transparent, content at (2, 2) must be opaque orange.
+        assert_eq!(atlas.atlas_image.get_pixel(0, 0)[3], 0);
+        assert_eq!(atlas.atlas_image.get_pixel(1, 2)[3], 0);
+        assert_eq!(atlas.atlas_image.get_pixel(2, 1)[3], 0);
+        assert_eq!(
+            *atlas.atlas_image.get_pixel(2, 2),
+            image::Rgba([255, 128, 0, 255])
+        );
+        assert_eq!(
+            *atlas.atlas_image.get_pixel(7, 7),
+            image::Rgba([255, 128, 0, 255])
+        );
+        assert_eq!(atlas.atlas_image.get_pixel(8, 7)[3], 0);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn trim_margin_preserves_transparent_safety_border() {
+        let mut img = RgbaImage::new(20, 20);
+        for y in 6..14 {
+            for x in 6..14 {
+                img.put_pixel(x, y, image::Rgba([200, 100, 50, 255]));
+            }
+        }
+        let tight = trim::trim_transparent(&img, 0);
+        assert_eq!((tight.offset_x, tight.offset_y), (6, 6));
+        assert_eq!(tight.image.dimensions(), (8, 8));
+
+        let padded = trim::trim_transparent_with_margin(&img, 0, 2);
+        assert_eq!((padded.offset_x, padded.offset_y), (4, 4));
+        assert_eq!(padded.image.dimensions(), (12, 12));
+        // Outer 2px border inside trimmed image is transparent.
+        assert_eq!(padded.image.get_pixel(0, 0)[3], 0);
+        assert_eq!(padded.image.get_pixel(1, 5)[3], 0);
+        assert_eq!(padded.image.get_pixel(2, 2)[3], 255);
+        assert_eq!(padded.image.get_pixel(9, 9)[3], 255);
+        assert_eq!(padded.image.get_pixel(10, 5)[3], 0);
     }
 }
 

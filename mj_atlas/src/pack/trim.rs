@@ -14,6 +14,14 @@ pub struct TrimResult {
 /// Uses raw byte scanning — processes alpha channel directly from the pixel buffer.
 /// On typical sprites this is 5-10x faster than per-pixel get_pixel().
 pub fn trim_transparent(img: &RgbaImage, threshold: u8) -> TrimResult {
+    trim_transparent_with_margin(img, threshold, 0)
+}
+
+/// Trim transparent pixels from all edges while preserving up to `margin` pixels
+/// of transparent safety border around the non-transparent content (clamped to
+/// the original image bounds). Prevents bilinear filtering from clipping
+/// anti-aliased sprite edges.
+pub fn trim_transparent_with_margin(img: &RgbaImage, threshold: u8, margin: u32) -> TrimResult {
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return TrimResult {
@@ -96,6 +104,11 @@ pub fn trim_transparent(img: &RgbaImage, threshold: u8) -> TrimResult {
             break;
         }
     }
+
+    let min_x = min_x.saturating_sub(margin);
+    let min_y = min_y.saturating_sub(margin);
+    let max_x = (max_x.saturating_add(margin)).min(w - 1);
+    let max_y = (max_y.saturating_add(margin)).min(h - 1);
 
     let crop_w = max_x - min_x + 1;
     let crop_h = max_y - min_y + 1;
