@@ -123,10 +123,12 @@ where
                 break;
             };
             let _ = writeln!(out, "{}", text);
+            let clean = crate::source::strip_ansi(&text);
+            let level = crate::source::infer_level(stream, &clean);
             let _ = tx.send(AppendLine {
                 stream: Some(stream.to_string()),
-                level: Some(if stream == "stderr" { "error" } else { "info" }.to_string()),
-                text,
+                level: Some(level.to_string()),
+                text: clean,
                 ..Default::default()
             });
         }

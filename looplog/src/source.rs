@@ -556,24 +556,32 @@ pub fn parse_nginx_line(raw: &str) -> Option<NginxLine> {
 }
 
 /// Best-effort level inference for unstructured lines.
+///
+/// Explicit level tokens (structured prefixes like `[DEBUG]`/`[INFO]`/`[WARN]`/`[ERROR]`,
+/// Godot's `WARNING:`/`ERROR:`, and Rust tracing's ` WARN `/` INFO `/` DEBUG `) take
+/// priority over `stream` so warnings printed to stderr (e.g. Godot `godot_warn!`) are
+/// classified as `warn` rather than `error`.
 pub fn infer_level(stream: &str, text: &str) -> &'static str {
+    if let Some(lv) = explicit_level(text) {
+        return lv;
+    }
     if stream == "stderr" {
         return "error";
     }
     let upper = text.to_ascii_uppercase();
     let lower = text.to_ascii_lowercase();
-    if upper.contains("ERROR")
-        || upper.contains("FATAL")
+    if upper.contains("FATAL")
         || upper.contains("PANIC")
         || lower.contains("traceback (most recent call last)")
         || lower.contains("panicked at")
+        || has_word(&upper, "ERROR")
     {
         return "error";
     }
-    if upper.contains("WARN") {
+    if has_word(&upper, "WARN") || has_word(&upper, "WARNING") {
         return "warn";
     }
-    if upper.contains("DEBUG") || upper.contains("TRACE") {
+    if has_word(&upper, "DEBUG") || has_word(&upper, "TRACE") {
         return "debug";
     }
     if let Some(code) = http_status(text) {
@@ -584,6 +592,71 @@ pub fn infer_level(stream: &str, text: &str) -> &'static str {
         };
     }
     "info"
+}
+
+/// Detect explicit level markers at the start of a line or in a tracing timestamp header.
+fn explicit_level(text: &str) -> Option<&'static str> {
+    let trimmed = text.trim_start();
+    // 1) Bracketed prefix: [ERROR] / [WARN] / [WARNING] / [INFO] / [DEBUG] / [TRACE]
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some((tag, _)) = rest.split_once(']') {
+            if let Some(lv) = match_level_token(tag.trim()) {
+                return Some(lv);
+            }
+        }
+    }
+    // 2) Prefix with colon or whitespace: "ERROR: ...", "WARNING: ...", "WARN ...", "DEBUG ..."
+    let mut parts = trimmed.split_whitespace();
+    if let Some(first) = parts.next() {
+        let bare = first.trim_end_matches(':');
+        if let Some(lv) = match_level_token(bare) {
+            return Some(lv);
+        }
+        // 3) Timestamped header (Rust tracing / ISO-8601 / HH:MM:SS):
+        //    e.g. "2026-11-19T16:28:49.503Z  WARN titan::..."
+        if first.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            if let Some(second) = parts.next() {
+                let bare2 = second.trim_matches(|c| matches!(c, '[' | ']' | ':' | ','));
+                if let Some(lv) = match_level_token(bare2) {
+                    return Some(lv);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn match_level_token(token: &str) -> Option<&'static str> {
+    match token.to_ascii_uppercase().as_str() {
+        "ERROR" | "ERR" | "FATAL" | "CRIT" | "CRITICAL" => Some("error"),
+        "WARN" | "WARNING" | "WRN" => Some("warn"),
+        "INFO" | "INF" => Some("info"),
+        "DEBUG" | "DBG" | "TRACE" | "TRC" => Some("debug"),
+        _ => None,
+    }
+}
+
+/// ASCII word-boundary search on an already-uppercased string.
+/// Avoids false positives like `DebugHud` or `debug_assertions=true`.
+fn has_word(upper: &str, needle: &str) -> bool {
+    let bytes = upper.as_bytes();
+    let nlen = needle.len();
+    let mut pos = 0;
+    while let Some(idx) = upper[pos..].find(needle) {
+        let start = pos + idx;
+        let end = start + nlen;
+        let left_ok = start == 0 || !is_word_byte(bytes[start - 1]);
+        let right_ok = end == bytes.len() || !is_word_byte(bytes[end]);
+        if left_ok && right_ok {
+            return true;
+        }
+        pos = start + 1;
+    }
+    false
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Extract a 3-digit HTTP status following a `HTTP/x.y"` token (nginx format).
@@ -835,5 +908,32 @@ mod tests {
         let (argv, parser) = spec.build().unwrap();
         assert_eq!(parser, Parser::Nginx);
         assert_eq!(argv, vec!["tail", "-F", "-n", "50", "/var/log/nginx/access.log"]);
+    }
+
+    #[test]
+    fn infers_explicit_levels_for_godot_and_tracing() {
+        assert_eq!(infer_level("stdout", "[DEBUG][ZumaNet][ignored] f=12 msg_id=99"), "debug");
+        assert_eq!(infer_level("stdout", "[INFO][ZumaNet][connected] f=12 addr=127.0.0.1:9090"), "info");
+        assert_eq!(infer_level("stdout", "[WARN][ZumaController][online_fail] f=12"), "warn");
+        assert_eq!(infer_level("stderr", "WARNING: [ZumaConfig] fallback"), "warn");
+        assert_eq!(infer_level("stderr", "ERROR: [ZumaNet] decode failed"), "error");
+        assert_eq!(infer_level("stderr", "unstructured stderr crash"), "error");
+        assert_eq!(
+            infer_level("stdout", "2026-11-19T16:28:49.503Z  INFO titan::modes::zuma: ready"),
+            "info"
+        );
+        assert_eq!(
+            infer_level("stdout", "2026-11-19T16:28:49.503Z  WARN titan::app::http: open"),
+            "warn"
+        );
+        assert_eq!(
+            infer_level("stdout", "2026-11-19T16:28:49.503Z DEBUG titan_rules_zuma: tick=1"),
+            "debug"
+        );
+        // Should not misclassify identifiers containing "debug" as debug level.
+        assert_eq!(
+            infer_level("stdout", "[DebugHud] mounted (debug_assertions=true)"),
+            "info"
+        );
     }
 }

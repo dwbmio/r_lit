@@ -11,9 +11,14 @@
     --line: #1a222c;
     --fg: #c9d1d9;
     --dim: #6b7785;
-    --err: #ff7b72;
-    --warn: #e3b341;
-    --info: #58a6ff;
+    --err: #f85149;
+    --warn: #f0883e;
+    --info: #3fb950;
+    --debug: #8b949e;
+    --lv-debug: #8b949e;
+    --lv-info: #3fb950;
+    --lv-warn: #f0883e;
+    --lv-error: #f85149;
     --ok: #3fb950;
     --mark: #7a5c00;
   }
@@ -114,8 +119,56 @@
   #cursor { color: var(--dim); white-space: nowrap; }
   #cursor:empty { display: none; }
   #cursor b { color: var(--fg); font-weight: 400; }
-  .pmeta .e { color: var(--err); }
-  .pmeta .w { color: var(--warn); }
+  .pmeta .e { color: var(--lv-error); }
+  .pmeta .w { color: var(--lv-warn); }
+  .pmeta .i { color: var(--lv-info); }
+  .pmeta .d { color: var(--lv-debug); }
+  .lv-bar { display: flex; align-items: center; gap: 3px; }
+  .lv-chip {
+    padding: 2px 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .03em;
+    border-radius: 4px;
+    border: 1px solid #26303d;
+    background: #10161e;
+    color: #556170;
+    opacity: .6;
+    transition: opacity .12s, border-color .12s, background .12s;
+  }
+  .lv-chip:hover { opacity: .95; }
+  .lv-chip.on { opacity: 1; }
+  .lv-chip.d.on {
+    color: color-mix(in srgb, var(--lv-debug) 85%, #ffffff);
+    border-color: color-mix(in srgb, var(--lv-debug) 55%, transparent);
+    background: color-mix(in srgb, var(--lv-debug) 16%, transparent);
+  }
+  .lv-chip.i.on {
+    color: color-mix(in srgb, var(--lv-info) 85%, #ffffff);
+    border-color: color-mix(in srgb, var(--lv-info) 55%, transparent);
+    background: color-mix(in srgb, var(--lv-info) 16%, transparent);
+  }
+  .lv-chip.w.on {
+    color: color-mix(in srgb, var(--lv-warn) 85%, #ffffff);
+    border-color: color-mix(in srgb, var(--lv-warn) 60%, transparent);
+    background: color-mix(in srgb, var(--lv-warn) 18%, transparent);
+  }
+  .lv-chip.e.on {
+    color: color-mix(in srgb, var(--lv-error) 85%, #ffffff);
+    border-color: color-mix(in srgb, var(--lv-error) 65%, transparent);
+    background: color-mix(in srgb, var(--lv-error) 20%, transparent);
+  }
+  .lv-reset { padding: 2px 5px; font-size: 10.5px; color: var(--dim); }
+  .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+  .color-item {
+    display: flex; flex-direction: column; gap: 4px; align-items: center;
+    padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: #0d131a;
+    margin: 0 !important;
+  }
+  .color-item input[type="color"] {
+    width: 100%; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer;
+    margin: 0 !important;
+  }
   .jump {
     display: none;
     position: absolute;
@@ -149,12 +202,55 @@
   .ln:hover { background: #131a23; }
   .ln .t { color: var(--dim); flex: 0 0 auto; }
   .ln .lag { color: #d29922; font-size: 10px; margin-left: 2px; }
+  .ln .lv {
+    flex: 0 0 auto;
+    width: 32px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.35;
+    border-radius: 3px;
+    align-self: flex-start;
+    margin-top: 1px;
+    letter-spacing: .02em;
+  }
   .ln .g { flex: 0 0 auto; color: var(--dim); display: none; }
   body.merged .ln .g { display: inline; min-width: 92px; }
   .ln .x { flex: 1 1 auto; min-width: 0; }
-  .ln.e { color: #ffb3ad; background: rgba(255, 123, 114, .07); border-left-color: var(--err); }
-  .ln.w { color: #f0d396; border-left-color: var(--warn); }
-  .ln.d { color: var(--dim); }
+  .ln.e {
+    color: color-mix(in srgb, var(--lv-error) 72%, #ffffff);
+    background: color-mix(in srgb, var(--lv-error) 11%, transparent);
+    border-left-color: var(--lv-error);
+  }
+  .ln.e .lv {
+    color: color-mix(in srgb, var(--lv-error) 88%, #ffffff);
+    background: color-mix(in srgb, var(--lv-error) 22%, transparent);
+  }
+  .ln.w {
+    color: color-mix(in srgb, var(--lv-warn) 72%, #ffffff);
+    background: color-mix(in srgb, var(--lv-warn) 7%, transparent);
+    border-left-color: var(--lv-warn);
+  }
+  .ln.w .lv {
+    color: color-mix(in srgb, var(--lv-warn) 88%, #ffffff);
+    background: color-mix(in srgb, var(--lv-warn) 20%, transparent);
+  }
+  .ln.i {
+    color: color-mix(in srgb, var(--lv-info) 55%, #e6edf3);
+    border-left-color: color-mix(in srgb, var(--lv-info) 65%, transparent);
+  }
+  .ln.i .lv {
+    color: color-mix(in srgb, var(--lv-info) 88%, #ffffff);
+    background: color-mix(in srgb, var(--lv-info) 18%, transparent);
+  }
+  .ln.d {
+    color: color-mix(in srgb, var(--lv-debug) 85%, #c9d1d9);
+    border-left-color: color-mix(in srgb, var(--lv-debug) 45%, transparent);
+  }
+  .ln.d .lv {
+    color: color-mix(in srgb, var(--lv-debug) 88%, #ffffff);
+    background: color-mix(in srgb, var(--lv-debug) 16%, transparent);
+  }
   .ln.sys .x { color: var(--dim); font-style: italic; }
   mark { background: var(--mark); color: #fff; border-radius: 2px; }
   .empty { color: var(--dim); padding: 12px; }
@@ -241,12 +337,13 @@
   </div>
 
   <div class="group" title="过滤">
-    <select id="level" title="级别过滤">
-      <option value="all">全部</option>
-      <option value="warn">warn+</option>
-      <option value="error">仅 error</option>
-      <option value="debug">debug+</option>
-    </select>
+    <div id="lvBar" class="lv-bar" title="单击开关等级 · 双击/Alt+单击独显 · 快捷键 1-4 / 0全部 / w告警+">
+      <button class="lv-chip d on" data-lv="debug">DBG</button>
+      <button class="lv-chip i on" data-lv="info">INF</button>
+      <button class="lv-chip w on" data-lv="warn">WRN</button>
+      <button class="lv-chip e on" data-lv="error">ERR</button>
+      <button id="lvAll" class="lv-reset" title="恢复全部等级 (0)" hidden>全</button>
+    </div>
     <input id="q" placeholder="过滤 + 高亮  /regex/i" title="普通词高亮；/正则/i 走正则；匹配即过滤">
   </div>
 
@@ -291,6 +388,13 @@
       <label>分栏（每行 <code>label:tag</code>）
         <textarea id="cfgColumns" rows="4" placeholder="client:picboo-client&#10;api:picboo-api"></textarea>
       </label>
+      <h4>等级配色 <button id="cfgColorReset" type="button">恢复经典</button></h4>
+      <div class="color-grid">
+        <label class="color-item"><span>DBG</span><input id="cfgColorDebug" type="color" value="#8b949e"></label>
+        <label class="color-item"><span>INF</span><input id="cfgColorInfo" type="color" value="#3fb950"></label>
+        <label class="color-item"><span>WRN</span><input id="cfgColorWarn" type="color" value="#f0883e"></label>
+        <label class="color-item"><span>ERR</span><input id="cfgColorError" type="color" value="#f85149"></label>
+      </div>
     </section>
 
     <section>
@@ -360,7 +464,32 @@
 
   const MAX_ROWS = 1200;
   const POLL_MS = 400;
-  const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
+  const ALL_LEVELS = ["debug", "info", "warn", "error"];
+  const LEVEL_BADGE = { debug: "DBG", info: "INF", warn: "WRN", error: "ERR" };
+  const LEVEL_CLASS = { debug: "d", info: "i", warn: "w", error: "e" };
+  const CLASSIC_COLORS = {
+    debug: "#8b949e",
+    info: "#3fb950",
+    warn: "#f0883e",
+    error: "#f85149",
+  };
+
+  function applyColors(colors) {
+    const c = Object.assign({}, CLASSIC_COLORS, colors || {});
+    const root = document.documentElement.style;
+    root.setProperty("--lv-debug", c.debug || CLASSIC_COLORS.debug);
+    root.setProperty("--lv-info", c.info || CLASSIC_COLORS.info);
+    root.setProperty("--lv-warn", c.warn || CLASSIC_COLORS.warn);
+    root.setProperty("--lv-error", c.error || CLASSIC_COLORS.error);
+  }
+
+  function normLevel(lv) {
+    const k = String(lv || "info").toLowerCase();
+    if (k === "error" || k === "fatal" || k === "err") return "error";
+    if (k === "warn" || k === "warning" || k === "wrn") return "warn";
+    if (k === "debug" || k === "trace" || k === "dbg") return "debug";
+    return "info";
+  }
 
   const boot = window.LOOPLOG_BOOT || { sinceMs: Date.now() - 900000, columns: [], db: "" };
   const $ = (id) => document.getElementById(id);
@@ -368,7 +497,7 @@
   const state = {
     columns: (boot.columns || []).slice(),
     merged: false,
-    minLevel: "all",
+    levels: new Set(ALL_LEVELS),
     pattern: "",
     regex: null,
     paused: false,
@@ -439,10 +568,7 @@
   }
 
   function visible(row) {
-    if (state.minLevel !== "all") {
-      const want = LEVEL_RANK[state.minLevel] || 0;
-      if ((LEVEL_RANK[row.level] ?? 1) < want) return false;
-    }
+    if (!state.levels.has(normLevel(row.level))) return false;
     if (state.regex) {
       state.regex.lastIndex = 0;
       if (!state.regex.test(row.text)) return false;
@@ -469,12 +595,14 @@
   }
 
   function rowHtml(row) {
-    const lv = row.level || "info";
-    const cls = lv === "error" ? "e" : lv === "warn" ? "w" : lv === "debug" ? "d" : "";
+    const lv = normLevel(row.level);
+    const cls = LEVEL_CLASS[lv] || "i";
+    const badge = LEVEL_BADGE[lv] || "INF";
     return (
-      '<div class="ln ' + cls + '" title="' + esc(row.level + " · " + (row.tag || "-") + " · " + row.stream) + '"' +
+      '<div class="ln ' + cls + '" title="' + esc(lv + " · " + (row.tag || "-") + " · " + row.stream) + '"' +
       ' data-run="' + esc(row.run) + '" data-seq="' + row.seq + '" data-ts="' + row.ts_ms + '">' +
       '<span class="t">' + fmtTs(row.ts_ms) + lagHtml(row) + "</span>" +
+      '<span class="lv">' + badge + "</span>" +
       '<span class="g">' + esc(row.tag || "-") + "</span>" +
       '<span class="x">' + highlight(row.text) + "</span>" +
       "</div>"
@@ -493,12 +621,15 @@
 
   function countsFor(pane) {
     const rows = rowsFor(pane);
-    let e = 0, w = 0;
-    for (let i = rows.length - 1, n = 0; i >= 0 && n < 2000; i--, n++) {
-      if (rows[i].level === "error") e++;
-      else if (rows[i].level === "warn") w++;
+    let e = 0, w = 0, i = 0, d = 0;
+    for (let idx = rows.length - 1, n = 0; idx >= 0 && n < 2000; idx--, n++) {
+      const lv = normLevel(rows[idx].level);
+      if (lv === "error") e++;
+      else if (lv === "warn") w++;
+      else if (lv === "debug") d++;
+      else i++;
     }
-    return { total: rows.length, e, w };
+    return { total: rows.length, e, w, i, d };
   }
 
   // ---- timeline alignment -------------------------------------------------
@@ -632,7 +763,7 @@
     const anchorTs = topTs(body);
     const rows = rowsFor(pane).filter(visible);
     const slice = rows.slice(-MAX_ROWS);
-    const filtering = !!state.regex || state.minLevel !== "all";
+    const filtering = !!state.regex || state.levels.size < ALL_LEVELS.length;
     body.innerHTML = slice.length
       ? slice.map(rowHtml).join("")
       : filtering
@@ -707,7 +838,9 @@
     pane.meta.innerHTML =
       c.total + " 行" +
       (c.e ? ' · <span class="e">' + c.e + "E</span>" : "") +
-      (c.w ? ' · <span class="w">' + c.w + "W</span>" : "");
+      (c.w ? ' · <span class="w">' + c.w + "W</span>" : "") +
+      (c.i ? ' · <span class="i">' + c.i + "I</span>" : "") +
+      (c.d ? ' · <span class="d">' + c.d + "D</span>" : "");
   }
 
   /// 稳态路径：只把新行追加进 DOM，不重建整栏。
@@ -823,8 +956,9 @@
       if (!line) return;
       const text = line.querySelector(".x").textContent;
       const ts = line.querySelector(".t").textContent;
+      const lv = line.querySelector(".lv")?.textContent || "";
       const g = line.querySelector(".g").textContent;
-      const out = ts + (g ? " [" + g + "] " : " ") + text;
+      const out = ts + (lv ? " [" + lv + "]" : "") + (g ? " [" + g + "] " : " ") + text;
       navigator.clipboard?.writeText(out).then(() => flash("已复制一行"), () => {});
     });
     return pane;
@@ -993,9 +1127,14 @@
 
   function renderCfgFields() {
     const v = (draft() && draft().view) || {};
+    const c = Object.assign({}, CLASSIC_COLORS, v.colors || {});
     $("cfgSince").value = v.since || "15m";
     $("cfgAutostart").value = v.autostart === false ? "0" : "1";
     $("cfgColumns").value = (v.columns || []).map((c) => c.label + ":" + c.tag).join("\n");
+    $("cfgColorDebug").value = c.debug;
+    $("cfgColorInfo").value = c.info;
+    $("cfgColorWarn").value = c.warn;
+    $("cfgColorError").value = c.error;
   }
 
   function renderSources() {
@@ -1135,11 +1274,18 @@
           ? { label: line.slice(0, i).trim(), tag: line.slice(i + 1).trim() }
           : { label: line, tag: line };
       });
+    d.view.colors = {
+      debug: $("cfgColorDebug").value || CLASSIC_COLORS.debug,
+      info: $("cfgColorInfo").value || CLASSIC_COLORS.info,
+      warn: $("cfgColorWarn").value || CLASSIC_COLORS.warn,
+      error: $("cfgColorError").value || CLASSIC_COLORS.error,
+    };
   }
 
   function applyConfiguredView() {
     const v = draft() && draft().view;
     if (!v) return;
+    applyColors(v.colors);
     state.columns = (v.columns || []).map((c) => ({ label: c.label, tag: c.tag }));
     const windowMs = parseSince(v.since);
     if (windowMs) {
@@ -1238,15 +1384,59 @@
     tick();
   }
 
+  function syncLevelBar() {
+    for (const btn of $("lvBar").querySelectorAll(".lv-chip")) {
+      btn.classList.toggle("on", state.levels.has(btn.dataset.lv));
+    }
+    $("lvAll").hidden = state.levels.size === ALL_LEVELS.length;
+  }
+
+  function setLevels(list) {
+    state.levels = new Set(list);
+    syncLevelBar();
+    repaintAll(true);
+  }
+
+  function toggleLevel(lv) {
+    if (state.levels.has(lv)) {
+      if (state.levels.size === 1) {
+        setLevels(ALL_LEVELS);
+        return;
+      }
+      state.levels.delete(lv);
+    } else {
+      state.levels.add(lv);
+    }
+    syncLevelBar();
+    repaintAll(true);
+  }
+
+  function soloLevel(lv) {
+    if (state.levels.size === 1 && state.levels.has(lv)) {
+      setLevels(ALL_LEVELS);
+    } else {
+      setLevels([lv]);
+    }
+  }
+
   function bind() {
     $("since").addEventListener("change", (e) => {
       state.sinceMs = Date.now() - Number(e.target.value);
       resetData();
       tick();
     });
-    $("level").addEventListener("change", (e) => {
-      state.minLevel = e.target.value;
-      repaintAll(true);
+    $("lvBar").addEventListener("click", (e) => {
+      const chip = e.target.closest(".lv-chip");
+      if (chip) {
+        if (e.altKey || e.metaKey) soloLevel(chip.dataset.lv);
+        else toggleLevel(chip.dataset.lv);
+        return;
+      }
+      if (e.target.id === "lvAll") setLevels(ALL_LEVELS);
+    });
+    $("lvBar").addEventListener("dblclick", (e) => {
+      const chip = e.target.closest(".lv-chip");
+      if (chip) soloLevel(chip.dataset.lv);
     });
     let timer = 0;
     $("q").addEventListener("input", (e) => {
@@ -1299,6 +1489,25 @@
       cfgState.editing = -1;
     });
     $("cfgSave").addEventListener("click", saveConfig);
+    for (const id of ["cfgColorDebug", "cfgColorInfo", "cfgColorWarn", "cfgColorError"]) {
+      $(id).addEventListener("input", () => {
+        applyColors({
+          debug: $("cfgColorDebug").value,
+          info: $("cfgColorInfo").value,
+          warn: $("cfgColorWarn").value,
+          error: $("cfgColorError").value,
+        });
+        markDirty();
+      });
+    }
+    $("cfgColorReset").addEventListener("click", () => {
+      $("cfgColorDebug").value = CLASSIC_COLORS.debug;
+      $("cfgColorInfo").value = CLASSIC_COLORS.info;
+      $("cfgColorWarn").value = CLASSIC_COLORS.warn;
+      $("cfgColorError").value = CLASSIC_COLORS.error;
+      applyColors(CLASSIC_COLORS);
+      markDirty();
+    });
     $("srcList").addEventListener("click", async (ev) => {
       const btn = ev.target.closest("button[data-act]");
       if (!btn) return;
@@ -1313,16 +1522,23 @@
       }
     });
     document.addEventListener("keydown", (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
       if (e.key === "p") $("pause").click();
       if (e.key === "g") jumpAllToLatest();
       if (e.key === "m") $("mode").click();
+      if (e.key === "1") toggleLevel("debug");
+      if (e.key === "2") toggleLevel("info");
+      if (e.key === "3") toggleLevel("warn");
+      if (e.key === "4") toggleLevel("error");
+      if (e.key === "0") setLevels(ALL_LEVELS);
+      if (e.key === "w") setLevels(["warn", "error"]);
       if (e.key === "/") { e.preventDefault(); $("q").focus(); }
       if (e.key === "Escape") $("picker").classList.remove("show");
     });
   }
 
   async function init() {
+    applyColors(boot.colors);
     document.body.classList.toggle("merged", state.merged);
     $("sync").classList.toggle("on", state.syncScroll);
     bind();

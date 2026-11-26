@@ -48,6 +48,9 @@ pub struct ViewConfig {
     /// Start enabled sources when the viewer opens.
     #[serde(default = "default_true")]
     pub autostart: bool,
+    /// Per-level colors (CSS hex, e.g. `#3fb950`). Defaults to classic gray/green/orange/red.
+    #[serde(default)]
+    pub colors: LevelColors,
 }
 
 impl Default for ViewConfig {
@@ -56,8 +59,46 @@ impl Default for ViewConfig {
             since: default_since(),
             columns: Vec::new(),
             autostart: true,
+            colors: LevelColors::default(),
         }
     }
+}
+
+/// Per-level log colors in `looplog view` (classic defaults: gray / green / orange / red).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelColors {
+    #[serde(default = "default_color_debug")]
+    pub debug: String,
+    #[serde(default = "default_color_info")]
+    pub info: String,
+    #[serde(default = "default_color_warn")]
+    pub warn: String,
+    #[serde(default = "default_color_error")]
+    pub error: String,
+}
+
+impl Default for LevelColors {
+    fn default() -> Self {
+        Self {
+            debug: default_color_debug(),
+            info: default_color_info(),
+            warn: default_color_warn(),
+            error: default_color_error(),
+        }
+    }
+}
+
+fn default_color_debug() -> String {
+    "#8b949e".to_string()
+}
+fn default_color_info() -> String {
+    "#3fb950".to_string()
+}
+fn default_color_warn() -> String {
+    "#f0883e".to_string()
+}
+fn default_color_error() -> String {
+    "#f85149".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +385,7 @@ mod tests {
                     tag: "picboo-api".into(),
                 }],
                 autostart: false,
+                colors: LevelColors::default(),
             },
             ..Config::default()
         }
@@ -428,5 +470,23 @@ mod tests {
         assert_eq!(merged.view.since, "1h");
         assert_eq!(merged.view.columns.len(), 1);
         assert_eq!(merged.source.len(), 2);
+    }
+
+    #[test]
+    fn level_colors_default_to_classic_and_round_trip() {
+        let def = Config::default();
+        assert_eq!(def.view.colors.debug, "#8b949e");
+        assert_eq!(def.view.colors.info, "#3fb950");
+        assert_eq!(def.view.colors.warn, "#f0883e");
+        assert_eq!(def.view.colors.error, "#f85149");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("colors.toml");
+        let mut cfg = Config::default();
+        cfg.view.colors.info = "#22cc66".into();
+        save(&path, &cfg).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.view.colors.info, "#22cc66");
+        assert_eq!(loaded.view.colors.warn, "#f0883e");
     }
 }

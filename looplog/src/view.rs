@@ -113,6 +113,7 @@ pub fn serve(db_path: PathBuf, opts: ViewOptions) -> Result<()> {
         "columns": opts.config.view.columns.iter().map(|c| {
             serde_json::json!({"label": c.label, "tag": c.tag})
         }).collect::<Vec<_>>(),
+        "colors": opts.config.view.colors,
         "db": state.db_path.display().to_string(),
         "addr": opts.addr,
         "configPath": opts.config_path.display().to_string(),
