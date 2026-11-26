@@ -369,8 +369,20 @@ def render_install_sh(template: Path, *, tool: str, version: str,
 
 # ─── postgres patch (optional) ─────────────────────────────────────────────────
 
+def parse_tags_arg(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    out: list[str] = []
+    for part in raw.split(","):
+        t = part.strip().lower()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def patch_software_meta(pg_url: str, tool: str, *, fields: dict[str, Any],
-                         category_code: str | None) -> None:
+                         category_code: str | None,
+                         tags: list[str] | None = None) -> None:
     try:
         import psycopg2
     except ImportError:
@@ -391,6 +403,10 @@ def patch_software_meta(pg_url: str, tool: str, *, fields: dict[str, Any],
         )
         params.append(category_code)
 
+    if tags:
+        setters.append("tags = %s")
+        params.append(tags)
+
     if not setters:
         return
 
@@ -408,7 +424,8 @@ def patch_software_meta(pg_url: str, tool: str, *, fields: dict[str, Any],
             print(f"  · {tool} not in hfrog yet (created on first /softwares POST)", flush=True)
         else:
             cat = f", cat={category_code}" if category_code else ""
-            print(f"  ✎ {tool}  (SQL fields refreshed{cat})", flush=True)
+            tg = f", tags={','.join(tags)}" if tags else ""
+            print(f"  ✎ {tool}  (SQL fields refreshed{cat}{tg})", flush=True)
 
 
 # ─── core sync ─────────────────────────────────────────────────────────────────
@@ -421,16 +438,22 @@ def sync_hfrog_records(client: HfrogClient, *,
                         assets_with_checksum: list[tuple[str, Path, str, int, str]],
                         git_commit: str = "", jenkins_url: str = "",
                         is_latest: bool = True, platform_specs: dict | None = None,
+                        category: str | None = None, tags: list[str] | None = None,
                         ) -> bool:
     """Push the four hfrog API records. Returns True on full success."""
     ok = True
 
-    ok &= client.post("/api/release/softwares", {
+    sw_payload: dict[str, Any] = {
         "name": tool,
         "description": description,
         "install_command": install_command,
         "install_script_url": install_script_url,
-    })[0]
+    }
+    if category:
+        sw_payload["category"] = category
+    if tags:
+        sw_payload["tags"] = tags
+    ok &= client.post("/api/release/softwares", sw_payload)[0]
 
     seen_targets: set[str] = set()
     for target, _, _, _, _ in assets_with_checksum:
@@ -636,6 +659,7 @@ def cmd_publish(args) -> int:
             verify_download(url, size, sha)
     args.archive_phase = "HFrog registration"
     info("═══ HFrog sync ═══")
+    parsed_tags = parse_tags_arg(getattr(args, "tags", ""))
     ok = sync_hfrog_records(
         client,
         tool=args.tool, version=version, description=args.description,
@@ -647,6 +671,7 @@ def cmd_publish(args) -> int:
         assets_with_checksum=enriched,
         git_commit=args.git_commit, jenkins_url=args.jenkins_url,
         is_latest=not args.archive, platform_specs=platform_specs,
+        category=args.category, tags=parsed_tags or None,
     )
 
     if args.archive:
@@ -658,7 +683,7 @@ def cmd_publish(args) -> int:
         for _, _, url, size, sha in enriched:
             verify_download(url, size, sha)
 
-    # 4. SQL patch (optional, e.g. category_id, llms_txt, readme_url)
+    # 4. SQL patch (optional, e.g. category_id, tags, llms_txt, readme_url)
     if args.postgres_url:
         info("═══ SQL patch (rb_softwares) ═══")
         fields: dict[str, Any] = {
@@ -670,7 +695,8 @@ def cmd_publish(args) -> int:
         if args.llms_txt_url:  fields["llms_txt"]   = args.llms_txt_url
         try:
             patch_software_meta(args.postgres_url, args.tool,
-                                fields=fields, category_code=args.category)
+                                fields=fields, category_code=args.category,
+                                tags=parsed_tags or None)
         except Exception as e:
             warn("SQL patch failed: " + type(e).__name__)
             ok = False
@@ -695,8 +721,10 @@ def cmd_patch_meta(args) -> int:
     if args.install_script_url: fields["install_script_url"] = args.install_script_url
     if args.readme_url:         fields["readme_url"]         = args.readme_url
     if args.llms_txt_url:       fields["llms_txt"]           = args.llms_txt_url
+    parsed_tags = parse_tags_arg(getattr(args, "tags", ""))
     patch_software_meta(args.postgres_url, args.tool,
-                        fields=fields, category_code=args.category)
+                        fields=fields, category_code=args.category,
+                        tags=parsed_tags or None)
     return 0
 
 
@@ -712,8 +740,9 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
 
 def _add_metadata_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--description", default="", help="rb_softwares.description")
-    p.add_argument("--category",    default=None, help="rb_categories.code (cli/desktop/service)")
-    p.add_argument("--source-type", default="open_source",
+    p.add_argument("--category",    default=None, help="rb_categories.code (cli/desktop/service/mobile/asset)")
+    p.add_argument("--tags",        default="", help="comma-separated rb_softwares.tags, e.g. 'rlit,tool:game'")
+    p.add_argument("--source-type", default="internal",
                    choices=["open_source", "internal"])
     p.add_argument("--install-command",    default="")
     p.add_argument("--install-script-url", default="")
