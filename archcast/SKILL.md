@@ -189,28 +189,77 @@ flow_table:
 
 ---
 
-## 四、结构化主题配置与外部 CRUD
+## 四、结构化主题配置：选择、自扩展、变更与新增
 
-1. **随包默认主题（5 套）**：
-   - `starlink-light`（**默认主题**，清爽冷灰浅色汇报风）
-   - `obsidian-neon`（深邃暗黑霓虹，适合大屏/深色评审）
-   - `paper-editorial`（暖纸本编辑风，适合打印与长文阅读）
-   - `blueprint-ink`（高对比工程蓝图风）
-   - `catppuccin-mocha`（Catppuccin Mocha 暗色工程风）
-2. **解析优先级（`--theme <id-or-path>` 或 YAML 顶层 `theme:` 字段）**：
-   - 直接存在的 `.yaml`/`.yml`/`.json` 文件路径 → 外部主题目录（`--themes-dir` / `ARCHCAST_THEMES_DIR`，默认 `~/.config/archcast/themes/`）→ 随包内置主题；
-   - 支持 `extends: <parent-id>` 继承（仅需写差异字段即可局部覆写，也支持用同名外部文件覆盖随包主题，删除后自动恢复内置默认）。
-3. **外部主题 CRUD 命令**：
-   ```bash
-   archcast theme list --json
-   archcast theme show starlink-light --yaml
-   archcast theme create corp-blue --from starlink-light \
-     --set surface.page_bg=#f0f4ff --set chrome.h2_accent=#1e40af --json
-   archcast theme update corp-blue --set tones.emerald=#047857 --json
-   archcast theme export corp-blue ./corp-blue.yaml --json
-   archcast theme delete corp-blue --json
-   ```
-   单份主题配置同时驱动 **HTML CSS、SVG 图形、光栅 PNG、动态 GIF 脉冲色与 Mermaid `%%{init:...}%%` 变量**。
+单份 `ThemeConfig` 同时驱动 **HTML CSS、独立 SVG、光栅 PNG、动态 GIF 脉冲与呼吸灯色，以及 Markdown 里的 Mermaid `%%{init:...}%%` 变量**。
+
+### 4.1 随包默认主题（5 套）
+
+| 主题 ID | 模式 | 视觉风格与推荐场景 |
+| :--- | :--- | :--- |
+| `starlink-light`（**默认**） | `light` | 清爽冷灰浅色汇报风（标准 1:1 评审样式） |
+| `obsidian-neon` | `dark` | 深邃暗黑霓虹（大屏汇报 / 暗色模式评审） |
+| `paper-editorial` | `light` | 暖色纸本编辑风（打印 / PDF / 长文阅读） |
+| `blueprint-ink` | `dark` | 高对比工程蓝图风（系统架构拓扑评审） |
+| `catppuccin-mocha` | `dark` | Catppuccin Mocha 暗色工程风 |
+
+### 4.2 导出时的主题选择与解析优先级
+
+- **指定方式**：`archcast render spec.yaml -o render/ --theme <ID 或 .yaml/.json 路径>`（优先级最高），或在架构规范 YAML 顶层写 `theme: <ID 或路径>`；均未指定时默认 `starlink-light`。
+- **查找顺序**：直接存在的文件路径 → 外部主题目录（`--themes-dir` > `ARCHCAST_THEMES_DIR` > `$XDG_CONFIG_HOME/archcast/themes` > `~/.config/archcast/themes`）→ 随包内置主题。
+
+### 4.3 新增、自扩展（`extends`）、变更与删除
+
+```bash
+# 1. 查看全部内置与外部主题
+archcast theme list --json
+
+# 2. 查看某主题完整配置（默认 stdout 输出 YAML，--json 输出信封）
+archcast theme show starlink-light
+
+# 3. 派生新增外部主题（ID 规则：1..=64，ASCII 字母数字开头，仅 [a-zA-Z0-9_-]）
+archcast theme create corp-blue --from starlink-light --display-name "企业蓝" \
+  --set surface.page_bg=#f0f4ff --set chrome.h2_accent=#1e40af \
+  --set motion.pulse_hex=#1d4ed8,#047857,#d97706,#7c3aed --json
+
+# 4. 导出模板或从局部 YAML 文件导入（支持 extends 继承，仅写差异字段，最多 4 层）
+archcast theme export starlink-light ./my-theme.yaml --json
+archcast theme create team-dark --file ./team-dark.yaml --json
+
+# 5. 变更已有外部主题，或覆盖随包默认主题（如 starlink-light）
+archcast theme update corp-blue --set tones.emerald=#047857 --json
+archcast theme update starlink-light --set chrome.h2_accent=#0f766e --json
+
+# 6. 删除外部主题（若删除的是内置主题覆盖文件，自动恢复随包默认值；纯内置主题受保护不可删）
+archcast theme delete corp-blue --json
+```
+
+**最小自扩展 YAML 示例**（可直接 `--theme ./team-dark.yaml` 渲染，也可 `theme create --file` 注册）：
+```yaml
+id: team-dark
+display_name: Team Dark
+extends: obsidian-neon
+surface:
+  page_bg: "#0b1020"
+  svg_bg: "#0f172a"
+chrome:
+  h2_accent: "#38bdf8"
+tones:
+  emerald: "#10b981"
+motion:
+  pulse_hex: ["#38bdf8", "#10b981", "#f59e0b", "#a78bfa"]
+```
+
+### 4.4 可配置 Token 分组速查（`--set <路径>=<值>`）
+
+- **顶层**：`display_name`、`color_scheme`（`light`/`dark`）、`is_dark`（`true`/`false`）、`extends`（YAML 内）
+- **`surface.*`**：`page_bg`, `card_bg`, `card_border`, `card_shadow`, `svg_bg`（须合法 `#RRGGBB`）, `node_bg`, `node_border`, `subcard_bg`, `subcard_border`, `callout_bg`, `callout_border`, `code_bg`, `codebox_bg`, `codebox_border`
+- **`ink.*`**：`page_fg`, `lead_fg`, `note_fg`, `code_fg`, `svg_title`, `svg_subtitle`, `svg_meta`, `col_header`, `node_title`, `node_text`, `node_mono`, `node_footer`, `subcard_title`
+- **`chrome.*`**：`toc_link`, `h2_accent`, `btn_bg`, `btn_fg`, `btn_border`, `btn_hover_bg`, `pill_bg`, `pill_fg`, `edge_spine`, `edge_stroke`, `edge_label_bg`, `edge_label_fg`, `badge_opacity`, `ver_bg_alpha`
+- **`table.*`**：`head_bg`, `head_fg`, `border`, `row_border`, `hover_bg`, `grp_bg`, `grp_fg`, `cnt_fg`, `small_fg`, `down_fg`
+- **`warning.*`**：`hint_bg`, `hint_fg`, `hint_accent`, `banner_bg`, `banner_border`, `banner_accent`, `banner_title`, `banner_body`
+- **`tones.*`**：`default`, `muted`, `blue`, `orange`, `green`, `emerald`, `amber`, `purple`, `gold`, `red`
+- **`motion.*`**：`pulse_hex`（4 个逗号分隔 `#RRGGBB`）、`beacon_red`、`beacon_green`
 
 ---
 

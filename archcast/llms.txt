@@ -16,8 +16,9 @@ Deterministic compiler between AI-friendly YAML/JSON architecture specifications
   outputs: <stem>.html (report-html), <stem>[-<diag_id>].svg (diagram-svg), <stem>.md (doc-markdown), optional <stem>[-<diag_id>].png (diagram-png), optional <stem>[-<diag_id>].gif (diagram-gif), archcast.log (log)
 - `archcast theme list [--themes-dir <DIR>] [--json]`
   effects: read-only
-- `archcast theme show <THEME> [--themes-dir <DIR>] [--yaml] [--json]`
+- `archcast theme show <THEME> [--themes-dir <DIR>] [--json]`
   effects: read-only
+  note: prints resolved YAML on stdout by default, or JSON envelope with --json
 - `archcast theme create <ID> [--from <THEME>] [--file <PATH>] [--display-name <NAME>] [--set <KEY=VALUE>...] [--force] [--themes-dir <DIR>] [--json]`
   effects: pure
   io: file=input-file
@@ -54,8 +55,18 @@ Deterministic compiler between AI-friendly YAML/JSON architecture specifications
 - edge: kind (direct|bus|loop_left|bottom_route), from[], to[], label, bus_slot
 - flow_table: id, heading, note, groups[] -> { name, tone, rows[] -> { action, trigger, version, version_tone, entry[], downstream[], note } }, hint
 - bundled themes: starlink-light (default), obsidian-neon, paper-editorial, blueprint-ink, catppuccin-mocha
-- external themes dir: --themes-dir or ARCHCAST_THEMES_DIR (default ~/.config/archcast/themes)
-- theme config groups: schema_version (1), id, display_name, extends (optional), color_scheme, is_dark, surface, ink, chrome, table, warning, tones, motion
+- theme resolution priority: CLI --theme > spec.theme > default (starlink-light); lookup order: direct file path > external themes dir (--themes-dir / ARCHCAST_THEMES_DIR / $XDG_CONFIG_HOME/archcast/themes / ~/.config/archcast/themes) > bundled built-in
+- theme extension & overrides: YAML/JSON files support `extends: <parent-id>` (deep-merge partial overrides, max depth 4); creating/updating a built-in ID writes an external override, and `theme delete` removes the override and restores the bundled default
+- theme id rules: 1..=64 chars, starts with ASCII alphanumeric, only [a-zA-Z0-9_-]
+- theme config groups & `--set <dot.path>=<value>` keys:
+  - top: display_name, color_scheme (light|dark), is_dark (true|false), extends (YAML)
+  - surface: page_bg, card_bg, card_border, card_shadow, svg_bg (#RRGGBB), node_bg, node_border, subcard_bg, subcard_border, callout_bg, callout_border, code_bg, codebox_bg, codebox_border
+  - ink: page_fg, lead_fg, note_fg, code_fg, svg_title, svg_subtitle, svg_meta, col_header, node_title, node_text, node_mono, node_footer, subcard_title
+  - chrome: toc_link, h2_accent, btn_bg, btn_fg, btn_border, btn_hover_bg, pill_bg, pill_fg, edge_spine, edge_stroke, edge_label_bg, edge_label_fg, badge_opacity, ver_bg_alpha
+  - table: head_bg, head_fg, border, row_border, hover_bg, grp_bg, grp_fg, cnt_fg, small_fg, down_fg
+  - warning: hint_bg, hint_fg, hint_accent, banner_bg, banner_border, banner_accent, banner_title, banner_body
+  - tones: default, muted, blue, orange, green, emerald, amber, purple, gold, red
+  - motion: pulse_hex (4 comma-separated #RRGGBB), beacon_red (#RRGGBB), beacon_green (#RRGGBB)
 
 ## Machine Call Contract
 contract_version: 1

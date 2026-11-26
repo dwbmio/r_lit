@@ -16,8 +16,9 @@ backends: cpu-simd-rayon（默认：memchr + wide::f64x4 + rayon + resvg/tiny-sk
   产物: <stem>.html (report-html), <stem>[-<diag_id>].svg (diagram-svg), <stem>.md (doc-markdown), 可选 <stem>[-<diag_id>].png (diagram-png), 可选 <stem>[-<diag_id>].gif (diagram-gif), archcast.log (log)
 - `archcast theme list [--themes-dir <DIR>] [--json]`
   effects: read-only
-- `archcast theme show <THEME> [--themes-dir <DIR>] [--yaml] [--json]`
+- `archcast theme show <THEME> [--themes-dir <DIR>] [--json]`
   effects: read-only
+  说明: 默认 stdout 输出完整解析后的 YAML，加 --json 输出结构化信封
 - `archcast theme create <ID> [--from <THEME>] [--file <PATH>] [--display-name <NAME>] [--set <KEY=VALUE>...] [--force] [--themes-dir <DIR>] [--json]`
   effects: pure
   io: file=input-file
@@ -54,8 +55,18 @@ backends: cpu-simd-rayon（默认：memchr + wide::f64x4 + rayon + resvg/tiny-sk
 - 连线 edge：kind (direct|bus|loop_left|bottom_route)、from[]、to[]、label、bus_slot
 - 接口表 flow_table：id、heading、note、groups[]（含 name、tone、rows[]）、hint
 - 随包默认主题：starlink-light（默认）、obsidian-neon、paper-editorial、blueprint-ink、catppuccin-mocha
-- 外部主题目录：--themes-dir 或环境变量 ARCHCAST_THEMES_DIR（默认 ~/.config/archcast/themes）
-- 主题结构分组：schema_version (1)、id、display_name、extends（可选继承）、color_scheme、is_dark、surface、ink、chrome、table、warning、tones、motion
+- 主题选择与查找优先级：命令行 --theme > 规范顶层 theme 字段 > 默认 starlink-light；查找顺序：直接文件路径 > 外部主题目录（--themes-dir / ARCHCAST_THEMES_DIR / $XDG_CONFIG_HOME/archcast/themes / ~/.config/archcast/themes）> 随包内置主题
+- 主题自扩展与覆盖：YAML/JSON 支持 `extends: <父主题 ID>` 局部差异继承（深度合并，最多 4 层）；同名修改/新增可覆盖内置主题，执行 `theme delete` 自动恢复随包默认
+- 主题 ID 约束：1..=64 字符，ASCII 字母数字开头，仅允许 [a-zA-Z0-9_-]
+- 主题结构分组与 `--set <路径>=<值>` 全量字段：
+  - 顶层：display_name, color_scheme (light|dark), is_dark (true|false), extends（YAML 内）
+  - surface：page_bg, card_bg, card_border, card_shadow, svg_bg (#RRGGBB), node_bg, node_border, subcard_bg, subcard_border, callout_bg, callout_border, code_bg, codebox_bg, codebox_border
+  - ink：page_fg, lead_fg, note_fg, code_fg, svg_title, svg_subtitle, svg_meta, col_header, node_title, node_text, node_mono, node_footer, subcard_title
+  - chrome：toc_link, h2_accent, btn_bg, btn_fg, btn_border, btn_hover_bg, pill_bg, pill_fg, edge_spine, edge_stroke, edge_label_bg, edge_label_fg, badge_opacity, ver_bg_alpha
+  - table：head_bg, head_fg, border, row_border, hover_bg, grp_bg, grp_fg, cnt_fg, small_fg, down_fg
+  - warning：hint_bg, hint_fg, hint_accent, banner_bg, banner_border, banner_accent, banner_title, banner_body
+  - tones：default, muted, blue, orange, green, emerald, amber, purple, gold, red
+  - motion：pulse_hex（4 个逗号分隔 #RRGGBB）, beacon_red (#RRGGBB), beacon_green (#RRGGBB)
 
 ## Machine Call Contract
 contract_version: 1

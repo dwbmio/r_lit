@@ -59,6 +59,112 @@ archcast extract legacy-overview.html -o extracted/ --json
 archcast info --json
 ```
 
+## Theme System: Selection, Extension, Updates & Creation
+
+`archcast` models visual styling as a structured `ThemeConfig` (YAML or JSON). **A single theme configuration drives every export target in sync**: HTML CSS, standalone SVG, raster PNG, layered animated GIF (flow pulses and status beacons), and Mermaid `%%{init:...}%%` variables in Markdown.
+
+### 1. Five Bundled Default Themes
+
+| Theme ID | Scheme | Style & Recommended Use |
+| :--- | :--- | :--- |
+| `starlink-light` (**default**) | `light` | Crisp cool-gray light report theme, 1:1 canonical review layout |
+| `obsidian-neon` | `dark` | Deep dark neon aesthetic for large displays and dark-mode reviews |
+| `paper-editorial` | `light` | Warm editorial paper palette for printing, PDF export, and long reads |
+| `blueprint-ink` | `dark` | High-contrast engineering blueprint theme for architecture reviews |
+| `catppuccin-mocha` | `dark` | Soft Catppuccin Mocha dark developer palette |
+
+### 2. Selecting a Theme When Rendering (Resolution Priority)
+
+1. **CLI flag (highest priority)**: Pass either a theme ID or a direct `.yaml`/`.yml`/`.json` file path:
+   ```bash
+   # Use a bundled or registered external theme ID
+   archcast render flow.yaml -o render/ --theme obsidian-neon --strict --json
+
+   # Render directly with a standalone theme file in your repo (no registration needed)
+   archcast render flow.yaml -o render/ --theme ./themes/my-brand.yaml --strict --json
+
+   # Point to a custom external themes directory (or set ARCHCAST_THEMES_DIR)
+   archcast render flow.yaml -o render/ --theme corp-blue --themes-dir ./team-themes --json
+   ```
+2. **Pin inside the architecture YAML spec**: Add top-level `theme: blueprint-ink` (or a file path) in the spec; used automatically when `--theme` is omitted.
+3. **Default fallback**: Uses `starlink-light` when neither is specified.
+
+**Lookup order**: Direct existing file path -> external themes dir (`--themes-dir` > `ARCHCAST_THEMES_DIR` > `$XDG_CONFIG_HOME/archcast/themes` > `~/.config/archcast/themes`) -> bundled built-in theme.
+
+### 3. Creating & Extending Custom Themes (3 Workflows)
+
+Theme ID rules: `1..=64` chars, starts with ASCII alphanumeric, only `[a-zA-Z0-9_-]`.
+
+- **Workflow A: Derive from any base theme with `--set` overrides**
+  ```bash
+  archcast theme create corp-blue \
+    --from starlink-light \
+    --display-name "Corp Blue" \
+    --set surface.page_bg=#f0f4ff \
+    --set chrome.h2_accent=#1e40af \
+    --set tones.emerald=#047857 \
+    --set motion.pulse_hex=#1d4ed8,#047857,#d97706,#7c3aed
+  ```
+- **Workflow B: Export a full template, edit, and register (or use directly)**
+  ```bash
+  archcast theme export starlink-light ./corp-blue.yaml
+  # Edit ./corp-blue.yaml, then register (pass --force to overwrite an existing ID)
+  archcast theme create corp-blue --file ./corp-blue.yaml
+  ```
+- **Workflow C: Minimal self-extension via `extends` (partial YAML override)**
+  Specify only the tokens you want to change; everything else is deep-merged from the parent theme (chains up to depth 4):
+  ```yaml
+  id: team-dark
+  display_name: Team Dark
+  extends: obsidian-neon
+  surface:
+    page_bg: "#0b1020"
+    svg_bg: "#0f172a"
+  chrome:
+    h2_accent: "#38bdf8"
+    edge_stroke: "#64748b"
+  tones:
+    emerald: "#10b981"
+  motion:
+    pulse_hex: ["#38bdf8", "#10b981", "#f59e0b", "#a78bfa"]
+  ```
+  Use directly via `archcast render flow.yaml -o render/ --theme ./team-dark.yaml` or register with `archcast theme create team-dark --file ./team-dark.yaml`.
+
+### 4. Inspecting, Updating, Overriding Defaults & Deleting
+
+```bash
+# List all bundled and external themes (flags overrides_builtin when overriding a built-in)
+archcast theme list
+archcast theme list --json
+
+# Print full resolved theme (YAML on stdout by default; structured JSON with --json)
+archcast theme show corp-blue
+archcast theme show corp-blue --json
+
+# Update an external theme (repeatable --set, --display-name, or --file patch)
+archcast theme update corp-blue --set surface.card_bg=#ffffff --set chrome.edge_stroke=#334155
+
+# Override a bundled default theme (even default renders without --theme pick up the override)
+archcast theme update starlink-light --set chrome.h2_accent=#0f766e
+
+# Delete an external theme (deleting an override restores the bundled default; pure built-ins are protected)
+archcast theme delete corp-blue
+archcast theme delete starlink-light   # removes external override and restores bundled starlink-light
+```
+
+### 5. Complete Token Reference (`--set <dot.path>=<value>` & YAML Keys)
+
+| Section | Configurable Keys | Purpose |
+| :--- | :--- | :--- |
+| Top-level | `display_name`, `color_scheme` (`light`\|`dark`), `is_dark` (`true`\|`false`), `extends` (YAML) | Theme label, color scheme mode, and parent theme inheritance |
+| `surface.*` | `page_bg`, `card_bg`, `card_border`, `card_shadow`, `svg_bg`, `node_bg`, `node_border`, `subcard_bg`, `subcard_border`, `callout_bg`, `callout_border`, `code_bg`, `codebox_bg`, `codebox_border` | Page, card, SVG canvas, node, subcard, callout, and code block surfaces (`svg_bg` must be valid `#RRGGBB`) |
+| `ink.*` | `page_fg`, `lead_fg`, `note_fg`, `code_fg`, `svg_title`, `svg_subtitle`, `svg_meta`, `col_header`, `node_title`, `node_text`, `node_mono`, `node_footer`, `subcard_title` | Page prose, notes, diagram headings, column headers, and node/subcard typography colors |
+| `chrome.*` | `toc_link`, `h2_accent`, `btn_bg`, `btn_fg`, `btn_border`, `btn_hover_bg`, `pill_bg`, `pill_fg`, `edge_spine`, `edge_stroke`, `edge_label_bg`, `edge_label_fg`, `badge_opacity`, `ver_bg_alpha` | TOC links, section accents, toolbar buttons, pill tags, routed bus/edge strokes, and edge labels |
+| `table.*` | `head_bg`, `head_fg`, `border`, `row_border`, `hover_bg`, `grp_bg`, `grp_fg`, `cnt_fg`, `small_fg`, `down_fg` | Flow table headers, grid borders, row hover, group banners, and downstream column text |
+| `warning.*` | `hint_bg`, `hint_fg`, `hint_accent`, `banner_bg`, `banner_border`, `banner_accent`, `banner_title`, `banner_body` | Footer hint callout and full-width warning banner palette |
+| `tones.*` | `default`, `muted`, `blue`, `orange`, `green`, `emerald`, `amber`, `purple`, `gold`, `red` | 10 semantic tones driving card top bars, badges, colored lines, and table groups |
+| `motion.*` | `pulse_hex` (4 comma-separated `#RRGGBB`), `beacon_red`, `beacon_green` | 4-channel flow particle colors and status beacon colors for HTML WebGPU/Canvas2D and GIF |
+
 ## Machine Call Contract
 
 - `--json` outputs exactly one `rlit_cli` envelope on stdout; human logs go to stderr and `<output_dir>/archcast.log`.
