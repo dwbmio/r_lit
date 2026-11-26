@@ -22,7 +22,7 @@ pipeline {
     }
 
     parameters {
-        string(name: 'VERSION', defaultValue: 'v1.0.0', description: '发布版本号（tag 名，如 v1.0.0；传 auto 自动从 Cargo.toml 推断）')
+        string(name: 'VERSION', defaultValue: 'v1.1.1', description: '发布版本号（tag 名，如 v1.1.1；传 auto 自动从 Cargo.toml 推断）')
         string(name: 'S3_BASE', defaultValue: 'https://synology-minio.youxi123.com', description: 'MinIO endpoint')
         string(name: 'S3_BUCKET', defaultValue: 'starlink-artifacts', description: 'MinIO bucket')
         string(name: 'S3_PATH', defaultValue: 'distill', description: 'MinIO 下的子路径')
@@ -48,7 +48,7 @@ pipeline {
                 script {
                     if (!env.VERSION || env.VERSION == 'auto') {
                         def cargoVer = sh(returnStdout: true, script: "grep '^version' distill/Cargo.toml | head -1 | sed 's/.*\"\\(.*\\)\".*/v\\1/'").trim()
-                        env.VERSION = cargoVer ?: 'v1.0.0'
+                        env.VERSION = cargoVer ?: 'v1.1.1'
                     }
                     echo "Release version: ${env.VERSION}"
                 }

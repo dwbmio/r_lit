@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn renders_valid_prometheus_metrics() {
         let sample = ServerMetrics {
-            server_version: "1.0.0".into(),
+            server_version: "1.1.0".into(),
             uptime_secs: 120,
             metrics_listen: Some("0.0.0.0:9464".into()),
             total_requests: 42,

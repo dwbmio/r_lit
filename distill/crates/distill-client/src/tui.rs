@@ -1108,8 +1108,8 @@ impl App {
                         .iter()
                         .map(|c| {
                             let sha8 = &c.commit_sha[..c.commit_sha.len().min(8)];
-                            let date = c.timestamp.get(..10).unwrap_or(&c.timestamp);
-                            format!("{sha8}  {date}  {}  {}", c.author, c.subject)
+                            let ts = format_commit_timestamp(&c.timestamp);
+                            format!("{sha8}  {ts}  {}  {}", c.author, c.subject)
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -3369,6 +3369,17 @@ impl Drop for TerminalGuard {
     }
 }
 
+fn format_commit_timestamp(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 19 && trimmed.as_bytes().get(10) == Some(&b'T') {
+        let mut s = trimmed.to_string();
+        s.replace_range(10..11, " ");
+        s
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn parse_vlogs_slash_args(arg: &str) -> (Option<String>, String) {
     let trimmed = arg.trim();
     if trimmed.is_empty() {
@@ -3441,4 +3452,22 @@ pub(crate) async fn run_tui(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_commit_timestamp;
+
+    #[test]
+    fn formats_iso_commit_timestamp_with_time_and_offset() {
+        assert_eq!(
+            format_commit_timestamp("2026-11-26T14:05:32+08:00"),
+            "2026-11-26 14:05:32+08:00"
+        );
+        assert_eq!(
+            format_commit_timestamp(" 2026-11-26T06:05:32Z "),
+            "2026-11-26 06:05:32Z"
+        );
+        assert_eq!(format_commit_timestamp("2026-11-26"), "2026-11-26");
+    }
 }

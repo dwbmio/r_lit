@@ -7,7 +7,7 @@
 #   SNAPPYWATT_HOME   默认 $HOME/.snappywatt（影响 INSTALL_DIR 的父目录）
 #   BINARY_NAME       下载的二进制名（默认 distill；服务端部署可传 BINARY_NAME=distilld）
 #   INSTALL_NAME      安装后命令名（默认与 BINARY_NAME 同名）
-#   VERSION           安装的版本目录（默认 latest；可锁定如 VERSION=v1.0.0）
+#   VERSION           安装的版本目录（默认 latest；可锁定如 VERSION=v1.1.1）
 #   S3_BASE/S3_BUCKET/S3_PATH   私有镜像地址覆盖
 
 set -e

@@ -6,7 +6,7 @@
 #   SNAPPYWATT_HOME   default $env:USERPROFILE\.snappywatt
 #   BINARY_NAME       downloaded binary name (default distill)
 #   INSTALL_NAME      installed command name (default same as BINARY_NAME)
-#   VERSION           release channel/tag (default latest; pin e.g. $env:VERSION='v1.0.0')
+#   VERSION           release channel/tag (default latest; pin e.g. $env:VERSION='v1.1.1')
 #   S3_BASE/S3_BUCKET/S3_PATH   private mirror overrides
 
 & {

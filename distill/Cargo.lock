@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "distill-client"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "distill-crypto"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "distill-git"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "distill-index"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "distill-proto"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "dirs",
  "postcard",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "distill-semantic"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "distill-server"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "clap",

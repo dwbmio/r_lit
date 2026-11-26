@@ -1,12 +1,12 @@
 ---
 name: distill
-version: "1.0.0"
-description: "多分支远端 Git 仓库只读代码探索 + 固化 VictoriaLogs 线上日志联合排查 CLI/TUI/MCP（v1.0.0 正式版，Pure Rust、iroh P2P QUIC 端到端加密、自动密钥脱敏）。支持 AI 自主通读远端全仓库源码与日志、直查目录 tree、全文 grep、按行 read、提交 log、实时日志 vlogs、服务端一体化 investigate、语义索引 search 与分支 diff。触发: distill、安装distill、更新distill、升级distill、远端查代码、查代码实现、看代码质量、代码审查、review代码、查分支逻辑、查字段key、查接口契约、对比分支差异、分支最近提交、远程读仓库、查vlogs、VictoriaLogs、查线上日志、查报错、traceId排查、日志联合排查、500报错、连接池超时。"
+version: "1.1.1"
+description: "多分支远端 Git 仓库只读代码探索 + 固化 VictoriaLogs 线上日志联合排查 CLI/TUI/MCP（v1.1.1 正式版，Pure Rust、内存态 Trigram+Rayon 亚毫秒引擎、iroh P2P QUIC 端到端加密、自动密钥脱敏）。支持 AI 自主通读远端全仓库源码与日志、直查目录 tree、全文 grep、按行 read、提交 log、实时日志 vlogs、服务端一体化 investigate、语义索引 search、分支 diff 与服务端 metrics 监控。触发: distill、安装distill、更新distill、升级distill、远端查代码、查代码实现、看代码质量、代码审查、review代码、查分支逻辑、查字段key、查接口契约、对比分支差异、分支最近提交、远程读仓库、查vlogs、VictoriaLogs、查线上日志、查报错、traceId排查、日志联合排查、500报错、连接池超时、distill metrics。"
 ---
 
-# distill Skill（v1.0.0 正式发布版 · 面向 AI Agent 与自动化程序）
+# distill Skill（v1.1.1 正式发布版 · 面向 AI Agent 与自动化程序）
 
-> **当前正式版本**：`v1.0.0`（2026-11-25）· 在线版本标识：`https://synology-minio.youxi123.com/starlink-artifacts/distill/version.txt` · 发布说明：`https://synology-minio.youxi123.com/starlink-artifacts/distill/CHANGELOG.md`
+> **当前正式版本**：`v1.1.1`（2026-11-26）· 在线版本标识：`https://synology-minio.youxi123.com/starlink-artifacts/distill/version.txt` · 发布说明：`https://synology-minio.youxi123.com/starlink-artifacts/distill/CHANGELOG.md`
 
 `distill` 是面向研发、测试、产品、运营与 AI Agent 的**多分支远端 Git 只读访问 + 固化 VictoriaLogs（`http://vlogs.hs99.vip:9428`）实时日志联合排查工具**。通过加密 `iroh` P2P QUIC（Ed25519 `EndpointId` 白名单 + ACL + `audit.jsonl` 审计 + 出站密钥脱敏）直连内网 `distilld`，**无需 SSH 账号、无需本地克隆**，即可全语言通读任意分支源码并联动线上日志排查。
 
@@ -58,7 +58,7 @@ description: "多分支远端 Git 仓库只读代码探索 + 固化 VictoriaLogs
 | `SNAPPYWATT_HOME` | `$HOME/.snappywatt` | `INSTALL_DIR` 的默认父目录 |
 | `BINARY_NAME` | `distill` | 下载制品名（客户端 `distill`，服务端 `distilld`） |
 | `INSTALL_NAME` | 同 `BINARY_NAME` | 落盘后的命令名 |
-| `VERSION` | `latest` | 发布通道或固定版本标签（例如 `VERSION=v1.0.0` 锁定正式版） |
+| `VERSION` | `latest` | 发布通道或固定版本标签（例如 `VERSION=v1.1.1` 锁定正式版） |
 | `S3_BASE` / `S3_BUCKET` / `S3_PATH` | `https://synology-minio.youxi123.com` / `starlink-artifacts` / `distill` | 私有对象存储镜像覆盖 |
 
 ### 2.3 版本检测、自动更新与安装后校验（Agent 必做）
@@ -66,7 +66,7 @@ description: "多分支远端 Git 仓库只读代码探索 + 固化 VictoriaLogs
 外部程序或 AI Agent 调用前可先比对本地与远端正式版本号，版本不一致或未安装时自动执行原地升级：
 
 ```bash
-# 1. 检测本地版本 vs 对象存储最新正式版（当前为 1.0.0）
+# 1. 检测本地版本 vs 对象存储最新正式版（当前为 1.1.1）
 LOCAL_VER=$(distill --version 2>/dev/null | awk '{print $2}' || echo "none")
 REMOTE_VER=$(curl -fsSL https://synology-minio.youxi123.com/starlink-artifacts/distill/version.txt | tr -d '[:space:]')
 if [ "$LOCAL_VER" != "$REMOTE_VER" ]; then
@@ -74,25 +74,26 @@ if [ "$LOCAL_VER" != "$REMOTE_VER" ]; then
 fi
 
 # 2. 确认版本号与核心子命令就绪（如 PATH 未生效先 export PATH="$HOME/.snappywatt/bin:$PATH"）
-distill --version   # 预期输出: distill 1.0.0
-distill vlogs --help >/dev/null && distill investigate --help >/dev/null
+distill --version   # 预期输出: distill 1.1.1
+distill vlogs --help >/dev/null && distill investigate --help >/dev/null && distill metrics --help >/dev/null
 
 # 3. 确认与远端 distilld 加密通道在线，且 server_version 与 vlogs_endpoint 就绪
 distill ping
 distill status
+distill metrics --raw
 ```
 
-> **提示（锁版本与更新升级）**：默认拉取 `latest/`（始终指向最新正式版）；如需锁定 `v1.0.0`，传 `VERSION=v1.0.0` 即可。若远端 `distilld` 重启更换了内网 UDP 端口，用 `distill configure --server-id <ID> --direct-addr <IP:PORT>` 更新直连提示。
+> **提示（锁版本与更新升级）**：默认拉取 `latest/`（始终指向最新正式版）；如需锁定 `v1.1.1`，传 `VERSION=v1.1.1` 即可。若远端 `distilld` 重启更换了内网 UDP 端口，用 `distill configure --server-id <ID> --direct-addr <IP:PORT>` 更新直连提示。
 
-### 2.4 MinIO 对象存储发布清单（v1.0.0）
+### 2.4 MinIO 对象存储发布清单（v1.1.1）
 
 - 版本与文档：`version.txt`、`latest/version.txt`、`SKILL.md`、`latest/SKILL.md`、`CHANGELOG.md`
 - 安装脚本：`install.sh`、`install.ps1`
-- 制品目录（同时提供 `latest/` 与正式版本快照 `v1.0.0/`）：
-  - `latest/aarch64-apple-darwin/distill.gz` & `v1.0.0/aarch64-apple-darwin/distill.gz`
-  - `latest/x86_64-apple-darwin/distill.gz` & `v1.0.0/x86_64-apple-darwin/distill.gz`
-  - `latest/x86_64-unknown-linux-gnu/distill.gz` & `v1.0.0/x86_64-unknown-linux-gnu/distill.gz`
-  - `latest/x86_64-unknown-linux-gnu/distilld.gz` & `v1.0.0/x86_64-unknown-linux-gnu/distilld.gz`
+- 制品目录（同时提供 `latest/` 与正式版本快照 `v1.1.1/`）：
+  - `latest/aarch64-apple-darwin/distill.gz` & `v1.1.1/aarch64-apple-darwin/distill.gz`
+  - `latest/x86_64-apple-darwin/distill.gz` & `v1.1.1/x86_64-apple-darwin/distill.gz`
+  - `latest/x86_64-unknown-linux-gnu/distill.gz` & `v1.1.1/x86_64-unknown-linux-gnu/distill.gz`
+  - `latest/x86_64-unknown-linux-gnu/distilld.gz` & `v1.1.1/x86_64-unknown-linux-gnu/distilld.gz`
 
 ---
 
